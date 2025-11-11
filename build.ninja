@@ -1,0 +1,62 @@
+builddir = build
+ninja_required_version = 1.11
+
+libdir = lib
+effektdir = $libdir/effekt
+sourcedir = src
+
+pool cpool
+    depth = 4
+
+pool linkpool
+    depth = 4
+
+rule efc
+    pool = cpool
+    deps = gcc
+    depfile = $out.d
+    command = effekt -c --backend llvm $in -o $out_dir --includes $sourcedir
+
+rule cc
+    pool = cpool
+    deps = gcc
+    depfile = $out.d
+    command = gcc $in -c -o $out
+
+rule link
+    pool = linkpool
+    deps = gcc
+    depfile = $out.d
+    command = g++ $in -flto -no-pie -o $out -luv -lpthread -ldl
+
+rule lc
+    pool = cpool
+    deps = gcc
+    depfile = $out.d
+    command = llc $in -opaque-pointers -filetype=obj -o $out
+
+rule las
+    pool = cpool
+    deps = gcc
+    depfile = $out.d
+    command = llvm-as $in -o $out -opaque-pointers
+
+build $builddir/bytearray.o: cc $effektdir/bytearray.c
+build $builddir/main.o: cc $effektdir/main.c
+build $builddir/io.o: cc $effektdir/io.c
+build $builddir/panic.o: cc $effektdir/panic.c
+
+#build $builddir/rts.bs: las $effektdir/rts.ll
+#build $builddir/rts.o: lc $builddir/rts.bs
+
+build $builddir/main.ll: efc $sourcedir/main.effekt | $sourcedir/lexer/lexer.effekt | $sourcedir/parser/parser.effekt
+    out_dir = $builddir
+build $builddir/jasl.bs: las $builddir/main.ll
+build $builddir/jasl.o: lc $builddir/jasl.bs
+
+build $builddir/jasm_wrapper.o: cc $libdir/jasm/jasm.c
+
+build $builddir/jasl: link $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o $builddir/jasl.o $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a
+
+rule runprog
+    command = $builddir/jasl

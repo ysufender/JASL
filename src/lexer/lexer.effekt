@@ -1,0 +1,661 @@
+module lexer
+
+import io/filesystem
+import io/error
+import process
+
+import native/native
+
+type PreprocessorKeywordType {
+    Module()
+    Include()
+}
+
+type KeywordType {
+    Preprocessor(pWord: PreprocessorKeywordType)
+    Wrapper()
+    Layout()
+    Fn()
+    Pub()
+    Return()
+    Let()
+    Void()
+    While()
+    Extern()
+    If()
+    Else()
+}
+
+type SymbolType {
+    LParen()
+    RParen()
+    LBrace()
+    RBrace()
+    Comma()
+    Colon()
+    Semicolon()
+    Dot()
+    DoubleColon()
+    Arrow()
+    Assign()
+    Asterix()
+    Less()
+    Great()
+    LessEq()
+    GreatEq()
+    Equal()
+    NotEq()
+    Not()
+    Minus()
+    Plus()
+    Divide()
+}
+
+type DataType {
+    Bool(value: Option[Bool]) // for 'true' and 'false' keywords.
+    String()
+    UInt()
+    Int()
+    Float()
+    UByte()
+    Byte()
+    Pointer(ptrType: DataType)
+    Void()
+    Custom(name: String)
+}
+
+type TokenType {
+    Literal(valueType: DataType)
+    Identifier()
+    Keyword(keywordType: KeywordType)
+    Symbol(symbolType: SymbolType)
+    TypeName(typeType: DataType)
+    EOF()
+}
+
+record Position(line: Int, col: Int, index: Int)
+record Token(tokenType: TokenType, text: String, position: Position)
+
+def show(t: PreprocessorKeywordType): String = t match {
+    case Module() => "Module"
+    case Include() => "Include"
+}
+
+def show(t: KeywordType): String = t match {
+    case Preprocessor(pWord) => "Preprocessor Directive "++show(pWord)
+    case Wrapper() => "Wrapper"
+    case Layout() => "Layout"
+    case Fn() => "Fn"
+    case Pub() => "Pub"
+    case Return() => "Return"
+    case Let() => "Let"
+    case KeywordType::Void() => "Void"
+    case While() => "While"
+    case Extern() => "Extern"
+    case If() => "If"
+    case Else() => "Else"
+}
+
+def show(t: SymbolType): String = t match {
+    case LParen() => "LParen"
+    case RParen() => "RParen"
+    case LBrace() => "LBrace"
+    case RBrace() => "RBrace"
+    case Comma() => "Comma"
+    case Colon() => "Colon"
+    case Semicolon() => "Semicolon"
+    case Dot() => "Dot"
+    case DoubleColon() => "DoubleColon"
+    case Arrow() => "Arrow"
+    case Assign() => "Assign"
+    case Asterix() => "Asterix"
+    case Less() => "Less"
+    case Great() => "Great"
+    case LessEq() => "LessEq"
+    case GreatEq() => "GreatEq"
+    case Equal() => "Equal"
+    case NotEq() => "NotEq"
+    case Not() => "Not"
+    case Minus() => "Minus"
+    case Plus() => "Plus"
+    case Divide() => "Divide"
+}
+
+def show(t: DataType): String = t match {
+    case Bool(Some(true)) => "True Bool"
+    case Bool(Some(false)) => "False Bool"
+    case Bool(None()) => "Bool"
+    case String() => "String"
+    case UInt() => "UInt"
+    case Int() => "Int"
+    case Float() => "Float"
+    case UByte() => "UByte"
+    case Byte() => "Byte"
+    case Pointer(ptrType) => show(ptrType)++" Pointer"
+    case DataType::Void() => "Void"
+    case Custom(name) => "Custom Type "++name
+}
+
+def show(t: TokenType): String = t match {
+    case Literal(valueType) => show(valueType)++" Literal"
+    case Identifier() => "Identifier"
+    case Keyword(keywordType) => "Keyword "++show(keywordType)
+    case Symbol(symbolType) => show(symbolType)++" Symbol"
+    case TypeName(typeType) => "TypeName "++show(typeType)
+    case EOF() => "EOF"
+}
+
+def show(p: Position): String =
+    show(p.line)++":"++show(p.col)
+
+def show(t: Token): String =
+    t.tokenType.show()++" ["++t.text++"]"
+
+def infixEq(l: PreprocessorKeywordType, r: PreprocessorKeywordType): Bool = {
+    (l, r) match {
+        case (Module(), Module()) => true
+        case (Include(), Include()) => true
+        case _ => false
+    }
+}
+
+def infixEq(l: KeywordType, r: KeywordType): Bool = {
+    (l, r) match {
+        case (Preprocessor(p1), Preprocessor(p2)) => infixEq(p1, p2)
+        case (Wrapper(), Wrapper()) => true
+        case (Layout(), Layout()) => true
+        case (Fn(), Fn()) => true
+        case (Pub(), Pub()) => true
+        case (Return(), Return()) => true
+        case (Let(), Let()) => true
+        case _ => false
+    }
+}
+
+def infixEq(l: SymbolType, r: SymbolType): Bool = {
+    (l, r) match {
+        case (LParen(), LParen()) => true
+        case (RParen(), RParen()) => true
+        case (LBrace(), LBrace()) => true
+        case (RBrace(), RBrace()) => true
+        case (Comma(), Comma()) => true
+        case (Colon(), Colon()) => true
+        case (Semicolon(), Semicolon()) => true
+        case (Dot(), Dot()) => true
+        case (DoubleColon(), DoubleColon()) => true
+        case (Arrow(), Arrow()) => true
+        case (Assign(), Assign()) => true
+        case _ => false
+    }
+}
+
+def infixEq(l: DataType, r: DataType): Bool = {
+    (l, r) match {
+        case (String(), String()) => true
+        case (UInt(), UInt()) => true
+        case (Int(), Int()) => true
+        case (Float(), Float()) => true
+        case (UByte(), UByte()) => true
+        case (Byte(), Byte()) => true
+        case (Pointer(p1), Pointer(p2)) => infixEq(p1, p2)
+        case (DataType::Void(), DataType::Void()) => true
+        case _ => false
+    }
+}
+
+def infixEq(l: TokenType, r: TokenType): Bool = {
+    (l, r) match {
+        case (Literal(v1), Literal(v2)) => infixEq(v1, v2) 
+        case (Identifier(), Identifier()) => true
+        case (Keyword(k1), Keyword(k2)) => infixEq(k1, k2)
+        case (Symbol(s1), Symbol(s2)) => infixEq(s1, s2)
+        case (TypeName(t1), TypeName(t2)) => infixEq(t1, t2)
+        case (EOF(), EOF()) => true
+        case _ => false
+    }
+}
+
+def infixNeq(l: TokenType, r: TokenType): Bool = not(infixEq(l, r))
+
+interface TokenListHandler {
+    def remove_last(): Unit
+    def add_token(t: Token): Token
+}
+
+interface Lexer {
+    def current(): Token
+    def peek(): Token
+    def next(): Token
+    def position(): Position
+}
+
+effect LexerError(msg: String, file: String, pos: Position): Nothing
+
+val helpLines: List[String] = [
+    "Here",
+    "No need to thank me",
+    "Right here buddy",
+    "It's here lad",
+    "I spotted it, just for you",
+    "I FOUND HIM BOSS",
+    "You seriously missed this?",
+    "Come on, it's here",
+    "You should be a bit more careful with your code",
+    "Hm. Here",
+    "|____ <- There",
+    "I'm running out of ideas for error indicator messages",
+    "You can't hate yourself, not yet"
+]
+
+def report[T](source: String) { prog: () => T / LexerError }: T = {
+    try { prog() }
+    with LexerError { (msg, file, pos) => {
+        var errLine: String = "<unknown>"
+        try {
+            val line = pos.line - 1
+            val lines = source.split("\n")
+            errLine = lines.get(line)
+        } with Exception[OutOfBounds] {
+            def raise(_, _) = {}
+        }
+
+        val spaces: String = " ".repeat(pos.col+7)
+        val helpLine: String = try { 
+            val rand: Int = random_range(0, helpLines.size() - 1)
+            helpLines.get(rand)
+        } with Exception[OutOfBounds] {
+            def raise(_, _) = <>
+        }
+    
+        println("[ERROR] "++file++" at "++show(pos))
+        println("        "++errLine)
+        println(spaces++"^")
+        println(spaces++helpLine)
+        println("        "++msg)
+        exit(1)
+        <>
+    }}
+}
+
+/* REGEX IS NOT SUPPORTED IN LLVM
+type TokenRegex {
+    Direct(tokenType: TokenType, rx: Regex)
+    Structured(rx: Regex, child: List[TokenRegex])
+}
+
+val tokenRegexes: List[TokenRegex] = [
+    Structured("\\b(wrapper|layout|fn|pub|return|let|nullptr|module|include)\\b".regex, [
+        Structured("\\b(module|include)\\b".regex, [
+            Direct(Keyword(Preprocessor(Module())),  "\\bmodule\\b".regex),
+            Direct(Keyword(Preprocessor(Include())), "\\binclude\\b".regex)
+        ]),
+        Direct(Keyword(Wrapper()),  "\\bwrapper\\b".regex),
+        Direct(Keyword(Layout()),   "\\blayout\\b".regex),
+        Direct(Keyword(Fn()),       "\\bfn\\b".regex),
+        Direct(Keyword(Pub()),      "\\bpub\\b".regex),
+        Direct(Keyword(Return()),   "\\breturn\\b".regex),
+        Direct(Keyword(Let()),      "\\blet\\b".regex),
+        Direct(Keyword(Void()),  "\\bvoid\\b".regex)
+    ]),
+
+    Structured("(::|->|\\(|\\)|\\{|\\}|,|:|;|\\.|=|%|\\*)".regex, [
+        Direct(Symbol(LParen()),    "\\(".regex),
+        Direct(Symbol(RParen()),    "\\)".regex),
+        Direct(Symbol(LBrace()),    "\\{".regex),
+        Direct(Symbol(RBrace()),    "\\}".regex),
+        Direct(Symbol(Comma()),     ",".regex),
+        Direct(Symbol(Colon()),     ":".regex),
+        Direct(Symbol(Semicolon()), ";".regex),
+        Direct(Symbol(Dot()),       "\\.".regex),
+        Direct(Symbol(DoubleColon()), "::".regex),
+        Direct(Symbol(Arrow()),     "->".regex),
+        Direct(Symbol(Assign()),    "=".regex),
+        Direct(Symbol(Asterix()),   "\\*".regex)
+    ]),
+
+    Structured("\\b(u32|i32|float|u8|i8|void|[A-Z][A-Za-z0-9_]*)(\\s*\\*+)?\\b".regex, [
+        Direct(TypeName(UInt()),   "u32(\\s*\\*+)?".regex),
+        Direct(TypeName(Int()),    "i32(\\s*\\*+)?".regex),
+        Direct(TypeName(Float()),  "float(\\s*\\*+)?".regex),
+        Direct(TypeName(UByte()),  "u8(\\s*\\*+)?".regex),
+        Direct(TypeName(Byte()),   "i8(\\s*\\*+)?".regex),
+        Direct(TypeName(Void()),   "void(\\s*\\*+)?".regex),
+        Direct(TypeName(Custom("placeholder")), "[A-Z][A-Za-z0-9_]*(\\s*\\*+)?".regex)
+    ]),
+
+    Direct(Identifier(), "[a-z_][A-Za-z0-9_]*".regex),
+
+    Structured("([0-9][0-9_]*(?:\\.[0-9_]+)?u?)|(\"([^\"\\\\]|\\\\.)*\")|('(?:\\\\.|[^'\\\\])'u?)".regex, [
+        Direct(Literal(UInt()),   "^[0-9][0-9_]*u$".regex),
+        Direct(Literal(Int()),    "^[0-9][0-9_]*$".regex),
+        Direct(Literal(Float()),  "^[0-9][0-9_]*\\.[0-9_]+u?$".regex),
+        Direct(Literal(String()), "^\"([^\"\\\\]|\\\\.)*\"$".regex),
+        Direct(Literal(Byte()),   "^'(\\\\.|[^'\\\\])'$".regex),
+        Direct(Literal(UByte()),  "^'(\\\\.|[^'\\\\])'u$".regex)
+    ]),
+]
+*/
+
+val symbols: List[Char] = [
+    '(',')','{','}',',','.',':',';','*','-','>','=','<','!','-','+','/'
+]
+
+val compoundSymbols: List[String] = [
+    "::", "->"
+]
+
+val builtinTypeNames: List[String] = [
+    "u32", "i32", "u8", "i8", "float", "ptr", "void", "bool"
+]
+
+def firstof[T](list: List[T]) { pred: T => Bool }: Option[T] = list match {
+    case Cons(head, rest) => if (pred(head)) { Some(head) } else rest.firstof[T]{ pred }
+    case Nil() => None()
+}
+
+effect skip_whitespace(): Bool
+
+def skipWhiteSpace[T]{ prog: () => T / skip_whitespace } = {
+    try { prog() }
+    with skip_whitespace {
+        resume(true)
+    }
+}
+
+def countWhiteSpace[T]{ prog: () => T / skip_whitespace } = {
+    try { prog() }
+    with skip_whitespace {
+        resume(false)
+    }
+}
+
+def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHandler} = {
+    var line: Int = 1;
+    var col: Int = 1;
+    var index: Int = 0;
+    var currentToken: Token = Token(EOF(), "", Position(0, 0, 0))
+
+    def pos(textSize: Int): Position = Position(line, col-textSize, index)
+    def is_eof(): Bool = index >= in.length
+    def advance_line(): Unit = { line = line + 1; col = 1 }
+    def change_index(amount: Int): Unit = { index = index + amount; col = col + amount; }
+
+    try {
+        def advance(): Char / skip_whitespace = {
+            if (is_eof()) {
+                in.charAt(index - 1)
+            } else {
+                change_index(1)
+                val c: Char = in.charAt(index - 1)
+
+                if (c.isWhitespace()) {
+                    c match {
+                        case '\n' => {
+                            advance_line()
+                            if (do skip_whitespace() && not(is_eof())) {
+                                advance()
+                            } else { c }
+                        }
+                        case _ => if (do skip_whitespace()) { 
+                            advance()
+                        } else { c }
+                    }
+                }
+                else { c }
+            }
+        }
+
+        def peek(): Char / skip_whitespace = {
+            var currentPos = pos(0)
+            val ch: Char = advance()
+            line = currentPos.line
+            col = currentPos.col
+            index = currentPos.index
+            ch
+        }
+
+        def handleSymbolToken(first: Char): Token / TokenListHandler =  {
+            def handleSingle(c: Char): Token = c match {
+                case '('  => do add_token(Token(Symbol(LParen()), c.show, pos(1)))
+                case ')'  => do add_token(Token(Symbol(RParen()), c.show, pos(1)))
+                case '{'  => do add_token(Token(Symbol(LBrace()), c.show, pos(1)))
+                case '}'  => do add_token(Token(Symbol(RBrace()), c.show, pos(1)))
+                case ','  => do add_token(Token(Symbol(Comma()), c.show, pos(1)))
+                case ':'  => do add_token(Token(Symbol(Colon()), c.show, pos(1)))
+                case ';'  => do add_token(Token(Symbol(Semicolon()), c.show, pos(1)))
+                case '.'  => do add_token(Token(Symbol(Dot()), c.show, pos(1)))
+                case '='  => do add_token(Token(Symbol(Assign()), c.show, pos(1)))
+                case '*'  => do add_token(Token(Symbol(Asterix()), c.show, pos(1)))
+                case '<'  => do add_token(Token(Symbol(Less()), c.show, pos(1)))
+                case '>'  => do add_token(Token(Symbol(Great()), c.show, pos(1)))
+                case '!'  => do add_token(Token(Symbol(Not()), c.show, pos(1)))
+                case '-'  => do add_token(Token(Symbol(Minus()), c.show, pos(1)))
+                case '+'  => do add_token(Token(Symbol(Plus()), c.show, pos(1)))
+                case '/'  => do add_token(Token(Symbol(Divide()), c.show, pos(1)))
+                case _ => do LexerError("Unexpected character '"++c.show++"'.", file, pos(1))
+            }
+            val curPos: Position = Position(line, col, index)
+            if (is_eof()) { handleSingle(first) }
+            else (first, countWhiteSpace { advance }) match {
+                case (':', ':') => do add_token(Token(Symbol(DoubleColon()), "::", pos(2)))
+                case ('-', '>') => do add_token(Token(Symbol(Arrow()), "->", pos(2)))
+                case ('<', '=') => do add_token(Token(Symbol(LessEq()), "<=", pos(2)))
+                case ('>', '=') => do add_token(Token(Symbol(GreatEq()), ">=", pos(2)))
+                case ('=', '=') => do add_token(Token(Symbol(Equal()), "==", pos(2)))
+                case ('!', '=') => do add_token(Token(Symbol(NotEq()), "!=", pos(2)))
+                case _ => {
+                    line = curPos.line
+                    col = curPos.col
+                    index = curPos.index
+                    handleSingle(first)
+                }
+            }
+        }
+
+        def handleLiteral(first: Char): Token / TokenListHandler = first match {
+            case '"' => {
+                val startIndex: Int = index
+                while (not(is_eof()) && countWhiteSpace { peek } != '"') {
+                    if (countWhiteSpace { peek } == '\n') { }
+                    val _ = countWhiteSpace { advance }
+                }
+                if (is_eof()) {
+                    do LexerError("Unterminated String", file, pos(index - startIndex))
+                }
+
+                countWhiteSpace { advance }
+                val literal: String = in.substring(startIndex, index - 1)
+                do add_token(Token(Literal(String()), literal, pos(literal.length)))
+            }
+            case _ => {
+                val startIndex: Int = index - 1
+                var isFloat: Bool = false
+
+                while (not(is_eof()) && ((countWhiteSpace{ peek }).isDigit() || countWhiteSpace{peek} == '.')) {
+                    if (countWhiteSpace{peek} == '.') {
+                        if (isFloat) do LexerError("Multiple '.' in number literal", file, pos(1))
+                        isFloat = true
+                    }
+                    val _ = countWhiteSpace{ advance }
+                }
+
+                val numberText: String = in.substring(startIndex, index)
+
+                var suffix = ""
+                while (not(is_eof()) && ((countWhiteSpace{peek}).isAlphabetic() || countWhiteSpace{peek}.isDigit)) {
+                    suffix = suffix++(countWhiteSpace { advance }).toString()
+                }
+
+                suffix match {
+                    case "u32" => do add_token(Token(Literal(UInt()), numberText, pos(numberText.length)))
+                    case "i32" => do add_token(Token(Literal(Int()), numberText, pos(numberText.length)))
+                    case "u8"  => do add_token(Token(Literal(UByte()),  numberText, pos(numberText.length)))
+                    case "i8"  => do add_token(Token(Literal(Byte()),  numberText, pos(numberText.length)))
+                    case "" =>
+                        if (isFloat)
+                            do add_token(Token(Literal(Float()), numberText, pos(numberText.length)))
+                        else
+                            do add_token(Token(Literal(Int()), numberText, pos(numberText.length)))
+                    case _ => do LexerError("Unknown numeric suffix.", file, pos(suffix.length))
+                }
+            }
+        }
+        
+        def handleIdentifier(first: Char): Token / TokenListHandler = {
+            val startIndex: Int = index - 1
+
+            while (not(is_eof()) && (countWhiteSpace{peek}.isAlphanumeric() || countWhiteSpace{peek} == '_')) {
+                val _ = countWhiteSpace { advance }
+            }
+
+            var text: String = in.substring(startIndex, index)
+
+            if (text == "_") {
+                do LexerError("Standalone '_' is not a valid identifier", file, pos(1))
+            }
+
+            if (text.charAt(0).isUpper() || builtinTypeNames.contains(text){ (l, r) => l == r }) {
+                var tt: DataType =
+                    if (text.charAt(0).isUpper()) { Custom(text) }
+                    else text match { 
+                        case "u32" => UInt()
+                        case "i32" => Int()
+                        case "u8" => UByte()
+                        case "i8" => Byte()
+                        case "float" => Float()
+                        case "ptr" => Pointer(Void())
+                        case "void" => Void()
+                        case "bool" => Bool(None())
+                        case _ => <>
+                    }
+
+                if (is_eof()) {
+                    do add_token(Token(TypeName(tt), text, pos(text.length)))
+                } else if (countWhiteSpace{peek} == '*') {
+                    while (not(is_eof()) && skipWhiteSpace{peek} == '*') {
+                        text = text++"*"
+                        skipWhiteSpace { advance }
+                        tt = Pointer(tt)
+                    }
+
+                    do add_token(Token(TypeName(tt), text, pos(text.length)))
+                } else {
+                    do add_token(Token(TypeName(tt), text, pos(text.length)))
+                }
+            } else text match {
+                case "module" => do add_token(Token(Keyword(Preprocessor(Module())), text, pos(text.length)))
+                case "include" => do add_token(Token(Keyword(Preprocessor(Include())), text, pos(text.length)))
+                case "wrapper" => do add_token(Token(Keyword(Wrapper()), text, pos(text.length)))
+                case "layout" => do add_token(Token(Keyword(Layout()), text, pos(text.length)))
+                case "fn" => do add_token(Token(Keyword(Fn()), text, pos(text.length)))
+                case "pub" => do add_token(Token(Keyword(Pub()), text, pos(text.length)))
+                case "return" => do add_token(Token(Keyword(Return()), text, pos(text.length)))
+                case "let" => do add_token(Token(Keyword(Let()), text, pos(text.length)))
+                case "nullptr" => do add_token(Token(Literal(Pointer(Void())), text, pos(text.length)))
+                case "true" => do add_token(Token(Literal(Bool(Some(true))), text, pos(text.length)))
+                case "false" => do add_token(Token(Literal(Bool(Some(false))), text, pos(text.length)))
+                case "if" => do add_token(Token(Keyword(If()), text, pos(text.length)))
+                case "else" => do add_token(Token(Keyword(Else()), text, pos(text.length)))
+                case _ =>
+                    do add_token(Token(Identifier(), text, pos(text.length)))
+            }
+        }
+        
+        def scanToken(): Token / TokenListHandler = {
+            val ch: Char = skipWhiteSpace { advance }
+
+            if (is_eof()) {
+                do add_token(Token(EOF(), "", pos(0)))
+                <>
+            }
+
+            if (symbols.contains(ch){ (c1, c2) => c1 == c2 }) {
+                currentToken = handleSymbolToken(ch)
+                currentToken
+            } else if (ch == '"' || ch.isDigit()) {
+                currentToken = handleLiteral(ch)
+                currentToken
+            } else if (ch == '_' || ch.isAlphabetic()) {
+                currentToken = handleIdentifier(ch)
+                currentToken
+            } else if (ch == '#') {
+                val curPos: Position = Position(line, col - 1, index)
+                while (not(is_eof()) && countWhiteSpace{advance} != '#') { }
+                if (is_eof()) { do LexerError("Unterminated comment block.", file, curPos) }
+                scanToken()
+            } else {
+                do LexerError("Unexpected character '"++ch.toString()++"'", file, pos(1))
+                <>
+            }
+        }
+
+        def peekToken(): Token / TokenListHandler = {
+            val indexToGoBack: Int = index
+            val colToGoBack: Int = col
+            val lineToGoBack: Int = line
+            val token: Token = scanToken()
+            index = indexToGoBack
+            col = colToGoBack
+            line = lineToGoBack
+
+            do remove_last()
+            token
+        }
+
+        try { prog() }
+        with Lexer {
+            def peek() = resume(peekToken())
+            def next() = resume(scanToken())
+            def current() = resume(currentToken)
+            def position() = resume(pos(0))
+        }
+    } with Exception[OutOfBounds] {
+        def raise(_, msg: String) = do LexerError(msg, file, pos(0))
+    }
+}
+
+def handleTokenList() { prog: () => Unit / TokenListHandler }: List[Token] = {
+    var tokenList: List[Token] = []
+
+    try {
+        prog()
+        tokenList.reverse()
+    } with TokenListHandler { 
+        def add_token(t: Token) = {
+            tokenList = Cons(t, tokenList)
+
+            if (t.tokenType == EOF()) {
+                tokenList.reverse()
+            } else {
+                resume(t)
+            }
+        }
+        def remove_last() = tokenList match {
+            case Cons(_, tail) => {
+                tokenList = tail
+                resume(())
+            }
+            case Nil() => resume(())
+        }
+    }
+}
+
+def lex(file: String): List[Token] = {
+    val source: String = try {
+        readFile(file)
+    } with Exception[IOError] {
+        def raise(_, _) = {
+            println("[ERROR] Couldn't open file at path "++file)
+            exit(1)
+            <>
+        }
+    }
+
+    report(source) {
+        handleTokenList {
+            lexer(file, source) {
+                while ((do next()).tokenType != EOF()) {  }
+            }
+        }
+    }
+}

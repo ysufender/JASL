@@ -1,0 +1,54 @@
+// The Jasl language will be compiled to JASM IL then to JASM Bytecode
+// to be executed in CSR.
+// JASM supports (u)int32, (u)int8 and 32-bit floating point numbers
+// as well as 32-bit pointers. So these are all Jasl will have, well bools are present
+// too but they're uint8 under the hood.
+//
+//
+// Jasl will have objects but won't have inheritance since I don't want to deal
+// with vtables. No interfaces either, at least for now.
+
+import process
+import args
+import lexer/lexer
+import native/native
+
+def printHelp(): Unit =
+    println("Usage:\n\tjasl [flags] <file>\n\n\tFlags:\n\t\t-h : Prints this help message.")
+
+def strEquals(l: String, r: String): Bool =
+    l == r
+
+def main() = {
+    // 1- Parse command line
+    // 2- Lex input file(s)
+    // 3- Parse lexed file(s)
+    // 4- Generate JASM IL
+    // 5- Call AssembleIL(filePath)
+    // FIN
+
+    val args: List[String] = llvm::commandLineArgs()
+    val argc: Int = llvm::argCount()
+
+    if (argc <= 1 || args.contains("-h"){strEquals}) {
+        printHelp()
+    } else {
+        with on[OutOfBounds].panic;
+        val file: String = llvm::argument(1)
+
+        val tokenized: List[Token] = lexer::lex(file)
+
+        tokenized match {
+            case Cons(Token(EOF(), _, _), _) => {
+                println("Why are you even compiling an empty file dude?")
+                exit(1)
+            }
+            case _ => { }
+        }
+
+        // val ast: AST = parser::parse(tokenized)
+        // val asmfile: String = generator::generate_il(AST)
+        // AssembleIL(asmfile)
+    }
+}
+

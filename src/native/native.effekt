@@ -1,0 +1,18 @@
+module native
+
+extern llvm """
+    declare double @random_range(%Int, %Int)
+    declare void @assemble_il_call(%Pos)
+"""
+
+extern def random_range(min: Int, max: Int): Int =
+    llvm """
+        %r = call %Int @random_range(%Int ${min}, %Int ${max})
+        ret %Int %r
+    """
+
+extern def AssembleIL(filePath: String): Unit =
+    llvm """
+        call void @assemble_il_call(%Pos ${filePath})
+        ret %Pos zeroinitializer
+    """
