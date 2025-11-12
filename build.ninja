@@ -49,8 +49,9 @@ build $builddir/panic.o: cc $effektdir/panic.c
 #build $builddir/rts.bs: las $effektdir/rts.ll
 #build $builddir/rts.o: lc $builddir/rts.bs
 
-build $builddir/main.ll: efc $sourcedir/main.effekt | $sourcedir/lexer/lexer.effekt | $sourcedir/parser/parser.effekt
+build $builddir/main.ll: efc $sourcedir/main.effekt | $sourcedir/lexer/lexer.effekt $sourcedir/parser/parser.effekt $sourcedir/common/common.effekt $sourcedir/native/native.effekt
     out_dir = $builddir
+
 build $builddir/jasl.bs: las $builddir/main.ll
 build $builddir/jasl.o: lc $builddir/jasl.bs
 

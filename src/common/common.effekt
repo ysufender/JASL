@@ -1,0 +1,56 @@
+module common
+
+import process
+
+import native/native
+
+val helpLines: List[String] = [
+    "Here",
+    "No need to thank me",
+    "Right here buddy",
+    "It's here lad",
+    "I spotted it, just for you",
+    "I FOUND HIM BOSS",
+    "You seriously missed this?",
+    "Come on, it's here",
+    "You should be a bit more careful with your code",
+    "Hm. Here",
+    "|____ <- There",
+    "I'm running out of ideas for error indicator messages",
+    "You can't hate yourself, not yet"
+]
+
+def getHelpLine(): String = try { 
+        val rand: Int = random_range(0, helpLines.size() - 1)
+        helpLines.get(rand)
+    } with Exception[OutOfBounds] {
+        def raise(_, _) = "<unknown>"
+    }
+
+effect InternalError(msg: String): Nothing
+
+def internalErrorHandler[T]{ prog: () => T / InternalError }: T = {
+    try { prog() }
+    with InternalError { msg => {
+        println("[INTERNAL ERROR] The program ran into an unexpected internal error. Please report this issue to the author.")
+        println("        Internal Message: "++msg)
+        exit(1)
+    }}
+}
+
+def unpackOrCrash[T](optional: Option[T]): T / InternalError = optional match {
+    case Some(value) => value
+    case None() => do InternalError("Expected a defined option.")
+}
+
+def compare[T](lhs: List[T], rhs: List[T]) { eq: (T, T) => Bool }: Bool = {
+    if (lhs is Cons(head1, rest1) and rhs is Cons(head2, rest2)) {
+        if (head1.eq(head2)) compare(rest1, rest2) { eq }
+        else false
+    }
+    else if (lhs.isEmpty && rhs.isEmpty) { true }
+    else false
+}
+
+// TODO Create a CompilerContext storing the contents of a file and the file name
+// such that the parser/lexer/IL can request the name and contents from it.

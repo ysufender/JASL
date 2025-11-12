@@ -1,1 +1,446 @@
 module parser
+
+import map
+import process
+
+import lexer/lexer
+import common/common
+
+record ParserContext(
+    parent: Option[ParserContext],
+    functions: Map[String, FunctionSignature],
+    variables: Map[String, VariableSignature],
+    layouts: Map[String, LayoutSignature]
+)
+
+record FunctionSignature(
+    name: String,
+    visibility: Bool,
+    comptime: Bool,
+    params: List[VariableSignature],
+    returns: List[Type]
+)
+
+record LayoutSignature(
+    name: String,
+    visibility: Bool,
+    wrapper: Bool,
+    fields: List[VariableSignature]
+)
+
+record VariableSignature(
+    name: String,
+    visibility: Bool,
+    mutability: Bool,
+    comptime: Bool,
+    varType: Type
+)
+
+type Type {
+    Bool()
+    UInt()
+    Int()
+    Float()
+    UByte()
+    Byte()
+    Pointer(ptrType: Type)
+    Void()
+    Custom(name: String)
+}
+
+type Literal {
+    Bool(value: Bool)
+    String(value: String)
+    UInt(value: Int)
+    Int(value: Int)
+    Float(value: Double)
+    UByte(value: Int)
+    Byte(value: Int)
+    Nullptr()
+}
+
+/*
+type QualifiedName {
+    Simple(name: String)
+    Qualified(qualifier: QualifiedName, member: String)
+}
+*/
+
+record QualifiedName(typename: Type, member: String)
+
+type BinaryOp {
+    Addition(lhs: Expression, rhs: Expression)
+    Subtraction(lhs: Expression, rhs: Expression)
+    Division(lhs: Expression, rhs: Expression)
+    Multiplication(lhs: Expression, rhs: Expression)
+    Equality(lhs: Expression, rhs: Expression)
+    Inequality(lhs: Expression, rhs: Expression)
+    Greater(lhs: Expression, rhs: Expression)
+    Lesser(lhs: Expression, rhs: Expression)
+    GreaterEqual(lhs: Expression, rhs: Expression)
+    LesserEqual(lhs: Expression, rhs: Expression)
+    And(lhs: Expression, rhs: Expression)
+    Or(lhs: Expression, rhs: Expression)
+}
+
+type UnaryOp {
+    Negation(rhs: Expression)
+    Not(rhs: Expression)
+}
+
+type Expression {
+    TypeName(name: Type)
+    Identifier(name: String)
+    Binary(binOp: BinaryOp)
+    Unary(unOp: UnaryOp)
+    Grouping(inside: Expression)
+    Literal(value: Literal)
+    Dot(lhs: Expression, member: String)
+    Scoping(lhs: QualifiedName, member: String)
+    Call(fn: Expression, args: List[Expression])
+    Block(inside: List[Statement], scope: ParserContext)
+}
+
+type Statement {
+    ExpressionStatement(expr: Expression, pos: Position)
+    VariableDefinition(signature: VariableSignature, initializer: Option[Expression], pos: Position)
+    Conditional(condition: Expression, body: Statement, scope: ParserContext, fallback: Option[Statement], pos: Position)
+    While(condition: Expression, body: Statement, scope: ParserContext, pos: Position)
+    FnDeclaration(signature: FunctionSignature, body: List[Statement], scope: ParserContext, pos: Position)
+    LayoutDeclaration(signature: LayoutSignature, pos: Position)
+    Return(returns: List[Expression], pos: Position)
+    Assignment(lhs: Expression, rhs: Expression, pos: Position)
+}
+
+// TODO ask for bidirectional effects that recursively cause the same effect
+//interface ContextRequest {
+//    def getVar(name: String): Option[VariableSignature] / ContextRequest
+//    def getFunction(name: String): Option[FunctionSignature] / ContextRequest
+//    def getLayout(name: String): Option[LayoutSignature] / ContextRequest
+//    def addVar(name: String, sign: VariableSignature): Unit / ParserError
+//    def addFunction(name: String, sign: FunctionSignature): Unit / ParserError
+//    def addLayout(name: String, sign: LayoutSignature): Unit / ParserError
+//}
+
+interface ContextRequest {
+    def getVar(name: String): VariableSignature / ParserError
+    def getFunction(name: String): FunctionSignature / ParserError
+    def getLayout(name: String): LayoutSignature / ParserError
+    def hasVar(name: String): Bool
+    def hasFunction(name: String): Bool
+    def hasLayout(name: String): Bool
+    def addVar(name: String, sign: VariableSignature): Unit / ParserError
+    def addFunction(name: String, sign: FunctionSignature): Unit / ParserError
+    def addLayout(name: String, sign: LayoutSignature): Unit / ParserError
+}
+
+effect ParserError(msg: String, file: String, pos: Position): Nothing
+
+def isComptime(stmt: Statement): Bool / {ContextRequest, ParserError} = stmt match {
+    case ExpressionStatement(expr, _) => isComptime(expr)
+    case VariableDefinition(signature, initializer, _) => if (initializer is Some(expr)) { isComptime(expr) } else { true }
+    case Conditional(condition, body, scope, fallback, _) => isComptime(condition) && isComptime(body) && (if (fallback is Some(else_block)) { isComptime(else_block) } else { true })
+    case While(condition, body, scope, _) => false // No.
+    case FnDeclaration(signature, body, scope, _) => signature.comptime
+    case LayoutDeclaration(signature, _) => true // Come on.
+    case Return(returns, _) => returns.all { r => isComptime(r) }
+    case Assignment(lhs, rhs, _) => isComptime(lhs) && isComptime(rhs)
+}
+
+def isComptime(op: BinaryOp): Bool / {ContextRequest, ParserError} = op match {
+    case Addition(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
+    case Subtraction(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
+    case Division(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
+    case Multiplication(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
+    case Equality(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
+    case Inequality(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
+    case Greater(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
+    case Lesser(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
+    case GreaterEqual(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
+    case LesserEqual(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
+    case And(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
+    case Or(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
+}
+
+def isComptime(op: UnaryOp): Bool / {ContextRequest, ParserError} = op match {
+    case Negation(rhs) => isComptime(rhs)
+    case Not(rhs) => isComptime(rhs)
+}
+
+def isComptime(expr: Expression): Bool / {ContextRequest, ParserError} = expr match {
+    case TypeName(_) => true
+    case Identifier(name) => (do hasVar(name) || do hasFunction(name) || do hasLayout(name))
+    case Binary(binOp) => isComptime(binOp)
+    case Unary(unOp) => isComptime(unOp)
+    case Grouping(expr) => isComptime(expr)
+    case Literal(value) => true
+    case Dot(lhs, member) => isComptime(lhs)
+    case Scoping(lhs, member) => true
+    case Call(fn, args) => isComptime(fn) && args.all { arg => isComptime(arg) }
+    case Block(inside, scope) => inside.all { st => isComptime(st) }
+}
+
+interface TokenRequest {
+    def matchNext(tokensToMatch: List[Token]): Bool // match the tokens starting from the current one
+    def check(token: Token): Bool // check the current token
+    def advance(): Token / ParserError
+    def peek(): Token
+    def previous(): Token
+    def is_eof(): Bool
+}
+
+record AST(body: List[Statement])
+
+
+def parser_report[T] { prog: () => T / {ParserError, InternalError} }: T / InternalError = {
+    try { prog() }
+    with ParserError { (msg, file, pos) => {
+        var errLine: String = "TODO: Create a Compiler effect to store all files/ASTs perhaps and request a line"
+
+        val spaces: String = " ".repeat(pos.col+7)
+        val helpLine: String = getHelpLine()
+        println("[PARSER ERROR] "++file++" at "++show(pos))
+        println("        "++errLine)
+        println(spaces++"^")
+        println(spaces++helpLine)
+        println("        "++msg)
+        exit(1)
+    }}
+}
+
+// TODO for recursive bidirectional effects
+/*
+def rootContext[T](file: String) { prog: () => T / ContextRequest }: T / {TokenRequest, ParserError, InternalError} = {
+    try { prog() }
+    with ContextRequest {
+        def getVar(name) = resume { do ParserError("Given variable '"++name++"' doesn't exists in the current context.", file, (do previous()).position) }
+        def getFunction(name) = resume { do ParserError("Given function '"++name++"' doesn't exists in the current context.", file, (do previous()).position) }
+        def getLayout(name) = resume { do ParserError("Given layout '"++name++"' doesn't exists in the current context.", file, (do previous()).position) }
+        def addVar(name, sign) = do InternalError("Unreachable code detected. Please file an issue.")
+        def addFunction(name, sign) = do InternalError("Unreachable code detected. Please file an issue.")
+        def addLayout(name, sign) = do InternalError("Unreachable code detected. Please file an issue.")
+    }
+}
+*/
+
+/* TODO recursive bidirectional effects
+def contextHandler[T](_context: ParserContext, file: String) { prog: () => T / ContextRequest }: T / {TokenRequest, ContextRequest} = {
+    var context = _context
+    try { prog() }
+    with ContextRequest {
+        def getVar(name) = resume {
+            val v = context.variables.get(name)
+            v match {
+                case Some(_) => v
+                case None() => context.parent match {
+                    case Some(parent) => do getVar(name)
+                    case None() => None()
+                }
+            }
+        }
+        def getFunction(name) = resume {
+            val v = context.functions.get(name)
+            v match {
+                case Some(_) => v
+                case None() => context.parent match {
+                    case Some(parent) => do getFunction(name)
+                    case None() => None()
+                }
+            }
+        }
+        def getLayout(name) = resume {
+            val v = context.layouts.get(name)
+            v match {
+                case Some(_) => v
+                case None() => context.parent match {
+                    case Some(parent) => do getLayout(name)
+                    case None() => None()
+                }
+            }
+        }
+        def addVar(name, sign) = resume {
+            if (context.variables.contains(name)) {
+                do ParserError("Given variable '"++name++"' already exists in the current context.", file, (do previous()).position)
+            } else {
+                context = ParserContext(context.parent, context.functions, context.variables.put(name, sign), context.layouts)
+            }
+        }
+        def addFunction(name, sign) = resume {
+            if (context.functions.contains(name)) {
+                do ParserError("Given function '"++name++"' already exists in the current context.", file, (do previous()).position)
+            } else {
+                context = ParserContext(context.parent, context.functions.put(name, sign), context.variables, context.layouts)
+            }
+        }
+        def addLayout(name, sign) = resume {
+            if (context.layouts.contains(name)) {
+                do ParserError("Given layout '"++name++"' already exists in the current context.", file, (do previous()).position)
+            } else {
+                context = ParserContext(context.parent, context.functions, context.variables, context.layouts.put(name, sign))
+            }
+        }
+    }
+}
+*/
+
+def contextHandler[T](_context: ParserContext, file: String) { prog: () => T / ContextRequest }: T / {TokenRequest} = {
+    var context = _context
+    try { prog() }
+    with ContextRequest {
+        def getVar(name) = resume {
+            val v = context.variables.get(name)
+            v match {
+                case Some(sign) => sign 
+                case None() => context.parent match {
+                    case Some(parent) => {
+                        with contextHandler(parent, file);
+                        do getVar(name)
+                    }
+                    case None() => {
+                        do ParserError("Given variable '"++name++"' doesn't exists in the current context.", file, (do previous()).position)
+                    }
+                }
+            }
+        }
+        def getFunction(name) = resume {
+            val v = context.functions.get(name)
+            v match {
+                case Some(sign) => sign 
+                case None() => context.parent match {
+                    case Some(parent) => {
+                        with contextHandler(parent, file);
+                        do getFunction(name)
+                    }
+                    case None() => {
+                        do ParserError("Given function '"++name++"' doesn't exists in the current context.", file, (do previous()).position)
+                    }
+                }
+            }
+        }
+        def getLayout(name) = resume {
+            val v = context.layouts.get(name)
+            v match {
+                case Some(sign) => sign 
+                case None() => context.parent match {
+                    case Some(parent) => {
+                        with contextHandler(parent, file);
+                        do getLayout(name)
+                    }
+                    case None() => {
+                        do ParserError("Given layout '"++name++"' doesn't exists in the current context.", file, (do previous()).position)
+                    }
+                }
+            }
+        }
+        def hasVar(name) = resume(
+            if (context.variables.contains(name)) { true }
+            else if (context.parent is Some(parent)) {
+                with contextHandler(parent, file);
+                do hasVar(name)
+            }
+            else { false }
+        )
+        def hasFunction(name) = resume(
+            if (context.functions.contains(name)) { true }
+            else if (context.parent is Some(parent)) {
+                with contextHandler(parent, file);
+                do hasFunction(name)
+            }
+            else { false }
+        )
+        def hasLayout(name) = resume(
+            if (context.layouts.contains(name)) { true }
+            else if (context.parent is Some(parent)) {
+                with contextHandler(parent, file);
+                do hasLayout(name)
+            }
+            else { false }
+        )
+        def addVar(name, sign) = resume {
+            if (context.variables.contains(name)) {
+                do ParserError("Given variable '"++name++"' already exists in the current context.", file, (do previous()).position)
+            } else {
+                context = ParserContext(context.parent, context.functions, context.variables.put(name, sign), context.layouts)
+            }
+        }
+        def addFunction(name, sign) = resume {
+            if (context.functions.contains(name)) {
+                do ParserError("Given function '"++name++"' already exists in the current context.", file, (do previous()).position)
+            } else {
+                context = ParserContext(context.parent, context.functions.put(name, sign), context.variables, context.layouts)
+            }
+        }
+        def addLayout(name, sign) = resume {
+            if (context.layouts.contains(name)) {
+                do ParserError("Given layout '"++name++"' already exists in the current context.", file, (do previous()).position)
+            } else {
+                context = ParserContext(context.parent, context.functions, context.variables, context.layouts.put(name, sign))
+            }
+        }
+    }
+}
+
+def tokenHandler[T](_tokens: List[Token], file: String){ prog: () => T / TokenRequest }: T / ParserError = {
+    var tokens = _tokens
+    var previousToken: Token = Token(EOF(), "", Position(0, 0, 0))
+    try { prog() }
+    with TokenRequest {
+        def matchNext(tokensToMatch) = resume(compare(tokensToMatch, tokens.take(tokensToMatch.size)){ (l, r) => infixEq(l, r) })
+        def check(token) = resume(try { token.infixEq(tokens.head) }
+                            with Exception[MissingValue] {
+                                def raise(_, _) = false
+                            })
+        def advance() = resume {
+            if (tokens.isEmpty)
+                do ParserError("Unexpected EOF.", file, previousToken.position)
+            with on[MissingValue].default{ <> };
+
+            previousToken = tokens.head
+            tokens = tokens.tail
+            tokens.head
+        }
+        def peek() = resume(try { tokens.head }
+                            with Exception[MissingValue] {
+                                def raise(_, _) = previousToken
+                            })
+        def previous() = resume(previousToken)
+        def is_eof() = resume(tokens.isEmpty)
+    }
+}
+
+def parseExpression(tokens: List[Token], file: String): AST / {ContextRequest, ParserError, TokenRequest, InternalError} = {
+    AST([])
+}
+
+def parse(tokens: List[Token], file: String): AST / InternalError = parser_report[AST] {
+    def stringEq(l: String, r: String): Ordering = if (l == r) { Equal() } else { Less() }
+
+    with tokenHandler(tokens, file);
+    with contextHandler(ParserContext(
+        None(),
+        map::empty[String, FunctionSignature](box stringEq),
+        map::empty[String, VariableSignature](box stringEq),
+        map::empty[String, LayoutSignature](box stringEq)
+    ), file);
+
+    parseExpression(tokens, file)
+}
+
+/*
+    JASL EBNF OF EXPRESSIONS
+
+    <expression> ::= <conditional-expression>
+    <conditional-expression> ::= <logical-or-expression>
+    <logical-or-expression> ::= <logical-and-expression> { "||" <logical-and-expression> }
+    <logical-and-expression> ::= <equality-expression> { "&&" <equality-expression> }
+    <equality-expression> ::= <relational-expression> { ( "==" | "!=" ) <relational-expression> }
+    <relational-expression> ::= <additive-expression> { ( ">" | "<" | ">=" | "<=" ) <additive-expression> }
+    <additive-expression> ::= <multiplicative-expression> { ( "+" | "-" ) <multiplicative-expression> }
+    <multiplicative-expression> ::= <unary-expression> { ( "*" | "/" ) <unary-expression> }
+    <unary-expression> ::= ( "-" | "!" | "not" ) <unary-expression> | <postfix-expression>
+    <postfix-expression> ::= <primary-expression> { <postfix-suffix> }
+    <postfix-suffix> ::= "." <identifier> | "(" [ <arg-list> ] ")" | "::" <identifier>
+    <arg-list> ::= <expression> { "," <expression> }
+    <primary-expression> ::= <identifier> | <literal> | "(" <expression> ")" | <block-expression>
+    <block-expression> ::= "{" { <statement> } "}"
+*/

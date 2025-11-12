@@ -4,7 +4,7 @@ import io/filesystem
 import io/error
 import process
 
-import native/native
+import common/common
 
 type PreprocessorKeywordType {
     Module()
@@ -24,6 +24,7 @@ type KeywordType {
     Extern()
     If()
     Else()
+    Mut()
 }
 
 type SymbolType {
@@ -49,6 +50,8 @@ type SymbolType {
     Minus()
     Plus()
     Divide()
+    And()
+    Or()
 }
 
 type DataType {
@@ -94,6 +97,7 @@ def show(t: KeywordType): String = t match {
     case Extern() => "Extern"
     case If() => "If"
     case Else() => "Else"
+    case Mut() => "Mut"
 }
 
 def show(t: SymbolType): String = t match {
@@ -119,6 +123,8 @@ def show(t: SymbolType): String = t match {
     case Minus() => "Minus"
     case Plus() => "Plus"
     case Divide() => "Divide"
+    case And() => "And"
+    case Or() => "Or"
 }
 
 def show(t: DataType): String = t match {
@@ -168,6 +174,12 @@ def infixEq(l: KeywordType, r: KeywordType): Bool = {
         case (Pub(), Pub()) => true
         case (Return(), Return()) => true
         case (Let(), Let()) => true
+        case (KeywordType::Void(), KeywordType::Void()) => true
+        case (While(), While()) => true
+        case (Extern(), Extern()) => true
+        case (If(), If()) => true
+        case (Else(), Else()) => true
+        case (Mut(), Mut()) => true
         case _ => false
     }
 }
@@ -185,6 +197,19 @@ def infixEq(l: SymbolType, r: SymbolType): Bool = {
         case (DoubleColon(), DoubleColon()) => true
         case (Arrow(), Arrow()) => true
         case (Assign(), Assign()) => true
+        case (Asterix(), Asterix()) => true
+        case (Less(), Less()) => true
+        case (Great(), Great()) => true
+        case (LessEq(), LessEq()) => true
+        case (GreatEq(), GreatEq()) => true
+        case (Equal(), Equal()) => true
+        case (NotEq(), NotEq()) => true
+        case (Not(), Not()) => true
+        case (Minus(), Minus()) => true
+        case (Plus(), Plus()) => true
+        case (Divide(), Divide()) => true
+        case (And(), And()) => true
+        case (Or(), Or()) => true
         case _ => false
     }
 }
@@ -199,6 +224,7 @@ def infixEq(l: DataType, r: DataType): Bool = {
         case (Byte(), Byte()) => true
         case (Pointer(p1), Pointer(p2)) => infixEq(p1, p2)
         case (DataType::Void(), DataType::Void()) => true
+        case (Custom(n1), Custom(n2)) => n1 == n2
         case _ => false
     }
 }
@@ -214,6 +240,10 @@ def infixEq(l: TokenType, r: TokenType): Bool = {
         case _ => false
     }
 }
+
+def infixEq(l: Position, r: Position): Bool = (l.line == r.line) && (l.col == r.col)
+
+def infixEq(l: Token, r: Token): Bool = (l.tokenType == r.tokenType) && (l.position == r.position)
 
 def infixNeq(l: TokenType, r: TokenType): Bool = not(infixEq(l, r))
 
@@ -231,23 +261,7 @@ interface Lexer {
 
 effect LexerError(msg: String, file: String, pos: Position): Nothing
 
-val helpLines: List[String] = [
-    "Here",
-    "No need to thank me",
-    "Right here buddy",
-    "It's here lad",
-    "I spotted it, just for you",
-    "I FOUND HIM BOSS",
-    "You seriously missed this?",
-    "Come on, it's here",
-    "You should be a bit more careful with your code",
-    "Hm. Here",
-    "|____ <- There",
-    "I'm running out of ideas for error indicator messages",
-    "You can't hate yourself, not yet"
-]
-
-def report[T](source: String) { prog: () => T / LexerError }: T = {
+def lexer_report[T](source: String) { prog: () => T / LexerError }: T = {
     try { prog() }
     with LexerError { (msg, file, pos) => {
         var errLine: String = "<unknown>"
@@ -260,14 +274,9 @@ def report[T](source: String) { prog: () => T / LexerError }: T = {
         }
 
         val spaces: String = " ".repeat(pos.col+7)
-        val helpLine: String = try { 
-            val rand: Int = random_range(0, helpLines.size() - 1)
-            helpLines.get(rand)
-        } with Exception[OutOfBounds] {
-            def raise(_, _) = <>
-        }
+        val helpLine: String = getHelpLine()
     
-        println("[ERROR] "++file++" at "++show(pos))
+        println("[LEXER ERROR] "++file++" at "++show(pos))
         println("        "++errLine)
         println(spaces++"^")
         println(spaces++helpLine)
@@ -337,11 +346,7 @@ val tokenRegexes: List[TokenRegex] = [
 */
 
 val symbols: List[Char] = [
-    '(',')','{','}',',','.',':',';','*','-','>','=','<','!','-','+','/'
-]
-
-val compoundSymbols: List[String] = [
-    "::", "->"
+    '(',')','{','}',',','.',':',';','*','-','>','=','<','!','-','+','/','&','|'
 ]
 
 val builtinTypeNames: List[String] = [
@@ -443,6 +448,8 @@ def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerErro
                 case ('>', '=') => do add_token(Token(Symbol(GreatEq()), ">=", pos(2)))
                 case ('=', '=') => do add_token(Token(Symbol(Equal()), "==", pos(2)))
                 case ('!', '=') => do add_token(Token(Symbol(NotEq()), "!=", pos(2)))
+                case ('&', '&') => do add_token(Token(Symbol(And()), "&&", pos(2)))
+                case ('|', '|') => do add_token(Token(Symbol(Or()), "||", pos(2)))
                 case _ => {
                     line = curPos.line
                     col = curPos.col
@@ -474,6 +481,12 @@ def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerErro
                 while (not(is_eof()) && ((countWhiteSpace{ peek }).isDigit() || countWhiteSpace{peek} == '.')) {
                     if (countWhiteSpace{peek} == '.') {
                         if (isFloat) do LexerError("Multiple '.' in number literal", file, pos(1))
+                        val p = pos(0)
+                        if (not(locally{countWhiteSpace{advance}; countWhiteSpace{peek}}.isDigit()))
+                            do LexerError("Ending floating point literals with a '.' is not allowed.", file, p)
+                        line = p.line
+                        col = p.col
+                        index = p.index
                         isFloat = true
                     }
                     val _ = countWhiteSpace{ advance }
@@ -556,6 +569,9 @@ def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerErro
                 case "false" => do add_token(Token(Literal(Bool(Some(false))), text, pos(text.length)))
                 case "if" => do add_token(Token(Keyword(If()), text, pos(text.length)))
                 case "else" => do add_token(Token(Keyword(Else()), text, pos(text.length)))
+                case "while" => do add_token(Token(Keyword(While()), text, pos(text.length)))
+                case "extern" => do add_token(Token(Keyword(Extern()), text, pos(text.length)))
+                case "mut" => do add_token(Token(Keyword(Mut()), text, pos(text.length)))
                 case _ =>
                     do add_token(Token(Identifier(), text, pos(text.length)))
             }
@@ -651,7 +667,7 @@ def lex(file: String): List[Token] = {
         }
     }
 
-    report(source) {
+    lexer_report(source) {
         handleTokenList {
             lexer(file, source) {
                 while ((do next()).tokenType != EOF()) {  }

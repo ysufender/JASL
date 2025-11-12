@@ -10,7 +10,9 @@
 
 import process
 import args
+import common/common
 import lexer/lexer
+import parser/parser
 import native/native
 
 def printHelp(): Unit =
@@ -20,6 +22,7 @@ def strEquals(l: String, r: String): Bool =
     l == r
 
 def main() = {
+    with internalErrorHandler;
     // 1- Parse command line
     // 2- Lex input file(s)
     // 3- Parse lexed file(s)
@@ -37,15 +40,7 @@ def main() = {
         val file: String = llvm::argument(1)
 
         val tokenized: List[Token] = lexer::lex(file)
-
-        tokenized match {
-            case Cons(Token(EOF(), _, _), _) => {
-                println("Why are you even compiling an empty file dude?")
-                exit(1)
-            }
-            case _ => { }
-        }
-
+        val AST: AST = parser::parse(tokenized, file)
         // val ast: AST = parser::parse(tokenized)
         // val asmfile: String = generator::generate_il(AST)
         // AssembleIL(asmfile)
