@@ -88,6 +88,7 @@ def isComptime(expr: Expression): Bool / {ParserContextRequest, ParserError} = e
 interface TokenRequest {
     def matchNext(tokensToMatch: List[TokenType]): Bool // match the tokens starting from the current one
     def check(token: TokenType): Bool // check the current token
+    def checkOrCrash(token: TokenType): Bool / ParserError
     def advance(): Token / ParserError
     def peek(): Token
     def previous(): Token
@@ -227,6 +228,15 @@ def tokenHandler[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {
                             with Exception[MissingValue] {
                                 def raise(_, _) = false
                             })
+        def checkOrCrash(token) = resume {
+            try {
+                if (token.infixEq(tokens.head.tokenType)) { true }
+                else do ParserError("Expected '"++token.show++"', got '"++tokens.head.tokenType.show++"'.", tokens.head.position)
+            }
+            with Exception[MissingValue] {
+                def raise(_, _) = do ParserError("Expected `"++token.show++"', got  EOF.", previousToken.position)
+            }
+        }
         def advance() = resume {
             if (tokens.isEmpty)
                 do ParserError("Unexpected EOF.", previousToken.position)
@@ -257,6 +267,8 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContex
         do ParserError("Expected a module name, got '"++token.text++"' instead.", token.position)
     }
     do setWorkingModule((do advance()).text)
+    do registerLexerOutput([])
+    println("Prepassing Module: "++do getWorkingModule())
 
     val variableSignatures = map::empty[String, VariableSignature](box strOrder)
     val functionSignatures = map::empty[String, FunctionSignature](box strOrder)
@@ -279,7 +291,6 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContex
                     val currentModule: String = do getWorkingModule()
                     do setWorkingFile(token.text)
                     val tokenized: List[Token] = lexer::lex()
-                    do registerLexerOutput(tokenized)
 
                     with parser_report;
                     with tokenHandler(tokenized);
@@ -288,12 +299,24 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContex
                     tokenHandler(tokenized) {
                         _prepass()
                     }
+
+                    println("Registering Lexer Output: "++do getWorkingModule())
+                    do registerLexerOutput(tokenized)
                     
                     do setWorkingFile(currentFile)
                     do setWorkingModule(currentModule)
-                }
+                } else { do advance(); () }
             }
-            case _ => ()
+            case Keyword(Pub()) => {
+                //  fn, wrapper, layout, 
+            }
+            case Keyword(Fn()) => {}
+            case Keyword(Let()) => {}
+            case Keyword(Wrapper()) => {
+                do checkOrCrash(Keyword(Layout()))
+                ()
+            }
+            case _ => {}
         }
     }
 
@@ -307,6 +330,9 @@ def prepass(tokens: List[Token]): Unit / {InternalError, CompilerContextRequest}
     tokenHandler(tokens) { // needs a separate handler since it eats
         _prepass()
     }
+
+    println("Registering Lexer Output: "++do getWorkingModule())
+    do registerLexerOutput(tokens)
 }
 
 def parseExpression(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {

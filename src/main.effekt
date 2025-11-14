@@ -43,10 +43,12 @@ def main() = {
             parser::prepass(tokenized)
 
             feed[(String, LexerContext)]{ () => do emitLexerOutput() } { case (filename, context) => {
-                println("Parse called for "++filename++" module "++context.name)
                 do setWorkingFile(filename)
                 do setWorkingModule(context.name)
+                println("\nParse called for "++do getWorkingFile()++" module "++do getWorkingModule())
                 do registerAST(parser::parse(context.tokens))
+                println("Contents of "++do getWorkingFile()++" module "++do getWorkingModule())
+                context.tokens.foreach { t => println(t.show) }
             }}
 
             // val ast: AST = parser::parse(tokenized)

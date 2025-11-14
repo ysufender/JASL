@@ -70,7 +70,7 @@ type Type {
 
 record FunctionSignature(
     name: String,
-    visibility: Bool,
+    public: Bool,
     comptime: Bool,
     params: List[VariableSignature],
     returns: List[Type]
@@ -78,16 +78,17 @@ record FunctionSignature(
 
 record LayoutSignature(
     name: String,
-    visibility: Bool,
+    public: Bool,
     wrapper: Bool,
     fields: List[VariableSignature]
 )
 
 record VariableSignature(
     name: String,
-    visibility: Bool,
+    public: Bool,
     mutability: Bool,
     comptime: Bool,
+    global: Bool,
     stackIndex: Int,
     varType: Type
 )
@@ -243,6 +244,7 @@ interface CompilerContextRequest {
     def getWorkingModule(): String // module name request.
     def checkDependency(file: String): Bool // import "file", if it's already processed returns true, if not returns false
     def updateModule(variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layout: Map[String, LayoutSignature]): Unit / InternalError
+    def increaseGlobalStackIndex(amount: Int): Unit
     def registerLexerOutput(output: List[Token]): Unit
     //def getLexerOutput(file: String): List[Token]
     def emitLexerOutput(): Unit / emit[(String, LexerContext)]
@@ -259,10 +261,11 @@ def emptyModule(name: String): ModuleInfo = ModuleInfo(name, map::empty[String, 
 
 def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, InternalError} }: T / {InternalError, StopCompiler} = {
     var currentFile: String = ""
-    var currentModule: String = "main"
+    var currentModule: String = ""
     var processedFiles: Map[String, LexerContext] = map::empty(box strOrder)
     var modules: Map[String, ModuleInfo] = map::empty(box strOrder)
     var asts: List[AST] = []
+    var globalStackIndex: Int = 0
 
     try { prog() }
     with CompilerContextRequest {
@@ -287,6 +290,10 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
             } else {
                 do InternalError("Call 'context::setWorkingModule' before calling 'context::updateModule'", __FILE__, __LINE__)
             }
+        }
+        def increaseGlobalStackIndex(amount) = {
+            globalStackIndex = globalStackIndex + amount
+            resume(())
         }
         def registerLexerOutput(output) = {
             processedFiles = processedFiles.put(currentFile, LexerContext(currentModule, output)) // overrides the value at name
