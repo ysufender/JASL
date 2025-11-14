@@ -245,11 +245,30 @@ interface CompilerContextRequest {
     def checkDependency(file: String): Bool // import "file", if it's already processed returns true, if not returns false
     def updateModule(variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layout: Map[String, LayoutSignature]): Unit / InternalError
     def increaseGlobalStackIndex(amount: Int): Unit
+    def getGlobalStackIndex(): Int
     def registerLexerOutput(output: List[Token]): Unit
     //def getLexerOutput(file: String): List[Token]
     def emitLexerOutput(): Unit / emit[(String, LexerContext)]
     def registerAST(ast: AST): Unit
     def emitAST(): AST / StopCompiler
+}
+
+def toType(dt: DataType): Type = dt match {
+    case BoolT(_) => Bool()
+    case StringT() => Custom("String")
+    case UIntT() => UInt()
+    case IntT() => Int()
+    case FloatT() => Float()
+    case UByteT() => UByte()
+    case ByteT() => Byte()
+    case PointerT(ptrType) => Pointer(ptrType.toType())
+    case VoidT() => Void()
+    case CustomT(name) => Custom(name)
+}
+
+def toType(tt: TokenType): Type / InternalError = tt match {
+    case TypeNameT(dt) => dt.toType()
+    case _ => do InternalError("Can't turn a token type other than TypeNameT to Type", __FILE__, __LINE__)
 }
 
 def strEquals(l: String, r: String): Bool =
@@ -295,6 +314,7 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
             globalStackIndex = globalStackIndex + amount
             resume(())
         }
+        def getGlobalStackIndex() = resume(globalStackIndex)
         def registerLexerOutput(output) = {
             processedFiles = processedFiles.put(currentFile, LexerContext(currentModule, output)) // overrides the value at name
             resume(())
@@ -335,4 +355,8 @@ def feed[T] { stream: () => Unit / emit[T] } { prog: (T) => Unit / CompilerConte
         prog(v)
         resume(())
     }}
+}
+
+def unimplemented(file: String, line: String): Unit / InternalError = {
+    do InternalError("This segment of the project is still unimplemented. Please stay tuned.", file, line)
 }

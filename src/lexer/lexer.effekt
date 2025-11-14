@@ -201,11 +201,11 @@ def lexer_report[T]() { prog: () => T / {LexerError, InternalError} }: T / {Comp
         val spaces: String = " ".repeat(pos.col+7)
         val helpLine: String = getHelpLine()
     
-        println("[LEXER ERROR] "++do getWorkingFile()++" at "++show(pos))
-        println("        "++errLine)
+        println("[LEXER ERROR] "++do getWorkingFile()++" at "++show(pos)++" "++msg)
+        println("\n        "++errLine)
         println(spaces++"^")
         println(spaces++helpLine)
-        println("        "++msg)
+        //println("        "++msg)
         exit(1)
         <>
     }}
@@ -451,7 +451,29 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
                 <>
             }
 
-            if (symbols.contains(ch){ (c1, c2) => c1 == c2 }) {
+            if (ch == '/') {
+                if (countWhiteSpace { peek } == '/') {
+                    val curPos: Position = pos(1)
+                    while (not(is_eof()) && countWhiteSpace{advance} != '\n') { }
+                    scanToken()
+                } else if ( countWhiteSpace { peek } == '*') {
+                    val curPos: Position = pos(1)
+                    var ident: Int = 1
+                    while (not(is_eof()) && ident > 0) {
+                        var ch: Char = skipWhiteSpace { advance }
+                        if (ch == '/' && countWhiteSpace { peek } == '*')
+                            ident = ident + 1
+                        else if (ch == '*' && countWhiteSpace { peek } == '/')
+                            ident = ident - 1
+                    }
+                    countWhiteSpace { advance }
+                    if (is_eof()) { do LexerError("Unterminated comment block.", curPos) }
+                    scanToken()
+                } else {
+                    currentToken = handleSymbolToken(ch)
+                    currentToken
+                }
+            } else if (symbols.contains(ch){ (c1, c2) => c1 == c2 }) {
                 currentToken = handleSymbolToken(ch)
                 currentToken
             } else if (ch == '"' || ch.isDigit()) {
@@ -460,11 +482,6 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
             } else if (ch == '_' || ch.isAlphabetic()) {
                 currentToken = handleIdentifier(ch)
                 currentToken
-            } else if (ch == '#') {
-                val curPos: Position = Position(line, col - 1, index)
-                while (not(is_eof()) && countWhiteSpace{advance} != '#') { }
-                if (is_eof()) { do LexerError("Unterminated comment block.", curPos) }
-                scanToken()
             } else {
                 do LexerError("Unexpected character '"++ch.toString()++"'", pos(1))
                 <>

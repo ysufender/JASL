@@ -27,6 +27,17 @@ interface ParserContextRequest {
     def addLayout(name: String, sign: LayoutSignature): Unit / ParserError
 }
 
+interface TokenRequest {
+    def matchNext(tokensToMatch: List[TokenType]): Bool // match the tokens starting from the current one
+    def check(token: TokenType): Bool // check the current token
+    def checkOrCrash(token: TokenType): Bool / ParserError
+    def checkReturnOrCrash(token: TokenType): Token / ParserError
+    def advance(): Token / ParserError
+    def peek(): Token
+    def previous(): Token
+    def is_eof(): Bool
+}
+
 effect ParserError(msg: String, pos: Position): Nothing / CompilerContextRequest
 
 def show(t: Type): String = t match {
@@ -41,7 +52,7 @@ def show(t: Type): String = t match {
     case Type::Custom(name) => name
 }
 
-def isComptime(stmt: Statement): Bool / {ParserContextRequest, ParserError} = stmt match {
+def isComptime(stmt: Statement): Bool / {ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = stmt match {
     case ExpressionStatement(expr, _) => isComptime(expr)
     case VariableDefinition(signature, initializer, _) => if (initializer is Some(expr)) { isComptime(expr) } else { true }
     case Conditional(condition, body, scope, fallback, _) => isComptime(condition) && isComptime(body) && (if (fallback is Some(else_block)) { isComptime(else_block) } else { true })
@@ -52,7 +63,7 @@ def isComptime(stmt: Statement): Bool / {ParserContextRequest, ParserError} = st
     case Assignment(lhs, rhs, _) => isComptime(lhs) && isComptime(rhs)
 }
 
-def isComptime(op: BinaryOp): Bool / {ParserContextRequest, ParserError} = op match {
+def isComptime(op: BinaryOp): Bool / {ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = op match {
     case Addition(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
     case Subtraction(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
     case Division(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
@@ -67,14 +78,17 @@ def isComptime(op: BinaryOp): Bool / {ParserContextRequest, ParserError} = op ma
     case Or(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
 }
 
-def isComptime(op: UnaryOp): Bool / {ParserContextRequest, ParserError} = op match {
+def isComptime(op: UnaryOp): Bool / {ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = op match {
     case Negation(rhs) => isComptime(rhs)
     case Not(rhs) => isComptime(rhs)
 }
 
-def isComptime(expr: Expression): Bool / {ParserContextRequest, ParserError} = expr match {
+def isComptime(expr: Expression): Bool / {ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = expr match {
     case TypeName(_) => true
-    case Identifier(name) => (do hasVar(name) || do hasFunction(name) || do hasLayout(name))
+    case Identifier(name) =>
+        if (do hasVar(name)) { (do getVar(name)).comptime }
+        else if (do hasVar(name)) { (do getFunction(name)).comptime }
+        else do ParserError("Couldn't find any variable or function with name '"++name++"' in this context.", (do previous()).position)
     case Binary(binOp) => isComptime(binOp)
     case Unary(unOp) => isComptime(unOp)
     case Grouping(expr) => isComptime(expr)
@@ -83,16 +97,6 @@ def isComptime(expr: Expression): Bool / {ParserContextRequest, ParserError} = e
     case Scoping(lhs, member) => true
     case Call(fn, args) => isComptime(fn) && args.all { arg => isComptime(arg) }
     case Block(inside, scope) => inside.all { st => isComptime(st) }
-}
-
-interface TokenRequest {
-    def matchNext(tokensToMatch: List[TokenType]): Bool // match the tokens starting from the current one
-    def check(token: TokenType): Bool // check the current token
-    def checkOrCrash(token: TokenType): Bool / ParserError
-    def advance(): Token / ParserError
-    def peek(): Token
-    def previous(): Token
-    def is_eof(): Bool
 }
 
 def emptyParserContext(): ParserContext = ParserContext(None(), 0, map::empty[String, FunctionSignature](box strOrder), map::empty[String, VariableSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
@@ -112,16 +116,16 @@ def parser_report[T] { prog: () => T / {ParserError, InternalError} }: T / {Inte
         val spaces: String = " ".repeat(pos.col+7)
         val helpLine: String = getHelpLine()
 
-        println("[PARSER ERROR] "++do getWorkingFile()++" at "++show(pos))
-        println("        "++errLine)
+        println("[PARSER ERROR] "++do getWorkingFile()++" at "++show(pos)++" "++msg)
+        // println("        "++msg)
+        println("\n        "++errLine)
         println(spaces++"^")
         println(spaces++helpLine)
-        println("        "++msg)
         exit(1)
     }}
 }
 
-def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRequest }: T / {TokenRequest, CompilerContextRequest} = {
+def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRequest }: T / {TokenRequest, CompilerContextRequest, ParserError} = {
     var context = _context
     try { prog() }
     with ParserContextRequest {
@@ -221,6 +225,17 @@ def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRe
 def tokenHandler[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {ParserError, CompilerContextRequest} = {
     var tokens = _tokens
     var previousToken: Token = Token(EOF(), "", Position(0, 0, 0))
+
+    def next() = {
+        if (tokens.isEmpty)
+            do ParserError("Unexpected EOF.", previousToken.position)
+        with on[MissingValue].default{ <> };
+
+        previousToken = tokens.head
+        tokens = tokens.tail
+        previousToken
+    }
+
     try { prog() }
     with TokenRequest {
         def matchNext(tokensToMatch) = resume(compare(tokensToMatch, tokens.take(tokensToMatch.size).map{t => t.tokenType}){ (l, r) => infixEq(l, r) })
@@ -237,15 +252,15 @@ def tokenHandler[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {
                 def raise(_, _) = do ParserError("Expected `"++token.show++"', got  EOF.", previousToken.position)
             }
         }
-        def advance() = resume {
-            if (tokens.isEmpty)
-                do ParserError("Unexpected EOF.", previousToken.position)
-            with on[MissingValue].default{ <> };
-
-            previousToken = tokens.head
-            tokens = tokens.tail
-            previousToken
+        def checkReturnOrCrash(token) = resume {
+            try {
+                if (token.infixEq(tokens.head.tokenType)) { next() }
+                else do ParserError("Expected '"++token.show++"', got '"++tokens.head.tokenType.show++"'.", tokens.head.position)
+            } with Exception[MissingValue] {
+                def raise(_, _) = do ParserError("Expected '"++token.show++"', got an unexpected EOF.", previousToken.position)
+            }
         }
+        def advance() = resume { next() }
         def peek() = resume(try { tokens.head }
                             with Exception[MissingValue] {
                                 def raise(_, _) = previousToken
@@ -256,6 +271,7 @@ def tokenHandler[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {
 }
 
 // This will prepass all used files and register their Tokens and names to the CompilerContext
+// also will register all symbols from all modules including module names to the CompilerContext
 def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
     if (not(do check(Keyword(Preprocessor(Module()))))) {
         val token = do peek()
@@ -270,13 +286,45 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContex
     do registerLexerOutput([])
     println("Prepassing Module: "++do getWorkingModule())
 
-    val variableSignatures = map::empty[String, VariableSignature](box strOrder)
-    val functionSignatures = map::empty[String, FunctionSignature](box strOrder)
-    val layoutSignatures = map::empty[String, LayoutSignature](box strOrder)
+    var variableSignatures = map::empty[String, VariableSignature](box strOrder)
+    var functionSignatures = map::empty[String, FunctionSignature](box strOrder)
+    var layoutSignatures = map::empty[String, LayoutSignature](box strOrder)
 
     while (not(do is_eof()))
     {
         val token = do advance()
+
+        def handleVariable(public: Bool, mutable: Bool): Unit = {
+            val identifier: Token = do checkReturnOrCrash(IdentifierT())
+            val colon: Token = do checkReturnOrCrash(Symbol(Colon()))
+            val typename: Token = (do advance()).tokenType match {
+                case TypeNameT(_) => do previous()
+                case _ => do ParserError("Expected typename.", (do previous()).position)
+            }
+
+            if (variableSignatures.contains(identifier.text))
+                do ParserError("Multiple definition of variable '"++identifier.text++"'.", identifier.position)
+
+            variableSignatures = variableSignatures.put(identifier.text, VariableSignature(identifier.text, public, mutable, false, true, do getGlobalStackIndex(), typename.tokenType.toType()))
+        }
+        def handleLet(public: Bool): Unit = (do peek()).tokenType match {
+            case Keyword(Mut()) => {
+                do advance()
+                handleVariable(public, true)
+            }
+            case IdentifierT() => handleVariable(public, false)
+            case _ => do ParserError("Epected keyword 'mut' or identifier after 'let'.", (do previous()).position)
+        }
+        def handleLayout(public: Bool, wrapper: Bool): Unit = {
+            unimplemented(__FILE__, __LINE__)
+        }
+        def handleWrapper(public: Bool): Unit = {
+            unimplemented(__FILE__, __LINE__)
+        }
+        def handleFunction(public: Bool): Unit = {
+            unimplemented(__FILE__, __LINE__)
+        }
+
         token.tokenType match {
             case Keyword(Preprocessor(Module())) => do ParserError("A source file can only include one module directive.", token.position)
             case Keyword(Preprocessor(Include())) => {
@@ -307,15 +355,17 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContex
                     do setWorkingModule(currentModule)
                 } else { do advance(); () }
             }
-            case Keyword(Pub()) => {
-                //  fn, wrapper, layout, 
+            case Keyword(Pub()) => do advance().tokenType match {
+                case Keyword(Let()) => handleLet(true)
+                case Keyword(Wrapper()) => handleWrapper(true)
+                case Keyword(Layout()) => handleLayout(true, false)
+                case Keyword(Fn()) => handleFunction(true)
+                case _ => do ParserError("Unexpected token in top-level definition. Expected one of 'let, wrapper, layout, fn'.", (do previous()).position)
             }
-            case Keyword(Fn()) => {}
-            case Keyword(Let()) => {}
-            case Keyword(Wrapper()) => {
-                do checkOrCrash(Keyword(Layout()))
-                ()
-            }
+            case Keyword(Fn()) => handleFunction(false)
+            case Keyword(Let()) => handleLet(false)
+            case Keyword(Wrapper()) => handleWrapper(false)
+            case Keyword(Layout()) => handleLayout(false, false)
             case _ => {}
         }
     }
