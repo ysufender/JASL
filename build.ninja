@@ -1,7 +1,8 @@
-builddir = build
 ninja_required_version = 1.11
 
 libdir = lib
+builddir = build
+etcdir = etc
 effektdir = $libdir/effekt
 sourcedir = src
 
@@ -11,17 +12,32 @@ pool cpool
 pool linkpool
     depth = 4
 
+pool ppool
+    depth = 4
+
+rule prp
+    pool = ppool
+    deps = gcc
+    depfile = $out.d
+    command = ./$builddir/preprocessor $in 0 > ${out}
+
 rule efc
     pool = cpool
     deps = gcc
     depfile = $out.d
-    command = effekt -c --backend llvm $in -o $out_dir --includes $sourcedir
+    command = effekt -c --backend llvm $in -o $builddir --includes $builddir
 
 rule cc
     pool = cpool
     deps = gcc
     depfile = $out.d
-    command = gcc $in -c -o $out
+    command = gcc -O2 $in -c -o $out
+
+rule ccc
+    pool = cpool
+    deps = gcc
+    depfile = $out.d
+    command = gcc -O2 $in -o $out
 
 rule link
     pool = linkpool
@@ -41,6 +57,8 @@ rule las
     depfile = $out.d
     command = llvm-as $in -o $out -opaque-pointers
 
+build $builddir/preprocessor: ccc $etcdir/preprocessor.c
+
 build $builddir/bytearray.o: cc $effektdir/bytearray.c
 build $builddir/main.o: cc $effektdir/main.c
 build $builddir/io.o: cc $effektdir/io.c
@@ -49,8 +67,13 @@ build $builddir/panic.o: cc $effektdir/panic.c
 #build $builddir/rts.bs: las $effektdir/rts.ll
 #build $builddir/rts.o: lc $builddir/rts.bs
 
-build $builddir/main.ll: efc $sourcedir/main.effekt | $sourcedir/lexer/lexer.effekt $sourcedir/parser/parser.effekt $sourcedir/common/common.effekt $sourcedir/native/native.effekt
-    out_dir = $builddir
+build $builddir/lexer/lexer.effekt: prp $sourcedir/lexer/lexer.effekt | $builddir/preprocessor
+build $builddir/parser/parser.effekt: prp $sourcedir/parser/parser.effekt | $builddir/preprocessor
+build $builddir/context/context.effekt: prp $sourcedir/context/context.effekt | $builddir/preprocessor
+build $builddir/native/native.effekt: prp $sourcedir/native/native.effekt | $builddir/preprocessor
+build $builddir/main.effekt: prp $sourcedir/main.effekt | $builddir/preprocessor
+
+build $builddir/main.ll: efc $builddir/main.effekt | $builddir/lexer/lexer.effekt $builddir/parser/parser.effekt $builddir/context/context.effekt $builddir/native/native.effekt
 
 build $builddir/jasl.bs: las $builddir/main.ll
 build $builddir/jasl.o: lc $builddir/jasl.bs

@@ -1,83 +1,8 @@
 module lexer
 
-import io/filesystem
-import io/error
 import process
 
-import common/common
-
-type PreprocessorKeywordType {
-    Module()
-    Include()
-}
-
-type KeywordType {
-    Preprocessor(pWord: PreprocessorKeywordType)
-    Wrapper()
-    Layout()
-    Fn()
-    Pub()
-    Return()
-    Let()
-    Void()
-    While()
-    Extern()
-    If()
-    Else()
-    Mut()
-}
-
-type SymbolType {
-    LParen()
-    RParen()
-    LBrace()
-    RBrace()
-    Comma()
-    Colon()
-    Semicolon()
-    Dot()
-    DoubleColon()
-    Arrow()
-    Assign()
-    Asterix()
-    Less()
-    Great()
-    LessEq()
-    GreatEq()
-    Equal()
-    NotEq()
-    Not()
-    Minus()
-    Plus()
-    Divide()
-    And()
-    Or()
-}
-
-type DataType {
-    Bool(value: Option[Bool]) // for 'true' and 'false' keywords.
-    String()
-    UInt()
-    Int()
-    Float()
-    UByte()
-    Byte()
-    Pointer(ptrType: DataType)
-    Void()
-    Custom(name: String)
-}
-
-type TokenType {
-    Literal(valueType: DataType)
-    Identifier()
-    Keyword(keywordType: KeywordType)
-    Symbol(symbolType: SymbolType)
-    TypeName(typeType: DataType)
-    EOF()
-}
-
-record Position(line: Int, col: Int, index: Int)
-record Token(tokenType: TokenType, text: String, position: Position)
+import context/context
 
 def show(t: PreprocessorKeywordType): String = t match {
     case Module() => "Module"
@@ -108,46 +33,46 @@ def show(t: SymbolType): String = t match {
     case Comma() => "Comma"
     case Colon() => "Colon"
     case Semicolon() => "Semicolon"
-    case Dot() => "Dot"
+    case DotSym() => "DotSym"
     case DoubleColon() => "DoubleColon"
     case Arrow() => "Arrow"
     case Assign() => "Assign"
     case Asterix() => "Asterix"
-    case Less() => "Less"
-    case Great() => "Great"
+    case LessSym() => "Less"
+    case GreatSym() => "GreatSym"
     case LessEq() => "LessEq"
     case GreatEq() => "GreatEq"
-    case Equal() => "Equal"
+    case Equals() => "Equals"
     case NotEq() => "NotEq"
-    case Not() => "Not"
+    case NotSym() => "NotSym"
     case Minus() => "Minus"
     case Plus() => "Plus"
     case Divide() => "Divide"
-    case And() => "And"
-    case Or() => "Or"
+    case AndSym() => "AndSym"
+    case OrSym() => "OrSym"
 }
 
 def show(t: DataType): String = t match {
-    case Bool(Some(true)) => "True Bool"
-    case Bool(Some(false)) => "False Bool"
-    case Bool(None()) => "Bool"
-    case String() => "String"
-    case UInt() => "UInt"
-    case Int() => "Int"
-    case Float() => "Float"
-    case UByte() => "UByte"
-    case Byte() => "Byte"
-    case Pointer(ptrType) => show(ptrType)++" Pointer"
-    case DataType::Void() => "Void"
-    case Custom(name) => "Custom Type "++name
+    case BoolT(Some(true)) => "True Bool"
+    case BoolT(Some(false)) => "False Bool"
+    case BoolT(None()) => "Bool"
+    case StringT() => "String"
+    case UIntT() => "UIntT"
+    case IntT() => "Int"
+    case FloatT() => "Float"
+    case UByteT() => "UByteT"
+    case ByteT() => "ByteT"
+    case PointerT(ptrType) => show(ptrType)++" PointerT"
+    case VoidT() => "Void"
+    case CustomT(name) => "CustomT Type "++name
 }
 
 def show(t: TokenType): String = t match {
-    case Literal(valueType) => show(valueType)++" Literal"
-    case Identifier() => "Identifier"
+    case LiteralT(valueType) => show(valueType)++" LiteralT"
+    case IdentifierT() => "IdentifierT"
     case Keyword(keywordType) => "Keyword "++show(keywordType)
     case Symbol(symbolType) => show(symbolType)++" Symbol"
-    case TypeName(typeType) => "TypeName "++show(typeType)
+    case TypeNameT(typeType) => "TypeNameT "++show(typeType)
     case EOF() => "EOF"
 }
 
@@ -193,49 +118,49 @@ def infixEq(l: SymbolType, r: SymbolType): Bool = {
         case (Comma(), Comma()) => true
         case (Colon(), Colon()) => true
         case (Semicolon(), Semicolon()) => true
-        case (Dot(), Dot()) => true
+        case (DotSym(), DotSym()) => true
         case (DoubleColon(), DoubleColon()) => true
         case (Arrow(), Arrow()) => true
         case (Assign(), Assign()) => true
         case (Asterix(), Asterix()) => true
-        case (Less(), Less()) => true
-        case (Great(), Great()) => true
+        case (LessSym(), LessSym()) => true
+        case (GreatSym(), GreatSym()) => true
         case (LessEq(), LessEq()) => true
         case (GreatEq(), GreatEq()) => true
-        case (Equal(), Equal()) => true
+        case (Equals(), Equals()) => true
         case (NotEq(), NotEq()) => true
-        case (Not(), Not()) => true
+        case (NotSym(), NotSym()) => true
         case (Minus(), Minus()) => true
         case (Plus(), Plus()) => true
         case (Divide(), Divide()) => true
-        case (And(), And()) => true
-        case (Or(), Or()) => true
+        case (AndSym(), AndSym()) => true
+        case (OrSym(), OrSym()) => true
         case _ => false
     }
 }
 
 def infixEq(l: DataType, r: DataType): Bool = {
     (l, r) match {
-        case (String(), String()) => true
-        case (UInt(), UInt()) => true
-        case (Int(), Int()) => true
-        case (Float(), Float()) => true
-        case (UByte(), UByte()) => true
-        case (Byte(), Byte()) => true
-        case (Pointer(p1), Pointer(p2)) => infixEq(p1, p2)
-        case (DataType::Void(), DataType::Void()) => true
-        case (Custom(n1), Custom(n2)) => n1 == n2
+        case (StringT(), StringT()) => true
+        case (UIntT(), UIntT()) => true
+        case (IntT(), IntT()) => true
+        case (FloatT(), FloatT()) => true
+        case (UByteT(), UByteT()) => true
+        case (ByteT(), ByteT()) => true
+        case (PointerT(p1), PointerT(p2)) => infixEq(p1, p2)
+        case (VoidT(), VoidT()) => true
+        case (CustomT(n1), CustomT(n2)) => n1 == n2
         case _ => false
     }
 }
 
 def infixEq(l: TokenType, r: TokenType): Bool = {
     (l, r) match {
-        case (Literal(v1), Literal(v2)) => infixEq(v1, v2) 
-        case (Identifier(), Identifier()) => true
+        case (LiteralT(v1), LiteralT(v2)) => infixEq(v1, v2) 
+        case (IdentifierT(), IdentifierT()) => true
         case (Keyword(k1), Keyword(k2)) => infixEq(k1, k2)
         case (Symbol(s1), Symbol(s2)) => infixEq(s1, s2)
-        case (TypeName(t1), TypeName(t2)) => infixEq(t1, t2)
+        case (TypeNameT(t1), TypeNameT(t2)) => infixEq(t1, t2)
         case (EOF(), EOF()) => true
         case _ => false
     }
@@ -243,7 +168,7 @@ def infixEq(l: TokenType, r: TokenType): Bool = {
 
 def infixEq(l: Position, r: Position): Bool = (l.line == r.line) && (l.col == r.col)
 
-def infixEq(l: Token, r: Token): Bool = (l.tokenType == r.tokenType) && (l.position == r.position)
+def infixEq(l: Token, r: Token): Bool = (l.tokenType == r.tokenType) // && (l.position == r.position)
 
 def infixNeq(l: TokenType, r: TokenType): Bool = not(infixEq(l, r))
 
@@ -259,24 +184,24 @@ interface Lexer {
     def position(): Position
 }
 
-effect LexerError(msg: String, file: String, pos: Position): Nothing
+effect LexerError(msg: String, pos: Position): Nothing / CompilerContextRequest
 
-def lexer_report[T](source: String) { prog: () => T / LexerError }: T = {
+def lexer_report[T]() { prog: () => T / {LexerError, InternalError} }: T / {CompilerContextRequest, InternalError} = {
     try { prog() }
-    with LexerError { (msg, file, pos) => {
-        var errLine: String = "<unknown>"
-        try {
-            val line = pos.line - 1
-            val lines = source.split("\n")
-            errLine = lines.get(line)
-        } with Exception[OutOfBounds] {
-            def raise(_, _) = {}
-        }
+    with LexerError { (msg, pos) => resume {
+        val source: String = openRead(do getWorkingFile())
+        val errLine: String = try {
+                                val line = pos.line - 1
+                                val lines = source.split("\n")
+                                lines.get(line)
+                            } with Exception[OutOfBounds] {
+                                def raise(_, _) = "<unknown>"
+                            }
 
         val spaces: String = " ".repeat(pos.col+7)
         val helpLine: String = getHelpLine()
     
-        println("[LEXER ERROR] "++file++" at "++show(pos))
+        println("[LEXER ERROR] "++do getWorkingFile()++" at "++show(pos))
         println("        "++errLine)
         println(spaces++"^")
         println(spaces++helpLine)
@@ -285,65 +210,6 @@ def lexer_report[T](source: String) { prog: () => T / LexerError }: T = {
         <>
     }}
 }
-
-/* REGEX IS NOT SUPPORTED IN LLVM
-type TokenRegex {
-    Direct(tokenType: TokenType, rx: Regex)
-    Structured(rx: Regex, child: List[TokenRegex])
-}
-
-val tokenRegexes: List[TokenRegex] = [
-    Structured("\\b(wrapper|layout|fn|pub|return|let|nullptr|module|include)\\b".regex, [
-        Structured("\\b(module|include)\\b".regex, [
-            Direct(Keyword(Preprocessor(Module())),  "\\bmodule\\b".regex),
-            Direct(Keyword(Preprocessor(Include())), "\\binclude\\b".regex)
-        ]),
-        Direct(Keyword(Wrapper()),  "\\bwrapper\\b".regex),
-        Direct(Keyword(Layout()),   "\\blayout\\b".regex),
-        Direct(Keyword(Fn()),       "\\bfn\\b".regex),
-        Direct(Keyword(Pub()),      "\\bpub\\b".regex),
-        Direct(Keyword(Return()),   "\\breturn\\b".regex),
-        Direct(Keyword(Let()),      "\\blet\\b".regex),
-        Direct(Keyword(Void()),  "\\bvoid\\b".regex)
-    ]),
-
-    Structured("(::|->|\\(|\\)|\\{|\\}|,|:|;|\\.|=|%|\\*)".regex, [
-        Direct(Symbol(LParen()),    "\\(".regex),
-        Direct(Symbol(RParen()),    "\\)".regex),
-        Direct(Symbol(LBrace()),    "\\{".regex),
-        Direct(Symbol(RBrace()),    "\\}".regex),
-        Direct(Symbol(Comma()),     ",".regex),
-        Direct(Symbol(Colon()),     ":".regex),
-        Direct(Symbol(Semicolon()), ";".regex),
-        Direct(Symbol(Dot()),       "\\.".regex),
-        Direct(Symbol(DoubleColon()), "::".regex),
-        Direct(Symbol(Arrow()),     "->".regex),
-        Direct(Symbol(Assign()),    "=".regex),
-        Direct(Symbol(Asterix()),   "\\*".regex)
-    ]),
-
-    Structured("\\b(u32|i32|float|u8|i8|void|[A-Z][A-Za-z0-9_]*)(\\s*\\*+)?\\b".regex, [
-        Direct(TypeName(UInt()),   "u32(\\s*\\*+)?".regex),
-        Direct(TypeName(Int()),    "i32(\\s*\\*+)?".regex),
-        Direct(TypeName(Float()),  "float(\\s*\\*+)?".regex),
-        Direct(TypeName(UByte()),  "u8(\\s*\\*+)?".regex),
-        Direct(TypeName(Byte()),   "i8(\\s*\\*+)?".regex),
-        Direct(TypeName(Void()),   "void(\\s*\\*+)?".regex),
-        Direct(TypeName(Custom("placeholder")), "[A-Z][A-Za-z0-9_]*(\\s*\\*+)?".regex)
-    ]),
-
-    Direct(Identifier(), "[a-z_][A-Za-z0-9_]*".regex),
-
-    Structured("([0-9][0-9_]*(?:\\.[0-9_]+)?u?)|(\"([^\"\\\\]|\\\\.)*\")|('(?:\\\\.|[^'\\\\])'u?)".regex, [
-        Direct(Literal(UInt()),   "^[0-9][0-9_]*u$".regex),
-        Direct(Literal(Int()),    "^[0-9][0-9_]*$".regex),
-        Direct(Literal(Float()),  "^[0-9][0-9_]*\\.[0-9_]+u?$".regex),
-        Direct(Literal(String()), "^\"([^\"\\\\]|\\\\.)*\"$".regex),
-        Direct(Literal(Byte()),   "^'(\\\\.|[^'\\\\])'$".regex),
-        Direct(Literal(UByte()),  "^'(\\\\.|[^'\\\\])'u$".regex)
-    ]),
-]
-*/
 
 val symbols: List[Char] = [
     '(',')','{','}',',','.',':',';','*','-','>','=','<','!','-','+','/','&','|'
@@ -374,7 +240,7 @@ def countWhiteSpace[T]{ prog: () => T / skip_whitespace } = {
     }
 }
 
-def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHandler} = {
+def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHandler, CompilerContextRequest, InternalError} = {
     var line: Int = 1;
     var col: Int = 1;
     var index: Int = 0;
@@ -428,16 +294,16 @@ def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerErro
                 case ','  => do add_token(Token(Symbol(Comma()), c.show, pos(1)))
                 case ':'  => do add_token(Token(Symbol(Colon()), c.show, pos(1)))
                 case ';'  => do add_token(Token(Symbol(Semicolon()), c.show, pos(1)))
-                case '.'  => do add_token(Token(Symbol(Dot()), c.show, pos(1)))
+                case '.'  => do add_token(Token(Symbol(DotSym()), c.show, pos(1)))
                 case '='  => do add_token(Token(Symbol(Assign()), c.show, pos(1)))
                 case '*'  => do add_token(Token(Symbol(Asterix()), c.show, pos(1)))
-                case '<'  => do add_token(Token(Symbol(Less()), c.show, pos(1)))
-                case '>'  => do add_token(Token(Symbol(Great()), c.show, pos(1)))
-                case '!'  => do add_token(Token(Symbol(Not()), c.show, pos(1)))
+                case '<'  => do add_token(Token(Symbol(LessSym()), c.show, pos(1)))
+                case '>'  => do add_token(Token(Symbol(GreatSym()), c.show, pos(1)))
+                case '!'  => do add_token(Token(Symbol(NotSym()), c.show, pos(1)))
                 case '-'  => do add_token(Token(Symbol(Minus()), c.show, pos(1)))
                 case '+'  => do add_token(Token(Symbol(Plus()), c.show, pos(1)))
                 case '/'  => do add_token(Token(Symbol(Divide()), c.show, pos(1)))
-                case _ => do LexerError("Unexpected character '"++c.show++"'.", file, pos(1))
+                case _ => do LexerError("Unexpected character '"++c.show++"'.", pos(1))
             }
             val curPos: Position = Position(line, col, index)
             if (is_eof()) { handleSingle(first) }
@@ -446,10 +312,10 @@ def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerErro
                 case ('-', '>') => do add_token(Token(Symbol(Arrow()), "->", pos(2)))
                 case ('<', '=') => do add_token(Token(Symbol(LessEq()), "<=", pos(2)))
                 case ('>', '=') => do add_token(Token(Symbol(GreatEq()), ">=", pos(2)))
-                case ('=', '=') => do add_token(Token(Symbol(Equal()), "==", pos(2)))
+                case ('=', '=') => do add_token(Token(Symbol(Equals()), "==", pos(2)))
                 case ('!', '=') => do add_token(Token(Symbol(NotEq()), "!=", pos(2)))
-                case ('&', '&') => do add_token(Token(Symbol(And()), "&&", pos(2)))
-                case ('|', '|') => do add_token(Token(Symbol(Or()), "||", pos(2)))
+                case ('&', '&') => do add_token(Token(Symbol(AndSym()), "&&", pos(2)))
+                case ('|', '|') => do add_token(Token(Symbol(OrSym()), "||", pos(2)))
                 case _ => {
                     line = curPos.line
                     col = curPos.col
@@ -467,12 +333,12 @@ def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerErro
                     val _ = countWhiteSpace { advance }
                 }
                 if (is_eof()) {
-                    do LexerError("Unterminated String", file, pos(index - startIndex))
+                    do LexerError("Unterminated String", pos(index - startIndex))
                 }
 
                 countWhiteSpace { advance }
                 val literal: String = in.substring(startIndex, index - 1)
-                do add_token(Token(Literal(String()), literal, pos(literal.length)))
+                do add_token(Token(LiteralT(StringT()), literal, pos(literal.length)))
             }
             case _ => {
                 val startIndex: Int = index - 1
@@ -480,10 +346,10 @@ def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerErro
 
                 while (not(is_eof()) && ((countWhiteSpace{ peek }).isDigit() || countWhiteSpace{peek} == '.')) {
                     if (countWhiteSpace{peek} == '.') {
-                        if (isFloat) do LexerError("Multiple '.' in number literal", file, pos(1))
+                        if (isFloat) do LexerError("Multiple '.' in number literal", pos(1))
                         val p = pos(0)
                         if (not(locally{countWhiteSpace{advance}; countWhiteSpace{peek}}.isDigit()))
-                            do LexerError("Ending floating point literals with a '.' is not allowed.", file, p)
+                            do LexerError("Ending floating point literals with a '.' is not allowed.", p)
                         line = p.line
                         col = p.col
                         index = p.index
@@ -500,21 +366,21 @@ def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerErro
                 }
 
                 suffix match {
-                    case "u32" => do add_token(Token(Literal(UInt()), numberText, pos(numberText.length)))
-                    case "i32" => do add_token(Token(Literal(Int()), numberText, pos(numberText.length)))
-                    case "u8"  => do add_token(Token(Literal(UByte()),  numberText, pos(numberText.length)))
-                    case "i8"  => do add_token(Token(Literal(Byte()),  numberText, pos(numberText.length)))
+                    case "u32" => do add_token(Token(LiteralT(UIntT()), numberText, pos(numberText.length)))
+                    case "i32" => do add_token(Token(LiteralT(IntT()), numberText, pos(numberText.length)))
+                    case "u8"  => do add_token(Token(LiteralT(UByteT()),  numberText, pos(numberText.length)))
+                    case "i8"  => do add_token(Token(LiteralT(ByteT()),  numberText, pos(numberText.length)))
                     case "" =>
                         if (isFloat)
-                            do add_token(Token(Literal(Float()), numberText, pos(numberText.length)))
+                            do add_token(Token(LiteralT(FloatT()), numberText, pos(numberText.length)))
                         else
-                            do add_token(Token(Literal(Int()), numberText, pos(numberText.length)))
-                    case _ => do LexerError("Unknown numeric suffix.", file, pos(suffix.length))
+                            do add_token(Token(LiteralT(IntT()), numberText, pos(numberText.length)))
+                    case _ => do LexerError("Unknown numeric suffix.", pos(suffix.length))
                 }
             }
         }
         
-        def handleIdentifier(first: Char): Token / TokenListHandler = {
+        def handleIdentifier(first: Char): Token / {TokenListHandler, InternalError} = {
             val startIndex: Int = index - 1
 
             while (not(is_eof()) && (countWhiteSpace{peek}.isAlphanumeric() || countWhiteSpace{peek} == '_')) {
@@ -524,36 +390,36 @@ def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerErro
             var text: String = in.substring(startIndex, index)
 
             if (text == "_") {
-                do LexerError("Standalone '_' is not a valid identifier", file, pos(1))
+                do LexerError("Standalone '_' is not a valid identifier", pos(1))
             }
 
             if (text.charAt(0).isUpper() || builtinTypeNames.contains(text){ (l, r) => l == r }) {
                 var tt: DataType =
-                    if (text.charAt(0).isUpper()) { Custom(text) }
+                    if (text.charAt(0).isUpper()) { CustomT(text) }
                     else text match { 
-                        case "u32" => UInt()
-                        case "i32" => Int()
-                        case "u8" => UByte()
-                        case "i8" => Byte()
-                        case "float" => Float()
-                        case "ptr" => Pointer(Void())
-                        case "void" => Void()
-                        case "bool" => Bool(None())
-                        case _ => <>
+                        case "u32" => UIntT()
+                        case "i32" => IntT()
+                        case "u8" => UByteT()
+                        case "i8" => ByteT()
+                        case "float" => FloatT()
+                        case "ptr" => PointerT(VoidT())
+                        case "void" => VoidT()
+                        case "bool" => BoolT(None())
+                        case _ => do InternalError("This place should've been unreachable. Handle builtin type names corrently.", __FILE__, __LINE__)
                     }
 
                 if (is_eof()) {
-                    do add_token(Token(TypeName(tt), text, pos(text.length)))
+                    do add_token(Token(TypeNameT(tt), text, pos(text.length)))
                 } else if (countWhiteSpace{peek} == '*') {
                     while (not(is_eof()) && skipWhiteSpace{peek} == '*') {
                         text = text++"*"
                         skipWhiteSpace { advance }
-                        tt = Pointer(tt)
+                        tt = PointerT(tt)
                     }
 
-                    do add_token(Token(TypeName(tt), text, pos(text.length)))
+                    do add_token(Token(TypeNameT(tt), text, pos(text.length)))
                 } else {
-                    do add_token(Token(TypeName(tt), text, pos(text.length)))
+                    do add_token(Token(TypeNameT(tt), text, pos(text.length)))
                 }
             } else text match {
                 case "module" => do add_token(Token(Keyword(Preprocessor(Module())), text, pos(text.length)))
@@ -564,16 +430,16 @@ def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerErro
                 case "pub" => do add_token(Token(Keyword(Pub()), text, pos(text.length)))
                 case "return" => do add_token(Token(Keyword(Return()), text, pos(text.length)))
                 case "let" => do add_token(Token(Keyword(Let()), text, pos(text.length)))
-                case "nullptr" => do add_token(Token(Literal(Pointer(Void())), text, pos(text.length)))
-                case "true" => do add_token(Token(Literal(Bool(Some(true))), text, pos(text.length)))
-                case "false" => do add_token(Token(Literal(Bool(Some(false))), text, pos(text.length)))
+                case "nullptr" => do add_token(Token(LiteralT(PointerT(VoidT())), text, pos(text.length)))
+                case "true" => do add_token(Token(LiteralT(BoolT(Some(true))), text, pos(text.length)))
+                case "false" => do add_token(Token(LiteralT(BoolT(Some(false))), text, pos(text.length)))
                 case "if" => do add_token(Token(Keyword(If()), text, pos(text.length)))
                 case "else" => do add_token(Token(Keyword(Else()), text, pos(text.length)))
                 case "while" => do add_token(Token(Keyword(While()), text, pos(text.length)))
                 case "extern" => do add_token(Token(Keyword(Extern()), text, pos(text.length)))
                 case "mut" => do add_token(Token(Keyword(Mut()), text, pos(text.length)))
                 case _ =>
-                    do add_token(Token(Identifier(), text, pos(text.length)))
+                    do add_token(Token(IdentifierT(), text, pos(text.length)))
             }
         }
         
@@ -597,10 +463,10 @@ def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerErro
             } else if (ch == '#') {
                 val curPos: Position = Position(line, col - 1, index)
                 while (not(is_eof()) && countWhiteSpace{advance} != '#') { }
-                if (is_eof()) { do LexerError("Unterminated comment block.", file, curPos) }
+                if (is_eof()) { do LexerError("Unterminated comment block.", curPos) }
                 scanToken()
             } else {
-                do LexerError("Unexpected character '"++ch.toString()++"'", file, pos(1))
+                do LexerError("Unexpected character '"++ch.toString()++"'", pos(1))
                 <>
             }
         }
@@ -626,7 +492,7 @@ def lexer[T](file: String, in: String) { prog: => T / {Lexer} } : T / {LexerErro
             def position() = resume(pos(0))
         }
     } with Exception[OutOfBounds] {
-        def raise(_, msg: String) = do LexerError(msg, file, pos(0))
+        def raise(_, msg: String) = do LexerError(msg, pos(0))
     }
 }
 
@@ -656,22 +522,14 @@ def handleTokenList() { prog: () => Unit / TokenListHandler }: List[Token] = {
     }
 }
 
-def lex(file: String): List[Token] = {
-    val source: String = try {
-        readFile(file)
-    } with Exception[IOError] {
-        def raise(_, _) = {
-            println("[ERROR] Couldn't open file at path "++file)
-            exit(1)
-            <>
-        }
-    }
+def lex(): List[Token] / {CompilerContextRequest, InternalError} = {
+    with lexer_report;
 
-    lexer_report(source) {
-        handleTokenList {
-            lexer(file, source) {
-                while ((do next()).tokenType != EOF()) {  }
-            }
+    val source: String = openRead(do getWorkingFile())
+
+    handleTokenList {
+        lexer(source) {
+            while ((do next()).tokenType != EOF()) {  }
         }
     }
 }

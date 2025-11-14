@@ -1,0 +1,331 @@
+module context
+
+import process
+import map
+import io/filesystem
+import io/error
+import io
+
+import native/native
+
+val helpLines: List[String] = [
+    "Here",
+    "No need to thank me",
+    "Right here buddy",
+    "It's here lad",
+    "I spotted it, just for you",
+    "I FOUND HIM BOSS",
+    "You seriously missed this?",
+    "Come on, it's here",
+    "You should be a bit more careful with your code",
+    "Hm. Here",
+    "|____ <- There",
+    "I'm running out of ideas for error indicator messages",
+    "You can't hate yourself, not yet"
+]
+
+def getHelpLine(): String = try { 
+        val rand: Int = random_range(0, helpLines.size() - 1)
+        helpLines.get(rand)
+    } with Exception[OutOfBounds] {
+        def raise(_, _) = "<unknown>"
+    }
+
+effect InternalError(msg: String, file: String, line: String): Nothing
+
+def internalErrorHandler[T]{ prog: () => T / InternalError }: T = {
+    try { prog() }
+    with InternalError { (msg, file, line) => {
+        println("[INTERNAL ERROR "++file++":"++line++"] The program ran into an unexpected internal error. Please report this issue to the author.")
+        println("        Internal Message: "++msg)
+        exit(1)
+    }}
+}
+
+def unpackOrCrash[T](optional: Option[T]): T / InternalError = optional match {
+    case Some(value) => value
+    case None() => do InternalError("Expected a defined option.", __FILE__, __LINE__)
+}
+
+def compare[T](lhs: List[T], rhs: List[T]) { eq: (T, T) => Bool }: Bool = {
+    if (lhs is Cons(head1, rest1) and rhs is Cons(head2, rest2)) {
+        if (head1.eq(head2)) compare(rest1, rest2) { eq }
+        else false
+    }
+    else if (lhs.isEmpty && rhs.isEmpty) { true }
+    else false
+}
+
+type Type {
+    Bool()
+    UInt()
+    Int()
+    Float()
+    UByte()
+    Byte()
+    Pointer(ptrType: Type)
+    Void()
+    Custom(name: String)
+}
+
+record FunctionSignature(
+    name: String,
+    visibility: Bool,
+    comptime: Bool,
+    params: List[VariableSignature],
+    returns: List[Type]
+)
+
+record LayoutSignature(
+    name: String,
+    visibility: Bool,
+    wrapper: Bool,
+    fields: List[VariableSignature]
+)
+
+record VariableSignature(
+    name: String,
+    visibility: Bool,
+    mutability: Bool,
+    comptime: Bool,
+    stackIndex: Int,
+    varType: Type
+)
+
+type PreprocessorKeywordType {
+    Module()
+    Include()
+}
+
+type KeywordType {
+    Preprocessor(pWord: PreprocessorKeywordType)
+    Wrapper()
+    Layout()
+    Fn()
+    Pub()
+    Return()
+    Let()
+    Void()
+    While()
+    Extern()
+    If()
+    Else()
+    Mut()
+}
+
+type SymbolType {
+    LParen()
+    RParen()
+    LBrace()
+    RBrace()
+    Comma()
+    Colon()
+    Semicolon()
+    DotSym()
+    DoubleColon()
+    Arrow()
+    Assign()
+    Asterix()
+    LessSym()
+    GreatSym()
+    LessEq()
+    GreatEq()
+    Equals()
+    NotEq()
+    NotSym()
+    Minus()
+    Plus()
+    Divide()
+    AndSym()
+    OrSym()
+}
+
+type DataType {
+    BoolT(value: Option[Bool]) // for 'true' and 'false' keywords.
+    StringT()
+    UIntT()
+    IntT()
+    FloatT()
+    UByteT()
+    ByteT()
+    PointerT(ptrType: DataType)
+    VoidT()
+    CustomT(name: String)
+}
+
+type TokenType {
+    LiteralT(valueType: DataType)
+    IdentifierT()
+    Keyword(keywordType: KeywordType)
+    Symbol(symbolType: SymbolType)
+    TypeNameT(typeType: DataType)
+    EOF()
+}
+
+record Position(line: Int, col: Int, index: Int)
+record Token(tokenType: TokenType, text: String, position: Position)
+
+record ParserContext(
+    parent: Option[ParserContext],
+    stackIndex: Int,
+    functions: Map[String, FunctionSignature],
+    variables: Map[String, VariableSignature],
+    layouts: Map[String, LayoutSignature]
+)
+
+type Literal {
+    Bool(value: Bool)
+    String(value: String)
+    UInt(value: Int)
+    Int(value: Int)
+    Float(value: Double)
+    UByte(value: Int)
+    Byte(value: Int)
+    Nullptr()
+}
+
+type BinaryOp {
+    Addition(lhs: Expression, rhs: Expression)
+    Subtraction(lhs: Expression, rhs: Expression)
+    Division(lhs: Expression, rhs: Expression)
+    Multiplication(lhs: Expression, rhs: Expression)
+    Equality(lhs: Expression, rhs: Expression)
+    Inequality(lhs: Expression, rhs: Expression)
+    Great(lhs: Expression, rhs: Expression)
+    Lesser(lhs: Expression, rhs: Expression)
+    GreaterEqual(lhs: Expression, rhs: Expression)
+    LesserEqual(lhs: Expression, rhs: Expression)
+    And(lhs: Expression, rhs: Expression)
+    Or(lhs: Expression, rhs: Expression)
+}
+
+type UnaryOp {
+    Negation(rhs: Expression)
+    Not(rhs: Expression)
+}
+
+type Expression {
+    TypeName(name: Type)
+    Identifier(name: String)
+    Binary(binOp: BinaryOp)
+    Unary(unOp: UnaryOp)
+    Grouping(inside: Expression)
+    Literal(value: Literal)
+    Dot(lhs: Expression, member: String)
+    Scoping(lhs: QualifiedName, member: String)
+    Call(fn: Expression, args: List[Expression])
+    Block(inside: List[Statement], scope: ParserContext)
+}
+
+type Statement {
+    ExpressionStatement(expr: Expression, pos: Position)
+    VariableDefinition(signature: VariableSignature, initializer: Option[Expression], pos: Position)
+    Conditional(condition: Expression, body: Statement, scope: ParserContext, fallback: Option[Statement], pos: Position)
+    WhileStmt(condition: Expression, body: Statement, scope: ParserContext, pos: Position)
+    FnDeclaration(signature: FunctionSignature, body: List[Statement], scope: ParserContext, pos: Position)
+    LayoutDeclaration(signature: LayoutSignature, pos: Position)
+    ReturnStmt(returns: List[Expression], pos: Position)
+    Assignment(lhs: Expression, rhs: Expression, pos: Position)
+}
+
+record LexerContext(name: String, tokens: List[Token])
+record AST(moduleName: String, body: List[Statement])
+
+record QualifiedName(mod: Option[String], typename: Type, member: String)
+record ModuleInfo(name: String, variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layout: Map[String, LayoutSignature])
+
+effect StopCompiler(): Nothing
+
+interface CompilerContextRequest {
+    def setWorkingFile(file: String): Unit // sets the current working file to return fi file name request comes.
+    def getWorkingFile(): String // file name request
+    def setWorkingModule(mod: String): Unit // set working module name to mangle function names.
+    def getWorkingModule(): String // module name request.
+    def checkDependency(file: String): Bool // import "file", if it's already processed returns true, if not returns false
+    def updateModule(variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layout: Map[String, LayoutSignature]): Unit / InternalError
+    def registerLexerOutput(output: List[Token]): Unit
+    //def getLexerOutput(file: String): List[Token]
+    def emitLexerOutput(): Unit / emit[(String, LexerContext)]
+    def registerAST(ast: AST): Unit
+    def emitAST(): AST / StopCompiler
+}
+
+def strEquals(l: String, r: String): Bool =
+    l == r
+
+def strOrder(l: String, r: String): Ordering = if (strEquals(l, r)) { Equal() } else { Less() }
+
+def emptyModule(name: String): ModuleInfo = ModuleInfo(name, map::empty[String, VariableSignature](box strOrder), map::empty[String, FunctionSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
+
+def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, InternalError} }: T / {InternalError, StopCompiler} = {
+    var currentFile: String = ""
+    var currentModule: String = "main"
+    var processedFiles: Map[String, LexerContext] = map::empty(box strOrder)
+    var modules: Map[String, ModuleInfo] = map::empty(box strOrder)
+    var asts: List[AST] = []
+
+    try { prog() }
+    with CompilerContextRequest {
+        def setWorkingFile(file) = {
+            currentFile = file
+            if (not(processedFiles.contains(file)))
+                processedFiles = processedFiles.put(file, LexerContext(currentModule, []))
+            resume(())
+        }
+        def getWorkingFile() = resume(currentFile)
+        def setWorkingModule(mod) = {
+            currentModule = mod
+            if (not(modules.contains(mod)))
+                modules = modules.put(mod, emptyModule(mod))
+            resume(())
+        }
+        def getWorkingModule() = resume(currentModule)
+        def checkDependency(file) = resume(processedFiles.contains(file))
+        def updateModule(variables, functions, layout) = resume {
+            if (modules.contains(currentModule)) {
+                modules = modules.put(currentModule, ModuleInfo(currentModule, variables, functions, layout))
+            } else {
+                do InternalError("Call 'context::setWorkingModule' before calling 'context::updateModule'", __FILE__, __LINE__)
+            }
+        }
+        def registerLexerOutput(output) = {
+            processedFiles = processedFiles.put(currentFile, LexerContext(currentModule, output)) // overrides the value at name
+            resume(())
+        }
+        /*def getLexerOutput(file) = resume(processedFiles.get(file) match {
+            case Some(lexed) => lexed
+            case None() => do InternalError("Unreachable code, use 'context::registerLexerOutput' before calling 'context::getLexerOutput'", __FILE__, __LINE__)
+        })*/
+        def emitLexerOutput() = resume {
+            processedFiles.each()
+        }
+        def registerAST(ast) = {
+            asts = Cons(ast, asts)
+            resume(())
+        }
+        def emitAST() = resume {
+            asts match {
+                case Cons(ast, rest) => {
+                    asts = rest
+                    ast
+                }
+                case Nil() => do StopCompiler()
+            }
+        }
+    }
+}
+
+def openRead(file: String): String / {CompilerContextRequest, InternalError} = {
+    try { with filesystem; readFile(file) }
+    with Exception[IOError] {
+        def raise(_, _) = do InternalError("Couldn't open file at path '"++file++"'.", __FILE__, __LINE__)
+    }
+}
+
+def feed[T] { stream: () => Unit / emit[T] } { prog: (T) => Unit / CompilerContextRequest }: Unit / CompilerContextRequest = {
+    try { stream() }
+    with emit[T] { v => {
+        prog(v)
+        resume(())
+    }}
+}

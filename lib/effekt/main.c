@@ -8,7 +8,6 @@
 #define DEBUG_REFCOUNT (false)
 
 #include "bytearray.h"
-#include "../jasm/jasm.h"
 
 extern void effektMain();
 

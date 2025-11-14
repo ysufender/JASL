@@ -10,7 +10,7 @@
 
 import process
 import args
-import common/common
+import context/context
 import lexer/lexer
 import parser/parser
 import native/native
@@ -18,11 +18,7 @@ import native/native
 def printHelp(): Unit =
     println("Usage:\n\tjasl [flags] <file>\n\n\tFlags:\n\t\t-h : Prints this help message.")
 
-def strEquals(l: String, r: String): Bool =
-    l == r
-
 def main() = {
-    with internalErrorHandler;
     // 1- Parse command line
     // 2- Lex input file(s)
     // 3- Parse lexed file(s)
@@ -36,14 +32,29 @@ def main() = {
     if (argc <= 1 || args.contains("-h"){strEquals}) {
         printHelp()
     } else {
-        with on[OutOfBounds].panic;
-        val file: String = llvm::argument(1)
+        with internalErrorHandler;
+        try {
+            with compilerContextHandler;
+            with on[OutOfBounds].panic;
 
-        val tokenized: List[Token] = lexer::lex(file)
-        val AST: AST = parser::parse(tokenized, file)
-        // val ast: AST = parser::parse(tokenized)
-        // val asmfile: String = generator::generate_il(AST)
-        // AssembleIL(asmfile)
+            do setWorkingFile(llvm::argument(1))
+
+            val tokenized: List[Token] = lexer::lex()
+            parser::prepass(tokenized)
+
+            feed[(String, LexerContext)]{ () => do emitLexerOutput() } { case (filename, context) => {
+                println("Parse called for "++filename++" module "++context.name)
+                do setWorkingFile(filename)
+                do setWorkingModule(context.name)
+                do registerAST(parser::parse(context.tokens))
+            }}
+
+            // val ast: AST = parser::parse(tokenized)
+            // val asmfile: String = generator::generate_il(AST)
+            // AssembleIL(asmfile)
+        } with StopCompiler {
+            println("Compiler exited without any errors.")
+        }
     }
 }
 
