@@ -1,10 +1,10 @@
 module context
 
 import process
-import map
 import io/filesystem
 import io/error
 import io
+import map
 
 import native/native
 
@@ -223,8 +223,8 @@ type Statement {
     VariableDefinition(signature: VariableSignature, initializer: Option[Expression], pos: Position)
     Conditional(condition: Expression, body: Statement, scope: ParserContext, fallback: Option[Statement], pos: Position)
     WhileStmt(condition: Expression, body: Statement, scope: ParserContext, pos: Position)
-    FnDeclaration(signature: FunctionSignature, body: List[Statement], scope: ParserContext, pos: Position)
-    LayoutDeclaration(signature: LayoutSignature, pos: Position)
+    FnDefinition(signature: FunctionSignature, body: List[Statement], scope: ParserContext, pos: Position)
+    // LayoutDeclaration(signature: LayoutSignature, pos: Position)
     ReturnStmt(returns: List[Expression], pos: Position)
     Assignment(lhs: Expression, rhs: Expression, pos: Position)
 }
@@ -233,7 +233,7 @@ record LexerContext(name: String, tokens: List[Token])
 record AST(moduleName: String, body: List[Statement])
 
 record QualifiedName(mod: Option[String], typename: Type, member: String)
-record ModuleInfo(name: String, variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layout: Map[String, LayoutSignature])
+record ModuleInfo(name: String, variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layouts: Map[String, LayoutSignature])
 
 effect StopCompiler(): Nothing
 
@@ -248,6 +248,9 @@ interface CompilerContextRequest {
     def getGlobalStackIndex(): Int
     def registerLexerOutput(output: List[Token]): Unit
     def emitLexerOutput(): Unit / emit[(String, LexerContext)]
+    def getLayoutSignature(mod: String, name: String): Option[LayoutSignature]
+    def getVariableSignature(mod: String, name: String): Option[VariableSignature]
+    def getFunctionSignature(mod: String, name: String): Option[FunctionSignature]
 __DEBUG_START__
     def emitModules(): Unit / emit[ModuleInfo]
 __DEBUG_END__
@@ -277,6 +280,11 @@ def strEquals(l: String, r: String): Bool =
     l == r
 
 def strOrder(l: String, r: String): Ordering = if (strEquals(l, r)) { Equal() } else { Less() }
+
+def unpack[T](option: Option[T]): T / InternalError = option match {
+    case Some(t) => t
+    case None() => do InternalError("Unpack on empty option.", __FILE__, __LINE__)
+}
 
 def emptyModule(name: String): ModuleInfo = ModuleInfo(name, map::empty[String, VariableSignature](box strOrder), map::empty[String, FunctionSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
 
@@ -324,6 +332,24 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
         def emitLexerOutput() = resume {
             processedFiles.each()
         }
+        def getLayoutSignature(mod, name) = resume(
+            modules.get(mod) match {
+                case Some(moduleinfo) => moduleinfo.layouts.get(name)
+                case None() => None()
+            }
+        )
+        def getVariableSignature(mod, name) = resume(
+            modules.get(mod) match {
+                case Some(moduleinfo) => moduleinfo.variables.get(name)
+                case None() => None()
+            }
+        )
+        def getFunctionSignature(mod, name) = resume(
+            modules.get(mod) match {
+                case Some(moduleinfo) => moduleinfo.functions.get(name)
+                case None() => None()
+            }
+        )
 __DEBUG_START__
         def emitModules() = resume {
             modules.eachValue()
@@ -360,6 +386,10 @@ def feed[T] { stream: () => Unit / emit[T] } { prog: (T) => Unit / {CompilerCont
     }}
 }
 
-def unimplemented(file: String, line: String): Unit / InternalError = {
+def unimplemented(file: String, line: String): Nothing / InternalError = {
     do InternalError("This segment of the project is still unimplemented. Please stay tuned.", file, line)
+}
+
+def unreachable(file: String, line: String): Nothing / InternalError = {
+    do InternalError("This segment of the project is meant to be unreachable. Please contact the author to inform of this error.", file, line)
 }

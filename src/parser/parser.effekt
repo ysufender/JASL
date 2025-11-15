@@ -25,10 +25,12 @@ interface ParserContextRequest {
     def addVar(name: String, sign: VariableSignature): Unit / ParserError
     def addFunction(name: String, sign: FunctionSignature): Unit / ParserError
     def addLayout(name: String, sign: LayoutSignature): Unit / ParserError
+    def isTopLevel(): Bool
 }
 
 interface TokenRequest {
     def matchNext(tokensToMatch: List[TokenType]): Bool // match the tokens starting from the current one
+    def matchAny(tokensToMatch: List[TokenType]): Bool // match the next token to either of given ones
     def check(token: TokenType): Bool // check the current token
     def checkOrCrash(token: TokenType): Bool / ParserError
     def checkReturnOrCrash(token: TokenType): Token / ParserError
@@ -39,6 +41,29 @@ interface TokenRequest {
 }
 
 effect ParserError(msg: String, pos: Position): Nothing / CompilerContextRequest
+
+def typeSize(l: LayoutSignature): Int / {ParserError, CompilerContextRequest, TokenRequest} = l.fields.map{ v => v.varType.typeSize() }.sum()
+
+def typeSize(t: Type): Int / {ParserError, CompilerContextRequest, TokenRequest} = t match {
+    case Type::Bool() => 1
+    case Type::UInt() => 4
+    case Type::Int() => 4
+    case Type::Float() => 4
+    case Type::UByte() => 1
+    case Type::Byte() => 1
+    case Type::Pointer(_) => 4
+    case Type::Void() => 0
+    case Type::Custom(mod, name) => mod match {
+        case Some(modulename) => (do getLayoutSignature(modulename, name)) match {
+            case Some(signature) => signature.typeSize()
+            case None() => do ParserError("Couldn't find type '"++name++"' in given module '"++modulename++"'.", (do previous()).position)
+        }
+        case None() => (do getLayoutSignature(do getWorkingModule(), name)) match {
+            case Some(signature) => signature.typeSize()
+            case None() => do ParserError("Couldn't find type '"++name++"' in the current module.", (do previous()).position)
+        }
+    }
+}
 
 def show(t: Type): String = t match {
     case Type::Bool() => "bool"
@@ -53,20 +78,20 @@ def show(t: Type): String = t match {
     case Type::Custom(None(), name) => name
 }
 
-def typeString(t: Type): String / InternalError = t.show()
-def typeString(dt: DataType): String / InternalError = dt.toType().typeString()
+def typeString(t: Type): String = t.show()
+def typeString(dt: DataType): String = dt.toType().typeString()
 
 __DEBUG_START__
-def show(v: VariableSignature): String / InternalError = {
-    var str: String = "["++v.stackIndex.show()++"] "
+def show(v: VariableSignature): String / {TokenRequest, ParserError, CompilerContextRequest} = {
+    var str: String = "["++v.varType.typeSize().show()++"]["++v.stackIndex.show()++"] "
     if (v.comptime) str = "comptime "
     if (v.public) str = str++"pub "
     str = str++"let "
-    if (v.mutable) str = str++"mut"
-    str++": "++v.varType.typeString()
+    if (v.mutable) str = str++"mut "
+    str++v.name++": "++v.varType.typeString().show()
 }
 
-def show(f: FunctionSignature): String / InternalError = {
+def show(f: FunctionSignature): String / {TokenRequest, ParserError, CompilerContextRequest} = {
     var str: String = ""
     if (f.comptime) str = "comptime "
     if (f.public) str = str++"pub "
@@ -87,8 +112,8 @@ def show(f: FunctionSignature): String / InternalError = {
     str++")"
 }
 
-def show(l: LayoutSignature): String / InternalError = {
-    var str: String = ""
+def show(l: LayoutSignature): String / {TokenRequest, ParserError, CompilerContextRequest} = {
+    var str: String = "["++l.typeSize().show()++"]"
     if (l.public) str = "pub "
     if (l.wrapper) str = str++"wrapper "
     str = str++l.name++" { "
@@ -106,8 +131,8 @@ def isComptime(stmt: Statement): Bool / {ParserContextRequest, ParserError, Toke
     case VariableDefinition(signature, initializer, _) => if (initializer is Some(expr)) { isComptime(expr) } else { true }
     case Conditional(condition, body, scope, fallback, _) => isComptime(condition) && isComptime(body) && (if (fallback is Some(else_block)) { isComptime(else_block) } else { true })
     case WhileStmt(condition, body, scope, _) => false // No.
-    case FnDeclaration(signature, body, scope, _) => signature.comptime
-    case LayoutDeclaration(signature, _) => true // Come on.
+    case FnDefinition(signature, body, scope, _) => signature.comptime
+    // case LayoutDeclaration(signature, _) => true // Come on.
     case ReturnStmt(returns, _) => returns.all { r => isComptime(r) }
     case Assignment(lhs, rhs, _) => isComptime(lhs) && isComptime(rhs)
 }
@@ -176,6 +201,7 @@ def parser_report[T] { prog: () => T / {ParserError, InternalError} }: T / {Inte
 
 def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRequest }: T / {TokenRequest, CompilerContextRequest, ParserError} = {
     var context = _context
+
     try { prog() }
     with ParserContextRequest {
         def getVar(name) = resume {
@@ -268,6 +294,7 @@ def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRe
                 context = ParserContext(context.parent, context.stackIndex, context.functions, context.variables, context.layouts.put(name, sign))
             }
         }
+        def isTopLevel() = resume(context.parent.isEmpty)
     }
 }
 
@@ -288,6 +315,11 @@ def tokenHandler[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {
     try { prog() }
     with TokenRequest {
         def matchNext(tokensToMatch) = resume(compare(tokensToMatch, tokens.take(tokensToMatch.size).map{t => t.tokenType}){ (l, r) => infixEq(l, r) })
+        def matchAny(tokensToMatch) = try {
+            resume(tokensToMatch.any { t => t == tokens.head.tokenType })
+        } with Exception[MissingValue] {
+            def raise(_, _) = resume(false)
+        }
         def check(token) = resume(try { token.infixEq(tokens.head.tokenType) }
                             with Exception[MissingValue] {
                                 def raise(_, _) = false
@@ -319,6 +351,27 @@ def tokenHandler[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {
     }
 }
 
+def handleTypeName(): Type / {TokenRequest, ParserError, CompilerContextRequest, InternalError} = (do advance()).tokenType match {
+    case IdentifierT() => {
+        val mod = (do previous()).text
+        do checkReturnOrCrash(Symbol(DoubleColon()))
+        (do advance()).tokenType match {
+            case TypeNameT(_) => Custom(Some(mod), (do previous()).text)
+            case _ => do ParserError("Expected typename.", (do previous()).position)
+        }
+    }
+    case TypeNameT(_) => (do previous()).tokenType.toType()
+    case _ => do ParserError("Expected typename.", (do previous()).position)
+}
+
+def handleTypeNameNoCrash(): Option[Type] / {TokenRequest, CompilerContextRequest, InternalError} = {
+    try { Some(handleTypeName()) }
+    with ParserError { (_, _) => {
+        None()
+    }}
+}
+
+ 
 // This will prepass all used files and register their Tokens and names to the CompilerContext
 // also will register all symbols from all modules including module names to the CompilerContext
 def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
@@ -333,41 +386,33 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContex
     }
     do setWorkingModule((do advance()).text)
     do registerLexerOutput([])
+
+__DEBUG_START__
     println("Prepassing Module: "++do getWorkingModule())
+__DEBUG_END__
 
     var variableSignatures = map::empty[String, VariableSignature](box strOrder)
     var functionSignatures = map::empty[String, FunctionSignature](box strOrder)
     var layoutSignatures = map::empty[String, LayoutSignature](box strOrder)
 
-    def handleVariable(public: Bool, mutable: Bool): (String, VariableSignature) = {
+    def handleVariable(public: Bool, mutable: Bool, index: Int): (String, VariableSignature) = {
         val identifier: Token = do checkReturnOrCrash(IdentifierT())
         val colon: Token = do checkReturnOrCrash(Symbol(Colon()))
-        val typename: Type = (do advance()).tokenType match {
-            case IdentifierT() => {
-                val mod = (do previous()).text
-                do checkReturnOrCrash(Symbol(DoubleColon()))
-                (do advance()).tokenType match {
-                    case TypeNameT(_) => Custom(Some(mod), (do previous()).text)
-                    case _ => do ParserError("Expected typename.", (do previous()).position)
-                }
-            }
-            case TypeNameT(_) => (do previous()).tokenType.toType()
-            case _ => do ParserError("Expected typename.", (do previous()).position)
-        }
+        val typename: Type = handleTypeName()
 
         if (variableSignatures.contains(identifier.text))
             do ParserError("Multiple definition of variable '"++identifier.text++"'.", identifier.position)
 
-        (identifier.text, VariableSignature(identifier.text, public, mutable, false, true, do getGlobalStackIndex(), typename))
+        (identifier.text, VariableSignature(identifier.text, public, mutable, false, true, index, typename))
     }
     def handleLet(public: Bool): Unit = (do peek()).tokenType match {
         case Keyword(Mut()) => {
             do advance()
-            val (name, signature) = handleVariable(public, true)
+            val (name, signature) = handleVariable(public, true, do getGlobalStackIndex())
             variableSignatures = variableSignatures.put(name, signature)
         }
         case IdentifierT() => {
-            val (name, signature) = handleVariable(public, false)
+            val (name, signature) = handleVariable(public, false, do getGlobalStackIndex())
             variableSignatures = variableSignatures.put(name, signature)
         }
         case _ => do ParserError("Epected keyword 'mut' or identifier after 'let'.", (do previous()).position)
@@ -384,8 +429,10 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContex
         val pos: Position = (do previous()).position
         
         do checkReturnOrCrash(Symbol(LBrace()))
+        var innerIndex: Int = 0
         var layout: List[VariableSignature] = []
         while ((do peek()).tokenType != Symbol(RBrace())) {
+            var pos: Position = Position(0, 0, 0)
             val (_, signature) = (do peek()).tokenType match {
                 case Keyword(Pub()) => {
                     if (wrapper)
@@ -394,20 +441,30 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContex
                     (do peek()).tokenType match {
                         case Keyword(Mut()) => {
                             do advance()
-                            handleVariable(true, true)
+                            pos = (do peek()).position
+                            handleVariable(true, true, innerIndex)
                         }
-                        case _ => handleVariable(true, false)
+                        case _ => {
+                            pos = (do peek()).position
+                            handleVariable(true, false, innerIndex)
+                        }
                     }
                 }
                 case Keyword(Mut()) => {
                     do advance()
-                    handleVariable(false, true)
+                    pos = (do peek()).position
+                    handleVariable(false, true, innerIndex)
                 }
-                case _ => handleVariable(false, false)
+                case _ => {
+                    pos = (do peek()).position
+                    handleVariable(false, false, innerIndex)
+                }
             }
-
+            if (layout.any { s => s.name == signature.name })
+                do ParserError("Multiple definitions of field '"++signature.name++"' in layout '"++name++"'.", pos)
             do checkReturnOrCrash(Symbol(Semicolon()))
             layout = Cons(signature, layout)
+            innerIndex = innerIndex + signature.varType.typeSize()
         }
 
         if (layout.isEmpty)
@@ -423,27 +480,37 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContex
     }
     def handleFunction(public: Bool): Unit = {
         var name: String = ""
-        (do advance()).tokenType match {
-            case TypeNameT(typename) => {
-                do checkReturnOrCrash(Symbol(DoubleColon()))
-                val ident: String = (do checkReturnOrCrash(IdentifierT())).text
-                name = typename.typeString()++"::"++ident
-            }
-            case IdentifierT() => name = (do previous()).text
-            case _ => do ParserError("Expected type name or identifier, got '"++(do previous()).text++"' instead.", (do previous()).position)
+        val typename: Option[Type] = handleTypeNameNoCrash()
+        if (typename is Some(_))
+            val _ = do checkReturnOrCrash(Symbol(DoubleColon()))
+        typename match {
+            case Some(_) => { val _ = do advance() }
+            case None() => ()
         }
+
+        name = (do previous()).text
+        /* if (typename is Some(t))
+            name = t.typeString()++"::"++(do previous()).text
+        */ // preventing name collisions
 
         if (functionSignatures.contains(name))
             do ParserError("Multiple definition of function '"++name++"'.", (do previous()).position)
 
         do checkReturnOrCrash(Symbol(LParen()))
 
-        var arguments: List[VariableSignature] = []
+        var stackIndexArgs: Int = 0 
+        var arguments: List[VariableSignature] = typename match {
+            case Some(t) => {
+                stackIndexArgs = 4
+                [ VariableSignature("this", false, false, false, false, 0, t) ]
+            }
+            case None() => []
+        }
         var bodyOn: Bool = true
         while (bodyOn) {
             if ((do peek()).tokenType != Symbol(RParen()))
             {
-                val (_, signature) = handleVariable(false, true)
+                val (_, signature) = handleVariable(false, true, stackIndexArgs)
                 arguments = Cons(signature, arguments)
 
                 (do advance()).tokenType match {
@@ -506,6 +573,10 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContex
         while (not(do is_eof()) && ident > 0) (do advance()).tokenType match {
             case Symbol(RBrace()) => ident = ident - 1
             case Symbol(LBrace()) => ident = ident + 1
+            case Keyword(Layout()) => do ParserError("Layout definitions in non top-level contexts are not permitted.", (do previous()).position)
+            case Keyword(Wrapper()) => do ParserError("Wrapper definitions in non top-level contexts are not permitted.", (do previous()).position)
+            case Keyword(Pub()) => do ParserError("Public identifiers in non top-level contexts are not permitted.", (do previous()).position)
+            case Keyword(Fn()) => do ParserError("Function definitions in non top-level contexts are not permitted.", (do previous()).position)
             case _ => ()
         }
         if (do is_eof())
@@ -583,16 +654,65 @@ __DEBUG_END__
     do registerLexerOutput(tokens)
 }
 
-def parseExpression(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
+def parseEquality(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
     AST(do getWorkingModule(), [])
+}
+
+def parseExpressionStatement(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
+    unimplemented(__FILE__, __LINE__)
+}
+
+def parseVariableDefinition(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
+    unimplemented(__FILE__, __LINE__)
+}
+
+def parseConditional(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
+    unimplemented(__FILE__, __LINE__)
+}
+
+def parseWhileStatement(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
+    unimplemented(__FILE__, __LINE__)
+}
+
+def parseFnDefinition(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
+    unimplemented(__FILE__, __LINE__)
+}
+
+def parseFnDefinition(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
+    unimplemented(__FILE__, __LINE__)
+}
+
+def parseReturnStmt(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
+    unimplemented(__FILE__, __LINE__)
+}
+
+def parseAssignment(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
+    unimplemented(__FILE__, __LINE__)
 }
 
 def parse(tokens: List[Token]): AST / {InternalError, CompilerContextRequest} = {
     with parser_report;
     with tokenHandler(tokens);
     with contextHandler(emptyParserContext());
+    with on[MissingValue].panic;
 
-    parseExpression()
+    // All top-level checks and checks for non top-level definitions are handled
+    // in prepass already as well as 'module' and 'include' directives.
+    while (not(do is_eof())) (do advance()).tokenType match {
+        case Keyword(Preprocessor(_)) => { val _ = do advance() }
+        case Keyword(Wrapper()) => while ((do advance()).tokenType != Symbol(RBrace())) { }
+        case Keyword(Layout()) => while ((do advance()).tokenType != Symbol(RBrace())) { }
+        case Keyword(Pub()) =>
+            if (not(do isTopLevel())) {
+                do ParserError("Public identifiers in non top-level contexts are not enabled.", (do previous()).position)
+            } else {
+                unimplemented(__FILE__, __LINE__)
+            }
+        //case Keyword(Let()) => handleVariableDefinition()
+        case _ => do ParserError("Unexpected token '"++(do previous()).text++"', expected statement.", (do previous()).position)
+    }
+
+    AST("", [])
 }
 
 /*

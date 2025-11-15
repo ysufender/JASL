@@ -25,10 +25,13 @@ def printHelp(): Unit = {
 def main() = {
     // 1- Parse command line
     // 2- Lex input file(s)
-    // 3- Parse lexed file(s)
-    // 4- Generate JASM IL
-    // 5- Call AssembleIL(filePath)
+    // 3- Prepass file(s)
+    // 4- Parse lexed file(s)
+    // 5- Generate JASM IL
+    // 6- Call AssembleIL(filePath)
     // FIN
+    //
+    // Write build files to ./.build/
 
     val args: List[String] = llvm::commandLineArgs()
     val argc: Int = llvm::argCount()
@@ -48,7 +51,9 @@ def main() = {
 
 __DEBUG_START__
             feed[ModuleInfo] { () => do emitModules() } { case ModuleInfo(name, vars, fns, lays) => {
-                println("Module Info "++name)
+                with parser_report;
+                with tokenHandler(tokenized);
+                println("\nModule Info: "++name)
 
                 println("\tVariables:")
                 feed[VariableSignature] { vars.eachValue } { v => println("\t\t"++v.show()) }
