@@ -388,6 +388,8 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContex
         while ((do peek()).tokenType != Symbol(RBrace())) {
             val (_, signature) = (do peek()).tokenType match {
                 case Keyword(Pub()) => {
+                    if (wrapper)
+                        do ParserError("Public fields in wrapper layouts are not allowed.", (do peek()).position)
                     do advance()
                     (do peek()).tokenType match {
                         case Keyword(Mut()) => {
@@ -403,6 +405,7 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, CompilerContex
                 }
                 case _ => handleVariable(false, false)
             }
+
             do checkReturnOrCrash(Symbol(Semicolon()))
             layout = Cons(signature, layout)
         }
