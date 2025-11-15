@@ -1,4 +1,5 @@
-#pragma once
+#ifndef __JASM__HEADER__FILE__INCLUDING__C__BINDS__
+#define __JASM__HEADER__FILE__INCLUDING__C__BINDS__
 
 // This file includes C API for JASM
 // The capabilities of C API might be lower
@@ -33,52 +34,50 @@ CLIParser::Flags SetUpCLI(char** args, int argc);
 #ifdef __cplusplus
 extern "C"
 {
-    namespace JASM
-    {
 #endif
-        typedef enum {
-            Static = 0,
-            Shared = 1,
-            Executable = 2
-        } LibTypes;
+    typedef enum {
+        Static = 0,
+        Shared = 1,
+        Executable = 2
+    } LibTypes;
 
-        typedef const char* Str;
-        typedef struct {
-            const Str* elements;
-            int size;
-        } StrVector;
+    typedef const char* Str;
+    typedef struct {
+        const Str* elements;
+        int size;
+    } StrVector;
 
-        typedef struct { void* ptr; } JASMAssemblyContext;
-        typedef struct { void* ptr; } JASMByteAssembler;
-        typedef struct { void* ptr; } JASMByteLinker;
-        typedef struct { void* ptr; } JASMAssemblyInfoCollection;
+    typedef struct { void* ptr; } JASMAssemblyContext;
+    typedef struct { void* ptr; } JASMByteAssembler;
+    typedef struct { void* ptr; } JASMByteLinker;
+    typedef struct { void* ptr; } JASMAssemblyInfoCollection;
 
-        // AssemblyContext
-        JASMAssemblyContext CreateAssemblyContext(
-            int silent,
-            int single, 
-            int pipelines,
-            const Str out, 
-            LibTypes libT, 
-            const Str workingDir,
-            StrVector in,
-            StrVector libs,
-            int storeSymbols,
-            int storeName
-        );
-        void DeleteAssemblyContext(JASMAssemblyContext context);
+    // AssemblyContext
+    JASMAssemblyContext CreateAssemblyContext(
+        int silent,
+        int single, 
+        int pipelines,
+        const Str out, 
+        LibTypes libT, 
+        const Str workingDir,
+        StrVector in,
+        StrVector libs,
+        int storeSymbols,
+        int storeName
+    );
+    void DeleteAssemblyContext(JASMAssemblyContext context);
 
-        // ByteAssembler
-        JASMByteAssembler CreateByteAssembler(JASMAssemblyContext context);
-        void DeleteByteAssembler(JASMByteAssembler assembler);
-        JASMAssemblyInfoCollection ByteAssemble(JASMByteAssembler assembler);
+    // ByteAssembler
+    JASMByteAssembler CreateByteAssembler(JASMAssemblyContext context);
+    void DeleteByteAssembler(JASMByteAssembler assembler);
+    JASMAssemblyInfoCollection ByteAssemble(JASMByteAssembler assembler);
 
-        // ByteLinker
-        JASMByteLinker CreateByteLinker();
-        void DeleteByteLinker(JASMByteLinker linker);
-        void ByteLink(JASMByteLinker linker, JASMAssemblyInfoCollection objects, JASMAssemblyContext context);
+    // ByteLinker
+    JASMByteLinker CreateByteLinker();
+    void DeleteByteLinker(JASMByteLinker linker);
+    void ByteLink(JASMByteLinker linker, JASMAssemblyInfoCollection objects, JASMAssemblyContext context);
 #ifdef __cplusplus
-    }
 }
+#endif
 #endif
 #endif

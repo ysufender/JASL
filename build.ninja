@@ -5,6 +5,7 @@ builddir = build
 etcdir = etc
 effektdir = $libdir/effekt
 sourcedir = src
+debug = true
 
 pool cpool
     depth = 4
@@ -19,7 +20,7 @@ rule prp
     pool = ppool
     deps = gcc
     depfile = $out.d
-    command = ./$builddir/preprocessor $in 0 > ${out}
+    command = ./$builddir/preprocessor $in $debug > ${out}
 
 rule efc
     pool = cpool
@@ -78,7 +79,7 @@ build $builddir/main.ll: efc $builddir/main.effekt | $builddir/lexer/lexer.effek
 build $builddir/jasl.bs: las $builddir/main.ll
 build $builddir/jasl.o: lc $builddir/jasl.bs
 
-build $builddir/jasm_wrapper.o: cc $libdir/jasm/jasm.c
+build $builddir/jasm_wrapper.o: cc $libdir/jasm/jasm.c | $libdir/jasm/jasm.h
 
 build $builddir/jasl: link $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o $builddir/jasl.o $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a
 

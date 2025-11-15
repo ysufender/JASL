@@ -65,14 +65,14 @@ type Type {
     Byte()
     Pointer(ptrType: Type)
     Void()
-    Custom(name: String)
+    Custom(mod: Option[String], name: String)
 }
 
 record FunctionSignature(
     name: String,
     public: Bool,
     comptime: Bool,
-    params: List[VariableSignature],
+    arguments: List[VariableSignature],
     returns: List[Type]
 )
 
@@ -86,7 +86,7 @@ record LayoutSignature(
 record VariableSignature(
     name: String,
     public: Bool,
-    mutability: Bool,
+    mutable: Bool,
     comptime: Bool,
     global: Bool,
     stackIndex: Int,
@@ -247,15 +247,17 @@ interface CompilerContextRequest {
     def increaseGlobalStackIndex(amount: Int): Unit
     def getGlobalStackIndex(): Int
     def registerLexerOutput(output: List[Token]): Unit
-    //def getLexerOutput(file: String): List[Token]
     def emitLexerOutput(): Unit / emit[(String, LexerContext)]
+__DEBUG_START__
+    def emitModules(): Unit / emit[ModuleInfo]
+__DEBUG_END__
     def registerAST(ast: AST): Unit
     def emitAST(): AST / StopCompiler
 }
 
 def toType(dt: DataType): Type = dt match {
     case BoolT(_) => Bool()
-    case StringT() => Custom("String")
+    case StringT() => Custom(None(), "String")
     case UIntT() => UInt()
     case IntT() => Int()
     case FloatT() => Float()
@@ -263,7 +265,7 @@ def toType(dt: DataType): Type = dt match {
     case ByteT() => Byte()
     case PointerT(ptrType) => Pointer(ptrType.toType())
     case VoidT() => Void()
-    case CustomT(name) => Custom(name)
+    case CustomT(name) => Custom(None(), name)
 }
 
 def toType(tt: TokenType): Type / InternalError = tt match {
@@ -319,13 +321,14 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
             processedFiles = processedFiles.put(currentFile, LexerContext(currentModule, output)) // overrides the value at name
             resume(())
         }
-        /*def getLexerOutput(file) = resume(processedFiles.get(file) match {
-            case Some(lexed) => lexed
-            case None() => do InternalError("Unreachable code, use 'context::registerLexerOutput' before calling 'context::getLexerOutput'", __FILE__, __LINE__)
-        })*/
         def emitLexerOutput() = resume {
             processedFiles.each()
         }
+__DEBUG_START__
+        def emitModules() = resume {
+            modules.eachValue()
+        } 
+__DEBUG_END__
         def registerAST(ast) = {
             asts = Cons(ast, asts)
             resume(())
@@ -349,7 +352,7 @@ def openRead(file: String): String / {CompilerContextRequest, InternalError} = {
     }
 }
 
-def feed[T] { stream: () => Unit / emit[T] } { prog: (T) => Unit / CompilerContextRequest }: Unit / CompilerContextRequest = {
+def feed[T] { stream: () => Unit / emit[T] } { prog: (T) => Unit / {CompilerContextRequest, InternalError} }: Unit / {CompilerContextRequest, InternalError} = {
     try { stream() }
     with emit[T] { v => {
         prog(v)

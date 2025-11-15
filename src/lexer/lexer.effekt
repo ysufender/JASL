@@ -57,22 +57,22 @@ def show(t: DataType): String = t match {
     case BoolT(Some(false)) => "False Bool"
     case BoolT(None()) => "Bool"
     case StringT() => "String"
-    case UIntT() => "UIntT"
+    case UIntT() => "UInt"
     case IntT() => "Int"
     case FloatT() => "Float"
-    case UByteT() => "UByteT"
-    case ByteT() => "ByteT"
-    case PointerT(ptrType) => show(ptrType)++" PointerT"
+    case UByteT() => "UByte"
+    case ByteT() => "Byte"
+    case PointerT(ptrType) => show(ptrType)++" Pointer"
     case VoidT() => "Void"
-    case CustomT(name) => "CustomT Type "++name
+    case CustomT(name) => "Custom Type "++name
 }
 
 def show(t: TokenType): String = t match {
-    case LiteralT(valueType) => show(valueType)++" LiteralT"
-    case IdentifierT() => "IdentifierT"
+    case LiteralT(valueType) => show(valueType)++" Literal"
+    case IdentifierT() => "Identifier"
     case Keyword(keywordType) => "Keyword "++show(keywordType)
     case Symbol(symbolType) => show(symbolType)++" Symbol"
-    case TypeNameT(typeType) => "TypeNameT "++show(typeType)
+    case TypeNameT(typeType) => "TypeName "++show(typeType)
     case EOF() => "EOF"
 }
 
@@ -201,7 +201,7 @@ def lexer_report[T]() { prog: () => T / {LexerError, InternalError} }: T / {Comp
         val spaces: String = " ".repeat(pos.col+7)
         val helpLine: String = getHelpLine()
     
-        println("[LEXER ERROR] "++do getWorkingFile()++" at "++show(pos)++" "++msg)
+        println("[LEXER ERROR] "++do getWorkingFile()++" at "++show(pos)++": "++msg)
         println("\n        "++errLine)
         println(spaces++"^")
         println(spaces++helpLine)
@@ -329,7 +329,7 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
             case '"' => {
                 val startIndex: Int = index
                 while (not(is_eof()) && countWhiteSpace { peek } != '"') {
-                    if (countWhiteSpace { peek } == '\n') { }
+                    //if (countWhiteSpace { peek } == '\n') { }
                     val _ = countWhiteSpace { advance }
                 }
                 if (is_eof()) {

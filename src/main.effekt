@@ -14,9 +14,13 @@ import context/context
 import lexer/lexer
 import parser/parser
 import native/native
+import map
 
-def printHelp(): Unit =
-    println("Usage:\n\tjasl [flags] <file>\n\n\tFlags:\n\t\t-h : Prints this help message.")
+def printHelp(): Unit = {
+    println("The JASL Compiler")
+    println("\tVersion: __VERSION__")
+    println("\nUsage:\n\tjasl [flags] <file>\n\n\tFlags:\n\t\t-h : Prints this help message.")
+}
 
 def main() = {
     // 1- Parse command line
@@ -42,13 +46,28 @@ def main() = {
             val tokenized: List[Token] = lexer::lex()
             parser::prepass(tokenized)
 
+__DEBUG_START__
+            feed[ModuleInfo] { () => do emitModules() } { case ModuleInfo(name, vars, fns, lays) => {
+                println("Module Info "++name)
+
+                println("\tVariables:")
+                feed[VariableSignature] { vars.eachValue } { v => println("\t\t"++v.show()) }
+
+                println("\tFunctions:")
+                feed[FunctionSignature] { fns.eachValue } { v => println("\t\t"++v.show()) }
+
+                println("\tLayouts:")
+                feed[LayoutSignature] { lays.eachValue } { v => println("\t\t"++v.show()) }
+            }} 
+__DEBUG_END__
+
             feed[(String, LexerContext)]{ () => do emitLexerOutput() } { case (filename, context) => {
                 do setWorkingFile(filename)
                 do setWorkingModule(context.name)
+__DEBUG_START__
                 println("\nParse called for "++do getWorkingFile()++" module "++do getWorkingModule())
+__DEBUG_END__
                 do registerAST(parser::parse(context.tokens))
-                println("Contents of "++do getWorkingFile()++" module "++do getWorkingModule())
-                context.tokens.foreach { t => println(t.show) }
             }}
 
             // val ast: AST = parser::parse(tokenized)
