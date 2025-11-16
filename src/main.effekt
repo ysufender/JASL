@@ -53,6 +53,7 @@ __DEBUG_START__
             feed[ModuleInfo] { () => do emitModules() } { case ModuleInfo(name, vars, fns, lays) => {
                 with parser_report;
                 with tokenHandler(tokenized);
+                with contextHandler(emptyParserContext())
                 println("\nModule Info: "++name)
 
                 println("\tVariables:")

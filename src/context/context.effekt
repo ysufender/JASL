@@ -65,13 +65,14 @@ type Type {
     Byte()
     Pointer(ptrType: Type)
     Void()
-    Custom(mod: Option[String], name: String)
+    Custom(name: QualifiedName)
 }
 
 record FunctionSignature(
     name: String,
     public: Bool,
     comptime: Bool,
+    ofType: Option[Type],
     arguments: List[VariableSignature],
     returns: List[Type]
 )
@@ -168,7 +169,7 @@ record Token(tokenType: TokenType, text: String, position: Position)
 
 record ParserContext(
     parent: Option[ParserContext],
-    stackIndex: Int,
+    stackIndex: Int, // for in-function blocks to get the local variables easily.
     functions: Map[String, FunctionSignature],
     variables: Map[String, VariableSignature],
     layouts: Map[String, LayoutSignature]
@@ -206,8 +207,8 @@ type UnaryOp {
 }
 
 type Expression {
-    TypeName(name: Type)
-    Identifier(name: String)
+    TypeName(name: QualifiedName)
+    Identifier(name: QualifiedName)
     Binary(binOp: BinaryOp)
     Unary(unOp: UnaryOp)
     Grouping(inside: Expression)
@@ -232,7 +233,7 @@ type Statement {
 record LexerContext(name: String, tokens: List[Token])
 record AST(moduleName: String, body: List[Statement])
 
-record QualifiedName(mod: Option[String], typename: Type, member: String)
+record QualifiedName(mod: Option[String], name: String)
 record ModuleInfo(name: String, variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layouts: Map[String, LayoutSignature])
 
 effect StopCompiler(): Nothing
@@ -244,6 +245,7 @@ interface CompilerContextRequest {
     def getWorkingModule(): String // module name request.
     def checkDependency(file: String): Bool // import "file", if it's already processed returns true, if not returns false
     def updateModule(variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layout: Map[String, LayoutSignature]): Unit / InternalError
+    // def getWorkingModuleInfo(): ModuleInfo
     def increaseGlobalStackIndex(amount: Int): Unit
     def getGlobalStackIndex(): Int
     def registerLexerOutput(output: List[Token]): Unit
@@ -258,9 +260,42 @@ __DEBUG_END__
     def emitAST(): AST / StopCompiler
 }
 
+def openRead(file: String): String / {CompilerContextRequest, InternalError} = {
+    try { with filesystem; readFile(file) }
+    with Exception[IOError] {
+        def raise(_, _) = do InternalError("Couldn't open file at path '"++file++"'.", __FILE__, __LINE__)
+    }
+}
+
+def feed[T] { stream: () => Unit / emit[T] } { prog: (T) => Unit / {CompilerContextRequest, InternalError} }: Unit / {CompilerContextRequest, InternalError} = {
+    try { stream() }
+    with emit[T] { v => {
+        prog(v)
+        resume(())
+    }}
+}
+
+def unimplemented(file: String, line: String): Nothing / InternalError = {
+    do InternalError("This segment of the project is still unimplemented. Please stay tuned.", file, line)
+}
+
+def unreachable(file: String, line: String): Nothing / InternalError = {
+    do InternalError("This segment of the project is meant to be unreachable. Please contact the author to inform of this error.", file, line)
+}
+
+def combine[T](l1: List[T], l2: List[T]): List[T] = l1 match {
+    case Cons(head, rest) => combine[T](rest, Cons(head, l2))
+    case Nil() => l2
+}
+
+def show(n: QualifiedName): String = n.mod match {
+    case Some(modname) => modname++"::"++n.name
+    case None() => n.name
+}
+
 def toType(dt: DataType): Type = dt match {
     case BoolT(_) => Bool()
-    case StringT() => Custom(None(), "String")
+    case StringT() => Custom(QualifiedName(None(), "String"))
     case UIntT() => UInt()
     case IntT() => Int()
     case FloatT() => Float()
@@ -268,7 +303,7 @@ def toType(dt: DataType): Type = dt match {
     case ByteT() => Byte()
     case PointerT(ptrType) => Pointer(ptrType.toType())
     case VoidT() => Void()
-    case CustomT(name) => Custom(None(), name)
+    case CustomT(name) => Custom(QualifiedName(None(), name))
 }
 
 def toType(tt: TokenType): Type / InternalError = tt match {
@@ -281,9 +316,18 @@ def strEquals(l: String, r: String): Bool =
 
 def strOrder(l: String, r: String): Ordering = if (strEquals(l, r)) { Equal() } else { Less() }
 
-def unpack[T](option: Option[T]): T / InternalError = option match {
+// should be sure that option is defined
+def unpack[T](option: Option[T]): T = option match {
     case Some(t) => t
-    case None() => do InternalError("Unpack on empty option.", __FILE__, __LINE__)
+    case None() => <> /*do InternalError("Unpack on empty option.", __FILE__, __LINE__)*/
+}
+
+effect DuplicateKey[T](key: T): Nothing
+def combineMapNoDup[T, U](m1: Map[T, U], m2: Map[T, U]): Map[T, U] / DuplicateKey[T] = {
+    var dupKey: Option[T] = None()
+    if (m1.keys.any { k => { dupKey = Some(k); m2.contains(k) } })
+        do DuplicateKey(dupKey.unpack())
+    m1.union(m2)
 }
 
 def emptyModule(name: String): ModuleInfo = ModuleInfo(name, map::empty[String, VariableSignature](box strOrder), map::empty[String, FunctionSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
@@ -313,13 +357,33 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
         }
         def getWorkingModule() = resume(currentModule)
         def checkDependency(file) = resume(processedFiles.contains(file))
-        def updateModule(variables, functions, layout) = resume {
-            if (modules.contains(currentModule)) {
-                modules = modules.put(currentModule, ModuleInfo(currentModule, variables, functions, layout))
-            } else {
+        def updateModule(variables, functions, layouts) = resume {
+            if (modules.contains(currentModule)) try {
+                // overwrites
+                // modules = modules.put(currentModule, ModuleInfo(currentModule, variables, functions, layout))
+
+                // appends to the existing module
+                val oldInf = modules.get(currentModule).unpack()
+                val newInf = ModuleInfo(
+                    currentModule,
+                    oldInf.variables.combineMapNoDup(variables),
+                    oldInf.functions.combineMapNoDup(functions),
+                    oldInf.layouts.combineMapNoDup(layouts)
+                )
+                // TODO: Continue from here
+                // if a multiple definition occurs, crash.
+                modules = modules.put(currentModule, newInf)
+            } with DuplicateKey[String] { signature => {
+                println("[PARSER ERROR] "++currentFile++" at "++"???:"++" Multiple definition of '"++currentModule++"::"++signature++"' in module '"++currentModule++"'.\n")
+                exit(1)
+            }} else {
                 do InternalError("Call 'context::setWorkingModule' before calling 'context::updateModule'", __FILE__, __LINE__)
             }
         }
+        /*def getWorkingModuleInfo(): ModuleInfo = resume(
+            try { modules.get(currentModule).unpack() }
+            with InternalError { (_, _, _) => { <> }}
+        )*/
         def increaseGlobalStackIndex(amount) = {
             globalStackIndex = globalStackIndex + amount
             resume(())
@@ -369,27 +433,4 @@ __DEBUG_END__
             }
         }
     }
-}
-
-def openRead(file: String): String / {CompilerContextRequest, InternalError} = {
-    try { with filesystem; readFile(file) }
-    with Exception[IOError] {
-        def raise(_, _) = do InternalError("Couldn't open file at path '"++file++"'.", __FILE__, __LINE__)
-    }
-}
-
-def feed[T] { stream: () => Unit / emit[T] } { prog: (T) => Unit / {CompilerContextRequest, InternalError} }: Unit / {CompilerContextRequest, InternalError} = {
-    try { stream() }
-    with emit[T] { v => {
-        prog(v)
-        resume(())
-    }}
-}
-
-def unimplemented(file: String, line: String): Nothing / InternalError = {
-    do InternalError("This segment of the project is still unimplemented. Please stay tuned.", file, line)
-}
-
-def unreachable(file: String, line: String): Nothing / InternalError = {
-    do InternalError("This segment of the project is meant to be unreachable. Please contact the author to inform of this error.", file, line)
 }
