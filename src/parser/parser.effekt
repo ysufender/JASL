@@ -46,9 +46,10 @@ def typeSize(t: Type): Int / {ParserError, ParserContextRequest, CompilerContext
     case Type::Pointer(_) => 4
     case Type::Void() => 0
     case Type::Custom(name) => (do getLayout(name)).typeSize()
+    case Type::FunctionPointer(_, _) => 4
 }
 
-def show(t: Type): String = t match {
+def show(t: Type): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = t match {
     case Type::Bool() => "bool"
     case Type::UInt() => "u32"
     case Type::Int() => "i32"
@@ -59,10 +60,39 @@ def show(t: Type): String = t match {
     case Type::Void() => "void"
     case Type::Custom(QualifiedName(Some(mod), name)) => mod++"::"++name
     case Type::Custom(QualifiedName(None(), name)) => name
+    case Type::FunctionPointer(args, returns) => {
+        def foreachTypeList(list: List[Type]) { act: Type => Unit / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} }: Unit = list match {
+            case Cons(x, xs) => {
+                act(x)
+                foreachTypeList(xs){act}
+            }
+            case Nil() => ()
+        }
+        var str: String = "fn ("
+        var l: Int = args.size
+        var i: Int = 0
+        args.foreachTypeList { t => {
+            str = str++t.show
+            if (i != (l - 1))
+                str = str++", "
+            i = i + 1
+        }}
+        str = str++") -> ("
+        l = returns.size
+        i = 0
+        returns.foreachTypeList  { t => {
+            str = str++t.show
+            if (i != (l - 1))
+                str = str++", "
+            i = i + 1
+        }}
+        str = str++")"
+        str
+    }
 }
 
-def typeString(t: Type): String = t.show()
-def typeString(dt: DataType): String = dt.toType().typeString()
+def typeString(t: Type): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = t.show()
+def typeString(dt: DataType): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = dt.toType().typeString()
 
 __DEBUG_START__
 def show(v: VariableSignature): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
@@ -111,7 +141,7 @@ def show(l: LayoutSignature): String / {TokenRequest, ParserError, ParserContext
             str = str++v.name++": "++v.varType.typeString()++"; "
         */
     }}
-    str++"}"
+    str++" }"
 }
 __DEBUG_END__
 
@@ -366,11 +396,69 @@ def handleTypeName(): Type / {TokenRequest, ParserError, ParserContextRequest, C
             }
         }
         case TypeNameT(_) => (do previous()).tokenType.toType()
+        case Keyword(Fn()) => {
+            // fn (params) -> returns
+            do checkReturnOrCrash(Symbol(LParen()))
+
+            var arguments: List[Type] = []
+            var bodyOn: Bool = true
+            while (bodyOn) {
+                if ((do peek()).tokenType != Symbol(RParen()))
+                {
+                    val pos: Position = (do peek()).position
+                    val typename = handleTypeName()
+                    arguments = Cons(typename, arguments)
+
+                    (do advance()).tokenType match {
+                        case Symbol(RParen()) => bodyOn = false
+                        case Symbol(Comma()) => ()
+                        case _ => do ParserError("Unexpected token '"++(do previous()).text++"' in function signature.", (do previous()).position)
+                    }
+                } else {
+                    bodyOn = false
+                    val _ = do advance()
+                }
+            }
+
+            do checkReturnOrCrash(Symbol(Arrow()))
+
+            var returns: List[Type] = []
+            bodyOn = true
+            (do peek()).tokenType match {
+                case Symbol(LParen()) => {
+                    do advance()
+                    while (bodyOn) (do peek()).tokenType match {
+                        case Symbol(RParen()) => {
+                            do advance()
+                            bodyOn = false
+                        }
+                        case _ => {
+                            val t: Type = handleTypeName()
+                            returns = Cons(t, returns)
+                            (do peek()).tokenType match {
+                                case Symbol(RParen()) => ()
+                                case Symbol(Comma()) => { val _ = do advance() } 
+                                case _ => do ParserError("Unexpected token '"++(do peek()).text++"' in function signature.", (do peek()).position)
+                            }
+                        }
+                    }
+                }
+                case _ => {
+                    val t: Type = handleTypeName()
+                    returns = Cons(t, returns)
+                }
+            }
+            FunctionPointer(arguments.reverse, returns.reverse)
+        }
         case _ => do ParserError("Expected typename.", (do previous()).position)
     }
 
     t match {
-        case Custom(name) => if (do hasLayout(name)) { t } else { do ParserError("Couldn't resolve type '"++t.typeString++"' in this context.", (do previous()).position) }
+        case Custom(name) => if (do hasLayout(name)) { t }
+                             else name.mod match { 
+                                case Some(modname) => do ParserError("Couldn't resolve type '"++name.name++"' in module '"++modname++"'.", (do previous()).position)
+                                case None() => do ParserError("Couldn't resolve type '"++t.typeString++"' in module in this context.", (do previous()).position)
+                             }
         case _ => t
     }
 }
@@ -497,9 +585,6 @@ __DEBUG_END__
         }
 
         name = (do previous()).text
-        // if (typename is Some(t))
-        //  name = t.typeString()++"::"++(do previous()).text
-        // preventing name collisions
 
         if (functionSignatures.contains(name))
             do ParserError("Multiple definition of function '"++name++"'.", (do previous()).position)
@@ -518,7 +603,10 @@ __DEBUG_END__
         while (bodyOn) {
             if ((do peek()).tokenType != Symbol(RParen()))
             {
+                val pos: Position = (do peek()).position
                 val (_, signature) = handleVariable(false, false, stackIndexArgs)
+                if (arguments.any { v => v.name == signature.name })
+                    do ParserError("Multiple definitions of argument '"++signature.name++"' in function '"++name.show++"'.", pos)
                 arguments = Cons(signature, arguments)
 
                 (do advance()).tokenType match {
@@ -538,44 +626,29 @@ __DEBUG_END__
 
         var returns: List[Type] = []
         bodyOn = true
-        (do advance()).tokenType match {
-            case IdentifierT() => {
-                val mod: String = (do previous()).text
-                do checkReturnOrCrash(Symbol(DoubleColon()))
-                (do advance()).tokenType match {
-                    case TypeNameT(CustomT(name)) => returns = Cons(Custom(QualifiedName(Some(mod), name)), returns)
-                    case _ => do ParserError("Expected a custom type name.", (do previous()).position)
-                }
-            }
-            case TypeNameT(typename) =>
-                returns = Cons(typename.toType(), returns)
+        (do peek()).tokenType match {
             case Symbol(LParen()) => {
-                while (bodyOn) (do advance()).tokenType match {
-                    case IdentifierT() => {
-                        val mod: String = (do previous()).text
-                        do checkReturnOrCrash(Symbol(DoubleColon()))
-                        (do advance()).tokenType match {
-                            case TypeNameT(CustomT(name)) => returns = Cons(Custom(QualifiedName(Some(mod), name)), returns)
-                            case _ => do ParserError("Expected a custom type name.", (do previous()).position)
-                        }
-                        (do advance()).tokenType match {
-                            case Symbol(RParen()) => bodyOn = false
-                            case Symbol(Comma()) => ()
-                            case _ => do ParserError("Unexpected token '"++(do previous()).text++"' in function signature.", (do previous()).position)
+                do advance()
+                while (bodyOn) (do peek()).tokenType match {
+                    case Symbol(RParen()) => {
+                        do advance()
+                        bodyOn = false
+                    }
+                    case _ => {
+                        val t: Type = handleTypeName()
+                        returns = Cons(t, returns)
+                        (do peek()).tokenType match {
+                            case Symbol(RParen()) => ()
+                            case Symbol(Comma()) => { val _ = do advance() } 
+                            case _ => do ParserError("Unexpected token '"++(do peek()).text++"' in function signature.", (do peek()).position)
                         }
                     }
-                    case TypeNameT(typename) => {
-                        returns = Cons(typename.toType(), returns)
-                        (do advance()).tokenType match {
-                            case Symbol(RParen()) => bodyOn = false
-                            case Symbol(Comma()) => ()
-                            case _ => do ParserError("Unexpected token '"++(do previous()).text++"' in function signature.", (do previous()).position)
-                        }
-                    }
-                    case _ => do ParserError("Expected type name, got '"++(do previous()).text++"' instead.", (do previous()).position)
                 }
             }
-            case _ => do ParserError("Expected return type(s), got '"++(do previous()).text++"'. instead", (do previous()).position)
+            case _ => {
+                val t: Type = handleTypeName()
+                returns = Cons(t, returns)
+            }
         }
 
         val pos: Position = (do checkReturnOrCrash(Symbol(LBrace()))).position
@@ -592,7 +665,7 @@ __DEBUG_END__
         if (do is_eof())
             do ParserError("Unterminated function body.", pos)
 
-        functionSignatures = functionSignatures.put(name, FunctionSignature(name, public, false, typename, arguments.reverse, returns))
+        functionSignatures = functionSignatures.put(name, FunctionSignature(name, public, false, typename, arguments.reverse, returns.reverse))
     }
 
     while (not(do is_eof()))
@@ -665,10 +738,6 @@ __DEBUG_END__
     do registerLexerOutput(tokens)
 }
 
-def parseEquality(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
-    AST(do getWorkingModule(), [])
-}
-
 def parseExpressionStatement(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
     unimplemented(__FILE__, __LINE__)
 }
@@ -723,7 +792,7 @@ def parse(tokens: List[Token]): AST / {InternalError, CompilerContextRequest} = 
         case _ => do ParserError("Unexpected token '"++(do previous()).text++"', expected statement.", (do previous()).position)
     }
 
-    AST("", [])
+    AST(do getWorkingModule(), [])
 }
 
 /*

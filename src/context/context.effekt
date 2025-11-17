@@ -65,7 +65,13 @@ type Type {
     Byte()
     Pointer(ptrType: Type)
     Void()
+    FunctionPointer(arguments: List[Type], returns: List[Type])
     Custom(name: QualifiedName)
+    // TODO: add type Runtime() for runtime sized types.
+    // because the bytecode can return differing sizes from functions and
+    // thanks to bl register the caller can know the return size. Also
+    // the callee can know the parameter size like that too so we can do
+    // insane unsafe calls (long as it's 256 bytes max) and returns.
 }
 
 record FunctionSignature(
@@ -398,19 +404,31 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
         }
         def getLayoutSignature(mod, name) = resume(
             modules.get(mod) match {
-                case Some(moduleinfo) => moduleinfo.layouts.get(name)
+                case Some(moduleinfo) => moduleinfo.layouts.get(name) match {
+                    case Some(layout) => if (not(layout.public) && (mod != currentModule)) { None() }
+                                         else { Some(layout) }
+                    case None() => None()
+                }
                 case None() => None()
             }
         )
         def getVariableSignature(mod, name) = resume(
             modules.get(mod) match {
-                case Some(moduleinfo) => moduleinfo.variables.get(name)
+                case Some(moduleinfo) => moduleinfo.variables.get(name) match {
+                    case Some(variable) => if (not(variable.public) && (mod != currentModule)) { None() }
+                                         else { Some(variable) }
+                    case None() => None()
+                }
                 case None() => None()
             }
         )
         def getFunctionSignature(mod, name) = resume(
             modules.get(mod) match {
-                case Some(moduleinfo) => moduleinfo.functions.get(name)
+                case Some(moduleinfo) => moduleinfo.functions.get(name) match {
+                    case Some(function) => if (not(function.public) && (mod != currentModule)) { None() }
+                                         else { Some(function) }
+                    case None() => None()
+                }
                 case None() => None()
             }
         )
