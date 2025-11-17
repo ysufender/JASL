@@ -67,7 +67,7 @@ type Type {
     Void()
     FunctionPointer(arguments: List[Type], returns: List[Type])
     Custom(name: QualifiedName)
-    // TODO: add type Runtime() for runtime sized types.
+    // MAYBE: add type Runtime() for runtime sized types.
     // because the bytecode can return differing sizes from functions and
     // thanks to bl register the caller can know the return size. Also
     // the callee can know the parameter size like that too so we can do
@@ -259,6 +259,7 @@ interface CompilerContextRequest {
     def getLayoutSignature(mod: String, name: String): Option[LayoutSignature]
     def getVariableSignature(mod: String, name: String): Option[VariableSignature]
     def getFunctionSignature(mod: String, name: String): Option[FunctionSignature]
+    def checkEntryPoint(): Bool
 __DEBUG_START__
     def emitModules(): Unit / emit[ModuleInfo]
 __DEBUG_END__
@@ -370,15 +371,20 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
 
                 // appends to the existing module
                 val oldInf = modules.get(currentModule).unpack()
-                val newInf = ModuleInfo(
-                    currentModule,
-                    oldInf.variables.combineMapNoDup(variables),
-                    oldInf.functions.combineMapNoDup(functions),
-                    oldInf.layouts.combineMapNoDup(layouts)
-                )
-                // TODO: Continue from here
-                // if a multiple definition occurs, crash.
-                modules = modules.put(currentModule, newInf)
+
+                try {
+                    val newInf = ModuleInfo(
+                        currentModule,
+                        oldInf.variables.combineMapNoDup(variables),
+                        oldInf.functions.combineMapNoDup(functions),
+                        oldInf.layouts.combineMapNoDup(layouts)
+                    )
+
+                    modules = modules.put(currentModule, newInf)
+                } with DuplicateKey[String] { k => {
+                    println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++k++"' in module '"++currentModule++"'.")
+                    exit(1)
+                }}
             } with DuplicateKey[String] { signature => {
                 println("[PARSER ERROR] "++currentFile++" at "++"???:"++" Multiple definition of '"++currentModule++"::"++signature++"' in module '"++currentModule++"'.\n")
                 exit(1)
@@ -432,6 +438,16 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
                 case None() => None()
             }
         )
+        def checkEntryPoint() = resume(modules.get("main") match {
+            case None() => false
+            case Some(mod) => mod.functions.get("main") match {
+                case None() => false
+                case Some(fn) => fn.returns match {
+                    case Cons(Type::Int(), Nil()) => not(fn.public) && fn.arguments.isEmpty
+                    case _ => false
+                }
+            }
+        })
 __DEBUG_START__
         def emitModules() = resume {
             modules.eachValue()

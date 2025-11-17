@@ -49,6 +49,21 @@ def main() = {
             val tokenized: List[Token] = lexer::lex()
             parser::prepass(tokenized)
 
+            // check for main module and entry point.
+            // every project must include a main module that has a main function
+            // with a signature fn () -> i32
+            // entry point must be private.
+            if (not(do checkEntryPoint())) {
+                println("[ERROR] Couldn't find entry point accross the project.")
+                println("        The entry point must reside in module 'main', must not be public,")
+                println("        and must have the signature fn () -> i32")
+                println("\n        Example:")
+                println("                module main")
+                println("                fn main() -> i32 {")
+                println("                    return 0;")
+                println("                }")
+                exit(1)
+            }
 __DEBUG_START__
             feed[ModuleInfo] { () => do emitModules() } { case ModuleInfo(name, vars, fns, lays) => {
                 with parser_report;

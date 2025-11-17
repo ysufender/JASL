@@ -779,15 +779,20 @@ def parse(tokens: List[Token]): AST / {InternalError, CompilerContextRequest} = 
     // All top-level checks and checks for non top-level definitions are handled
     // in prepass already as well as 'module' and 'include' directives.
     while (not(do is_eof())) (do advance()).tokenType match {
+        case Keyword(Fn()) => {
+            // non-top level checks are already done by prepass
+            handleTypeNameNoCrashExceptUndefined()
+            // TODO: Continue from here.
+            while ((do advance()).tokenType)
+        }
+
+        // skip these
         case Keyword(Preprocessor(_)) => { val _ = do advance() }
         case Keyword(Wrapper()) => while ((do advance()).tokenType != Symbol(RBrace())) { }
         case Keyword(Layout()) => while ((do advance()).tokenType != Symbol(RBrace())) { }
-        case Keyword(Pub()) =>
-            if (not(do isTopLevel())) {
-                do ParserError("Public identifiers in non top-level contexts are not enabled.", (do previous()).position)
-            } else {
-                unimplemented(__FILE__, __LINE__)
-            }
+        case Keyword(Pub()) => ()
+        case EOF() => ()
+
         //case Keyword(Let()) => handleVariableDefinition()
         case _ => do ParserError("Unexpected token '"++(do previous()).text++"', expected statement.", (do previous()).position)
     }
