@@ -156,6 +156,7 @@ def isComptime(stmt: Statement): Bool / {InternalError, ParserContextRequest, Pa
     // case LayoutDeclaration(signature, _) => true // Come on.
     case ReturnStmt(returns, _) => returns.all { r => isComptime(r) }
     case Assignment(lhs, rhs, _) => isComptime(lhs) && isComptime(rhs)
+    case InlineAssembly(_) => false
 }
 
 def isComptime(op: BinaryOp): Bool / {InternalError, ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = op match {
@@ -443,15 +444,14 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, ParserContextR
     do setWorkingModule((do advance()).text)
     do registerLexerOutput([])
 
-__DEBUG_START__
-    println("Prepassing Module: "++do getWorkingModule())
-__DEBUG_END__
+    debugPrint("Prepassing Module: "++do getWorkingModule())
 
     var variableSignatures = map::empty[String, VariableSignature](box strOrder)
     var functionSignatures = map::empty[String, FunctionSignature](box strOrder)
     var layoutSignatures = map::empty[String, LayoutSignature](box strOrder)
 
     def handleVariable(public: Bool, mutable: Bool, index: Int): (String, VariableSignature) = {
+        do ParserError("Top-level global variables are not (yet) supported.", (do previous()).position)
         val identifier: Token = do checkReturnOrCrash(IdentifierT())
         val colon: Token = do checkReturnOrCrash(Symbol(Colon()))
         val typename: Type = handleTypeName()
@@ -653,9 +653,7 @@ __DEBUG_END__
                         _prepass()
                     }
 
-__DEBUG_START__
-                    println("Registering Lexer Output: "++do getWorkingFile())
-__DEBUG_END__
+                    debugPrint("Registering Lexer Output: "++do getWorkingFile())
                     do registerLexerOutput(tokenized)
                     
                     do setWorkingFile(currentFile)
@@ -689,15 +687,13 @@ def prepass(tokens: List[Token]): Unit / {InternalError, CompilerContextRequest}
         _prepass()
     }
 
-__DEBUG_START__
-    println("Registering Lexer Output: "++do getWorkingModule())
-__DEBUG_END__
+    debugPrint("Registering Lexer Output: "++do getWorkingModule())
 
     do registerLexerOutput(tokens)
 }
 
 interface ReturnTypeRegister {
-    def returns(returnTypes: List[Type]): Unit / {ParserError, TokenRequest}
+    def returns(returnTypes: List[Type], pos: Position): Unit / {ParserError, TokenRequest}
 }
 
 def show(returnList: List[Type]): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
@@ -716,20 +712,101 @@ def show(returnList: List[Type]): String / {TokenRequest, ParserError, ParserCon
 def returnHandler[T](expected: List[Type]) { prog: () => T / ReturnTypeRegister }: T / {ParserError, TokenRequest, CompilerContextRequest, ParserContextRequest} = {
     try { prog() }
     with ReturnTypeRegister {
-        def returns(returnTypes) = resume { 
+        def returns(returnTypes, pos) = resume { 
             if (expected.compare(returnTypes){(l, r) => l == r}){
-                do ParserError("Missmatching return types. Type '"++returnTypes.show++"' is not allowed in this context, '"++expected.show++"' is expected.", (do previous()).position)
-            } else ()
+            } else {
+                do ParserError("Missmatching return types. Type '"++returnTypes.show++"' is not allowed in this context, '"++expected.show++"' is expected.", pos)
+            }
         }
     }
 }
 
-def parseBlockExpression(): Expression / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleFunctionDef(): Statement / {InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    // non-top level checks are already done by prepass
+    handleTypeNameNoCrashExceptUndefined()
+    val name: String = (do previous()).text
+    val signature: FunctionSignature = do getFunctionSignature(QualifiedName(None(), name)).unpack()
+
+    while ((do advance()).tokenType != Symbol(LBrace())) { }
+
+    with returnHandler(signature.returns);
+
+    val (body, scope) = parseBlockExpression() match {
+        case Block(i, s) => (i, s)
+        case _ => unreachable(__FILE__, __LINE__)
+    }
+    FnDefinition(signature, body, scope)
+}
+
+def handleReturnStatement(): Statement / {ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    if (do isTopLevel())
+        do ParserError("Returns in top-level are not allowed.", (do previous()).position)
+
+    val pos: Position = (do previous()).position
+    while (not(do is_eof()) && (do advance()).tokenType != Symbol(Semicolon())) { }
+    do returns([Int()], pos)
+    ReturnStmt([], pos)
+
+    (do peek()).tokenType match {
+        case Symbol(LParen()) => {
+            var returns: List[Expression] = []
+            while (not(do is_eof()) && (do advance()).tokenType != Symbol(RParen())) {
+                // TODO: Continue from here
+                // returns = Cons(parseExpression(), returns)
+                // do checkReturnOrCrash(Symbol(Comma()))
+            }
+            do checkReturnOrCrash(Symbol(Comma()))
+            do returns([Int()], pos)
+            ReturnStmt(returns, pos)
+        }
+        case _ => {
+            var returns: List[Expression] = []
+            // TODO: Continue from here.
+            // val ret: Expression = parseExpression()
+            // do checkReturnOrCrash(Symbol(Comma()))
+            // do returns([ret.evalType], pos)
+            // ReturnStmt([ret], pos)
+            do returns([Int()], pos)
+            ReturnStmt(returns, pos)
+        }
+    }
+}
+
+def parseStatement(): Statement / {ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = (do advance()).tokenType match {
+    case Keyword(Fn()) => handleFunctionDef()
+    case Assembly() => InlineAssembly((do previous()).text)
+    case Keyword(Return()) => handleReturnStatement()
+
+    // skip these
+    case Keyword(Preprocessor(_)) => {
+        do advance()
+        parseStatement()
+    }
+    case Keyword(Wrapper()) => { 
+        while ((do advance()).tokenType != Symbol(RBrace())) { }
+        parseStatement()
+    }
+    case Keyword(Layout()) => {
+        while ((do advance()).tokenType != Symbol(RBrace())) { }
+        parseStatement()
+    }
+    case Keyword(Pub()) => parseStatement()
+    case EOF() => InlineAssembly((do getWorkingFile())++"_end:")
+
+    //case Keyword(Let()) => handleVariableDefinition()
+    case _ => do ParserError("Unexpected token '"++(do previous()).text++"', expected statement.", (do previous()).position)
+}
+
+def parseBlockExpression(): Expression / {ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     with contextHandler(do createChildContext());
-    // TODO: Continue from here.
-    // placeholder to skip the block
-    while ((do advance()).tokenType != Symbol(RBrace())) { }
-    Block([], do getCurrentContext())
+    
+    var body: List[Statement] = []
+    while ((do peek()).tokenType != Symbol(RBrace())) {
+        body = Cons(parseStatement(), body)
+    }
+    do advance()
+
+    Block(body.reverse, do getCurrentContext())
 }
 
 def parse(tokens: List[Token]): AST / {InternalError, CompilerContextRequest} = {
@@ -738,42 +815,20 @@ def parse(tokens: List[Token]): AST / {InternalError, CompilerContextRequest} = 
     with contextHandler(emptyParserContext());
     with on[MissingValue].panic;
 
-    def handleFunctionDef(): Statement = {
-        // non-top level checks are already done by prepass
-        handleTypeNameNoCrashExceptUndefined()
-        val name: String = (do previous()).text
-        val signature: FunctionSignature = do getFunctionSignature(QualifiedName(None(), name)).unpack()
-
-        while ((do advance()).tokenType != Symbol(LBrace())) { }
-
-        with returnHandler(signature.returns);
-
-        val (body, scope) = parseBlockExpression() match {
-            case Block(i, s) => (i, s)
-            case _ => unreachable(__FILE__, __LINE__)
-        }
-        FnDefinition(signature, body, scope)
-    }
-
     // All top-level checks and checks for non top-level definitions are handled
     // in prepass already as well as 'module' and 'include' directives.
     var statements: List[Statement] = []
 
-    while (not(do is_eof())) (do advance()).tokenType match {
-        case Keyword(Fn()) => statements = Cons(handleFunctionDef(), statements)
-
-        // skip these
-        case Keyword(Preprocessor(_)) => { val _ = do advance() }
-        case Keyword(Wrapper()) => while ((do advance()).tokenType != Symbol(RBrace())) { }
-        case Keyword(Layout()) => while ((do advance()).tokenType != Symbol(RBrace())) { }
-        case Keyword(Pub()) => ()
-        case EOF() => ()
-
-        //case Keyword(Let()) => handleVariableDefinition()
-        case _ => do ParserError("Unexpected token '"++(do previous()).text++"', expected statement.", (do previous()).position)
+    while (not(do is_eof())) {
+        try { statements = Cons(parseStatement(), statements) }
+        with ReturnTypeRegister {
+            def returns(_, pos) = { 
+                unreachable(__FILE__, __LINE__)
+            }
+        }
     }
 
-    AST(do getWorkingModule(), [])
+    AST(do getWorkingModule(), statements.reverse)
 }
 
 /*

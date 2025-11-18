@@ -74,6 +74,7 @@ def show(t: TokenType): String = t match {
     case Symbol(symbolType) => show(symbolType)++" Symbol"
     case TypeNameT(typeType) => "TypeName "++show(typeType)
     case EOF() => "EOF"
+    case Assembly() => "Assembly Block"
 }
 
 def show(p: Position): String =
@@ -329,8 +330,8 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
             case '"' => {
                 val startIndex: Int = index
                 while (not(is_eof()) && countWhiteSpace { peek } != '"') {
-                    //if (countWhiteSpace { peek } == '\n') { }
-                    val _ = countWhiteSpace { advance }
+                    //if (countWhiteSpace{peek} == '\n') { }
+                    val _ = countWhiteSpace{advance}
                 }
                 if (is_eof()) {
                     do LexerError("Unterminated String", pos(index - startIndex))
@@ -438,6 +439,19 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
                 case "while" => do add_token(Token(Keyword(While()), text, pos(text.length)))
                 case "extern" => do add_token(Token(Keyword(Extern()), text, pos(text.length)))
                 case "mut" => do add_token(Token(Keyword(Mut()), text, pos(text.length)))
+                case "asm" => {
+                    if (skipWhiteSpace{advance} != '{')
+                        do LexerError("Expected a block '{ ... }' after 'asm' directive.", pos(1))
+                    val startIndex: Int = index
+                    while (not(is_eof()) && countWhiteSpace{peek} != '}') {
+                        val _ = countWhiteSpace{advance}
+                    }
+                    if (is_eof())
+                        do LexerError("Unterminated assembly block.", pos(index - startIndex))
+                    countWhiteSpace{advance}
+                    val block: String = in.substring(startIndex, index - 1)
+                    do add_token(Token(Assembly(), block, pos(block.length)))
+                }
                 case _ =>
                     do add_token(Token(IdentifierT(), text, pos(text.length)))
             }

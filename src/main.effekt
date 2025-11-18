@@ -85,9 +85,7 @@ __DEBUG_END__
             feed[(String, LexerContext)]{ () => do emitLexerOutput() } { case (filename, context) => {
                 do setWorkingFile(filename)
                 do setWorkingModule(context.name)
-__DEBUG_START__
-                println("\nParse called for "++do getWorkingFile()++" module "++do getWorkingModule())
-__DEBUG_END__
+                debugPrint("Parse called for "++do getWorkingFile()++" module "++do getWorkingModule())
                 do registerAST(parser::parse(context.tokens))
             }}
 

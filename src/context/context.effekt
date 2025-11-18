@@ -167,6 +167,7 @@ type TokenType {
     Keyword(keywordType: KeywordType)
     Symbol(symbolType: SymbolType)
     TypeNameT(typeType: DataType)
+    Assembly()
     EOF()
 }
 
@@ -235,6 +236,7 @@ type Statement {
     // LayoutDeclaration(signature: LayoutSignature, pos: Position)
     ReturnStmt(returns: List[Expression], pos: Position)
     Assignment(lhs: Expression, rhs: Expression, pos: Position)
+    InlineAssembly(assembly: String)
 }
 
 record LexerContext(name: String, tokens: List[Token])
@@ -327,6 +329,12 @@ def unimplemented(file: String, line: String): Nothing / InternalError = {
 
 def unreachable(file: String, line: String): Nothing / InternalError = {
     do InternalError("This segment of the project is meant to be unreachable. Please contact the author to inform of this error.", file, line)
+}
+
+def debugPrint(msg: String): Unit = {
+__DEBUG_START__
+    println("[DEBUG] "++msg)
+__DEBUG_END__
 }
 
 def combine[T](l1: List[T], l2: List[T]): List[T] = l1 match {
