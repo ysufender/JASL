@@ -9,15 +9,13 @@ import context/context
 
 interface ParserContextRequest {
     def getVar(name: QualifiedName): VariableSignature / {ParserError, CompilerContextRequest}
-    def getFunction(name: QualifiedName): FunctionSignature / {ParserError, CompilerContextRequest}
-    def getLayout(name: QualifiedName): LayoutSignature / {ParserError, CompilerContextRequest}
     def hasVar(name: QualifiedName): Bool / {ParserError, CompilerContextRequest}
     def hasFunction(name: QualifiedName): Bool / {ParserError, CompilerContextRequest}
     def hasLayout(name: QualifiedName): Bool / {ParserError, CompilerContextRequest}
-    def addVar(name: String, sign: VariableSignature): Unit / ParserError
-    def addFunction(name: String, sign: FunctionSignature): Unit / ParserError
-    def addLayout(name: String, sign: LayoutSignature): Unit / ParserError
+    def addVar(name: String, sign: VariableSignature): Unit / {ParserError, CompilerContextRequest}
     def isTopLevel(): Bool
+    def createChildContext(): ParserContext
+    def getCurrentContext(): ParserContext
 }
 
 interface TokenRequest {
@@ -45,8 +43,19 @@ def typeSize(t: Type): Int / {ParserError, ParserContextRequest, CompilerContext
     case Type::Byte() => 1
     case Type::Pointer(_) => 4
     case Type::Void() => 0
-    case Type::Custom(name) => (do getLayout(name)).typeSize()
+    case Type::Custom(name) => (do getLayoutSignature(name)) match {
+        case Some(signature) => signature.typeSize()
+        case None() => do ParserError("Given layout '"++name.show++"' couldn't be found in this context.", (do previous()).position)
+    }
     case Type::FunctionPointer(_, _) => 4
+}
+
+def foreachTypeList(list: List[Type]) { act: Type => Unit / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} }: Unit / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = list match {
+    case Cons(x, xs) => {
+        act(x)
+        foreachTypeList(xs){act}
+    }
+    case Nil() => ()
 }
 
 def show(t: Type): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = t match {
@@ -61,13 +70,6 @@ def show(t: Type): String / {TokenRequest, ParserError, ParserContextRequest, Co
     case Type::Custom(QualifiedName(Some(mod), name)) => mod++"::"++name
     case Type::Custom(QualifiedName(None(), name)) => name
     case Type::FunctionPointer(args, returns) => {
-        def foreachTypeList(list: List[Type]) { act: Type => Unit / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} }: Unit = list match {
-            case Cons(x, xs) => {
-                act(x)
-                foreachTypeList(xs){act}
-            }
-            case Nil() => ()
-        }
         var str: String = "fn ("
         var l: Int = args.size
         var i: Int = 0
@@ -145,18 +147,18 @@ def show(l: LayoutSignature): String / {TokenRequest, ParserError, ParserContext
 }
 __DEBUG_END__
 
-def isComptime(stmt: Statement): Bool / {ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = stmt match {
-    case ExpressionStatement(expr, _) => isComptime(expr)
+def isComptime(stmt: Statement): Bool / {InternalError, ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = stmt match {
+    case ExpressionStatement(expr, _) => expr.isComptime
     case VariableDefinition(signature, initializer, _) => if (initializer is Some(expr)) { isComptime(expr) } else { true }
     case Conditional(condition, body, scope, fallback, _) => isComptime(condition) && isComptime(body) && (if (fallback is Some(else_block)) { isComptime(else_block) } else { true })
     case WhileStmt(condition, body, scope, _) => false // No.
-    case FnDefinition(signature, body, scope, _) => signature.comptime
+    case FnDefinition(signature, body, scope) => signature.comptime
     // case LayoutDeclaration(signature, _) => true // Come on.
     case ReturnStmt(returns, _) => returns.all { r => isComptime(r) }
     case Assignment(lhs, rhs, _) => isComptime(lhs) && isComptime(rhs)
 }
 
-def isComptime(op: BinaryOp): Bool / {ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = op match {
+def isComptime(op: BinaryOp): Bool / {InternalError, ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = op match {
     case Addition(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
     case Subtraction(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
     case Division(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
@@ -171,16 +173,24 @@ def isComptime(op: BinaryOp): Bool / {ParserContextRequest, ParserError, TokenRe
     case Or(lhs, rhs) => isComptime(lhs) && isComptime(rhs)
 }
 
-def isComptime(op: UnaryOp): Bool / {ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = op match {
+def isComptime(op: UnaryOp): Bool / {InternalError, ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = op match {
     case Negation(rhs) => isComptime(rhs)
     case Not(rhs) => isComptime(rhs)
 }
 
-def isComptime(expr: Expression): Bool / {ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = expr match {
-    case TypeName(_) => true
+def isComptime(expr: Expression): Bool / {InternalError, ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = expr match {
+    case Initialization(_, initializers) => initializers.all { init => init.isComptime }
     case Identifier(name) =>
         if (do hasVar(name)) { (do getVar(name)).comptime }
-        else if (do hasVar(name)) { (do getFunction(name)).comptime }
+        else if (do hasFunction(name)) {
+            (do getFunctionSignature(name)) match {
+                case Some(signature) => signature.comptime
+                case None() => {
+                    do ParserError("Couldn't find given function '"++name.show++"' in this context.", (do previous()).position)
+                    unreachable(__FILE__, __LINE__)
+                }
+            }
+        }
         else do ParserError("Couldn't find any variable or function with name '"++name.show++"' in this context.", (do previous()).position)
     case Binary(binOp) => isComptime(binOp)
     case Unary(unOp) => isComptime(unOp)
@@ -192,7 +202,9 @@ def isComptime(expr: Expression): Bool / {ParserContextRequest, ParserError, Tok
     case Block(inside, scope) => inside.all { st => isComptime(st) }
 }
 
-def emptyParserContext(): ParserContext = ParserContext(None(), 0, map::empty[String, FunctionSignature](box strOrder), map::empty[String, VariableSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
+def emptyParserContext(): ParserContext =
+    // ParserContext(None(), 0, map::empty[String, FunctionSignature](box strOrder), map::empty[String, VariableSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
+    ParserContext(None(), 0, map::empty[String, VariableSignature](box strOrder))
 
 def parser_report[T] { prog: () => T / {ParserError, InternalError} }: T / {InternalError, CompilerContextRequest} = {
     try { prog() }
@@ -210,7 +222,6 @@ def parser_report[T] { prog: () => T / {ParserError, InternalError} }: T / {Inte
         val helpLine: String = getHelpLine()
 
         println("[PARSER ERROR] "++do getWorkingFile()++" at "++show(pos)++": "++msg)
-        // println("        "++msg)
         println("\n        "++errLine)
         println(spaces++"^")
         println(spaces++helpLine)
@@ -220,81 +231,38 @@ def parser_report[T] { prog: () => T / {ParserError, InternalError} }: T / {Inte
 
 def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRequest }: T / {TokenRequest, CompilerContextRequest, ParserError} = {
     var context = _context
+    var stackIndex: Int = 0
 
-    def _getVar(name: QualifiedName): VariableSignature / {ParserError, CompilerContextRequest} = name.mod match {
-        case Some(modname) => (do getVariableSignature(modname, name.name)) match {
-            case Some(sign) => sign
-            case None() => do ParserError("Given variable '"++name.show++"' doesn't exists in the given module '"++modname++"'.", (do previous()).position)
-        }
-        case None() => (do getVariableSignature(do getWorkingModule(), name.name)) match {
-            case Some(sign) => sign
-            case None() => {
-                val v = context.variables.get(name.name)
-                v match {
-                    case Some(sign) => sign 
-                    case None() => context.parent match {
-                        case Some(parent) => {
-                            with contextHandler(parent);
-                            do getVar(name)
-                        }
-                        case  _ => do ParserError("Given variable '"++name.show++"' doesn't exists in the current context.", (do previous()).position)
+    def _getVar(name: QualifiedName): VariableSignature / {ParserError, CompilerContextRequest} = do getVariableSignature(name) match {
+        case Some(signature) => signature
+        case None() => {
+            val v = context.variables.get(name.name)
+            v match {
+                case Some(sign) => sign 
+                case None() => context.parent match {
+                    case Some(parent) => {
+                        with contextHandler(parent);
+                        do getVar(name)
                     }
+                    case  _ => do ParserError("Given variable '"++name.show++"' doesn't exists in the current context.", (do previous()).position)
                 }
             }
         }
     }
 
-    def _getFunction(name: QualifiedName): FunctionSignature / {ParserError, CompilerContextRequest} = name.mod match {
-        case Some(modname) => (do getFunctionSignature(modname, name.name)) match {
-            case Some(sign) => sign
-            case None() => do ParserError("Given function '"++name.show++"' doesn't exists in the given module '"++modname++"'.", (do previous()).position)
-        }
-        case None() => (do getFunctionSignature(do getWorkingModule(), name.name)) match {
-            case Some(sign) => sign
-            case None() => {
-                val v = context.functions.get(name.name)
-                v match {
-                    case Some(sign) => sign 
-                    case None() => context.parent match {
-                        case Some(parent) => {
-                            with contextHandler(parent);
-                            do getFunction(name)
-                        }
-                        case  _ => do ParserError("Given function '"++name.show++"' doesn't exists in the current context.", (do previous()).position)
-                    }
-                }
-            }
-        }
+    def _getFunction(name: QualifiedName): FunctionSignature / {ParserError, CompilerContextRequest} = do getFunctionSignature(name) match {
+        case Some(sign) => sign
+        case None() => do ParserError("Given function '"++name.show++"' doesn't exists in the current context.", (do previous()).position)
     }
 
-    def _getLayout(name: QualifiedName): LayoutSignature / {ParserError, CompilerContextRequest} = name.mod match {
-        case Some(modname) => (do getLayoutSignature(modname, name.name)) match {
-            case Some(sign) => sign
-            case None() => do ParserError("Given layout '"++name.show++"' doesn't exists in the given module '"++modname++"'.", (do previous()).position)
-        }
-        case None() => (do getLayoutSignature(do getWorkingModule(), name.name)) match {
-            case Some(sign) => sign
-            case None() => {
-                val v = context.layouts.get(name.name)
-                v match {
-                    case Some(sign) => sign 
-                    case None() => context.parent match {
-                        case Some(parent) => {
-                            with contextHandler(parent);
-                            do getLayout(name)
-                        }
-                        case  _ => do ParserError("Given layout '"++name.show++"' doesn't exists in the current context.", (do previous()).position)
-                    }
-                }
-            }
-        }
+    def _getLayout(name: QualifiedName): LayoutSignature / {ParserError, CompilerContextRequest} = do getLayoutSignature(name) match {
+        case Some(sign) => sign
+        case None() => do ParserError("Given layout '"++name.show++"' doesn't exists in the current context.", (do previous()).position)
     }
 
     try { prog() }
     with ParserContextRequest {
         def getVar(name) = resume { _getVar(name) }
-        def getFunction(name) = resume { _getFunction(name) }
-        def getLayout(name) = resume { _getLayout(name) }
         def hasVar(name) = resume {
             try { _getVar(name); true }
             with ParserError { (_, _) => false }
@@ -311,24 +279,14 @@ def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRe
             if (context.variables.contains(name)) {
                 do ParserError("Given variable '"++name++"' already exists in the current context.", (do previous()).position)
             } else {
-                context = ParserContext(context.parent, context.stackIndex, context.functions, context.variables.put(name, sign), context.layouts)
-            }
-        }
-        def addFunction(name, sign) = resume {
-            if (context.functions.contains(name)) {
-                do ParserError("Given function '"++name++"' already exists in the current context.", (do previous()).position)
-            } else {
-                context = ParserContext(context.parent, context.stackIndex, context.functions.put(name, sign), context.variables, context.layouts)
-            }
-        }
-        def addLayout(name, sign) = resume {
-            if (context.layouts.contains(name)) {
-                do ParserError("Given layout '"++name++"' already exists in the current context.", (do previous()).position)
-            } else {
-                context = ParserContext(context.parent, context.stackIndex, context.functions, context.variables, context.layouts.put(name, sign))
+                context = ParserContext(context.parent, context.stackIndex, context.variables.put(name, sign))
+                with contextHandler(context);
+                stackIndex = stackIndex + sign.varType.typeSize
             }
         }
         def isTopLevel() = resume(context.parent.isEmpty)
+        def createChildContext() = resume(ParserContext(Some(context), context.stackIndex + stackIndex, map::empty[String, VariableSignature](box strOrder)))
+        def getCurrentContext() = resume(context)
     }
 }
 
@@ -738,36 +696,40 @@ __DEBUG_END__
     do registerLexerOutput(tokens)
 }
 
-def parseExpressionStatement(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
-    unimplemented(__FILE__, __LINE__)
+interface ReturnTypeRegister {
+    def returns(returnTypes: List[Type]): Unit / {ParserError, TokenRequest}
 }
 
-def parseVariableDefinition(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
-    unimplemented(__FILE__, __LINE__)
+def show(returnList: List[Type]): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    var str: String = "("
+    val l: Int = returnList.size
+    var i: Int = 0
+    returnList.foreachTypeList  { t => {
+        str = str++t.show
+        if (i != (l - 1))
+            str = str++", "
+        i = i + 1
+    }}
+    str++")"
 }
 
-def parseConditional(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
-    unimplemented(__FILE__, __LINE__)
+def returnHandler[T](expected: List[Type]) { prog: () => T / ReturnTypeRegister }: T / {ParserError, TokenRequest, CompilerContextRequest, ParserContextRequest} = {
+    try { prog() }
+    with ReturnTypeRegister {
+        def returns(returnTypes) = resume { 
+            if (expected.compare(returnTypes){(l, r) => l == r}){
+                do ParserError("Missmatching return types. Type '"++returnTypes.show++"' is not allowed in this context, '"++expected.show++"' is expected.", (do previous()).position)
+            } else ()
+        }
+    }
 }
 
-def parseWhileStatement(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
-    unimplemented(__FILE__, __LINE__)
-}
-
-def parseFnDefinition(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
-    unimplemented(__FILE__, __LINE__)
-}
-
-def parseFnDefinition(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
-    unimplemented(__FILE__, __LINE__)
-}
-
-def parseReturnStmt(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
-    unimplemented(__FILE__, __LINE__)
-}
-
-def parseAssignment(): AST / {ParserContextRequest, ParserError, TokenRequest, InternalError, CompilerContextRequest} = {
-    unimplemented(__FILE__, __LINE__)
+def parseBlockExpression(): Expression / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    with contextHandler(do createChildContext());
+    // TODO: Continue from here.
+    // placeholder to skip the block
+    while ((do advance()).tokenType != Symbol(RBrace())) { }
+    Block([], do getCurrentContext())
 }
 
 def parse(tokens: List[Token]): AST / {InternalError, CompilerContextRequest} = {
@@ -776,15 +738,29 @@ def parse(tokens: List[Token]): AST / {InternalError, CompilerContextRequest} = 
     with contextHandler(emptyParserContext());
     with on[MissingValue].panic;
 
+    def handleFunctionDef(): Statement = {
+        // non-top level checks are already done by prepass
+        handleTypeNameNoCrashExceptUndefined()
+        val name: String = (do previous()).text
+        val signature: FunctionSignature = do getFunctionSignature(QualifiedName(None(), name)).unpack()
+
+        while ((do advance()).tokenType != Symbol(LBrace())) { }
+
+        with returnHandler(signature.returns);
+
+        val (body, scope) = parseBlockExpression() match {
+            case Block(i, s) => (i, s)
+            case _ => unreachable(__FILE__, __LINE__)
+        }
+        FnDefinition(signature, body, scope)
+    }
+
     // All top-level checks and checks for non top-level definitions are handled
     // in prepass already as well as 'module' and 'include' directives.
+    var statements: List[Statement] = []
+
     while (not(do is_eof())) (do advance()).tokenType match {
-        case Keyword(Fn()) => {
-            // non-top level checks are already done by prepass
-            handleTypeNameNoCrashExceptUndefined()
-            // TODO: Continue from here.
-            while ((do advance()).tokenType)
-        }
+        case Keyword(Fn()) => statements = Cons(handleFunctionDef(), statements)
 
         // skip these
         case Keyword(Preprocessor(_)) => { val _ = do advance() }

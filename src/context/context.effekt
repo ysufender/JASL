@@ -176,9 +176,10 @@ record Token(tokenType: TokenType, text: String, position: Position)
 record ParserContext(
     parent: Option[ParserContext],
     stackIndex: Int, // for in-function blocks to get the local variables easily.
-    functions: Map[String, FunctionSignature],
-    variables: Map[String, VariableSignature],
-    layouts: Map[String, LayoutSignature]
+    variables: Map[String, VariableSignature]
+    // these are already in CompilerContext
+    // functions: Map[String, FunctionSignature],
+    // layouts: Map[String, LayoutSignature]
 )
 
 type Literal {
@@ -213,7 +214,7 @@ type UnaryOp {
 }
 
 type Expression {
-    TypeName(name: QualifiedName)
+    Initialization(name: QualifiedName, initializers: List[Expression])
     Identifier(name: QualifiedName)
     Binary(binOp: BinaryOp)
     Unary(unOp: UnaryOp)
@@ -230,7 +231,7 @@ type Statement {
     VariableDefinition(signature: VariableSignature, initializer: Option[Expression], pos: Position)
     Conditional(condition: Expression, body: Statement, scope: ParserContext, fallback: Option[Statement], pos: Position)
     WhileStmt(condition: Expression, body: Statement, scope: ParserContext, pos: Position)
-    FnDefinition(signature: FunctionSignature, body: List[Statement], scope: ParserContext, pos: Position)
+    FnDefinition(signature: FunctionSignature, body: List[Statement], scope: ParserContext)
     // LayoutDeclaration(signature: LayoutSignature, pos: Position)
     ReturnStmt(returns: List[Expression], pos: Position)
     Assignment(lhs: Expression, rhs: Expression, pos: Position)
@@ -256,15 +257,53 @@ interface CompilerContextRequest {
     def getGlobalStackIndex(): Int
     def registerLexerOutput(output: List[Token]): Unit
     def emitLexerOutput(): Unit / emit[(String, LexerContext)]
-    def getLayoutSignature(mod: String, name: String): Option[LayoutSignature]
-    def getVariableSignature(mod: String, name: String): Option[VariableSignature]
-    def getFunctionSignature(mod: String, name: String): Option[FunctionSignature]
+    def getLayoutSignature(name: QualifiedName): Option[LayoutSignature]
+    def getVariableSignature(name: QualifiedName): Option[VariableSignature]
+    def getFunctionSignature(name: QualifiedName): Option[FunctionSignature]
     def checkEntryPoint(): Bool
 __DEBUG_START__
     def emitModules(): Unit / emit[ModuleInfo]
 __DEBUG_END__
     def registerAST(ast: AST): Unit
     def emitAST(): AST / StopCompiler
+}
+
+def infixEq(l: Type, r: Type): Bool / CompilerContextRequest = (l, r) match {
+    case (Type::Bool(), Type::Bool()) => true
+    case (Type::UInt(), Type::UInt()) => true
+    case (Type::Int(), Type::Int()) => true
+    case (Type::Float(), Type::Float()) => true
+    case (Type::UByte(), Type::UByte()) => true
+    case (Type::Byte(), Type::Byte()) => true
+    case (Type::Pointer(p1), Type::Pointer(p2)) => (p1 == p2)
+    case (Type::Void(), Type::Void()) => true
+    case (Type::FunctionPointer(a1, r1), Type::FunctionPointer(a2, r2)) => (a1.compare(a2){(a, b) => a == b} && r1.compare(r2){(a, b) => a == b})
+    case (Type::Custom(n1), Type::Custom(n2)) => {
+        val q1 = QualifiedName(n1.mod match {
+            case Some(_) => n1.mod
+            case None() => Some(do getWorkingModule())
+        }, n1.name)
+        val q2 = QualifiedName(n2.mod match {
+            case Some(_) => n2.mod
+            case None() => Some(do getWorkingModule())
+        }, n2.name)
+        q1 == q2
+    }
+    case (_, _) => false
+}
+
+def infixEq(l: QualifiedName, r: QualifiedName): Bool = {
+    val b1: Bool = l.mod match {
+        case Some(m1) => r.mod match {
+            case Some(m2) => m1 == m2
+            case None() => false
+        }
+        case None() => r.mod match {
+            case Some(_) => false
+            case None() => true
+        }
+    }
+    b1 && (l.name == r.name)
 }
 
 def openRead(file: String): String / {CompilerContextRequest, InternalError} = {
@@ -408,34 +447,34 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
         def emitLexerOutput() = resume {
             processedFiles.each()
         }
-        def getLayoutSignature(mod, name) = resume(
-            modules.get(mod) match {
-                case Some(moduleinfo) => moduleinfo.layouts.get(name) match {
-                    case Some(layout) => if (not(layout.public) && (mod != currentModule)) { None() }
-                                         else { Some(layout) }
+        def getLayoutSignature(name) = resume(
+            name.mod match {
+                case None() => modules.get(currentModule).unpack().layouts.get(name.name)
+                case Some(moduleinfo) => modules.get(moduleinfo).unpack().layouts.get(name.name) match {
+                    case Some(layout) => if (not(layout.public) && (moduleinfo != currentModule)) { None() }
+                                           else { Some(layout) }
                     case None() => None()
                 }
-                case None() => None()
             }
         )
-        def getVariableSignature(mod, name) = resume(
-            modules.get(mod) match {
-                case Some(moduleinfo) => moduleinfo.variables.get(name) match {
-                    case Some(variable) => if (not(variable.public) && (mod != currentModule)) { None() }
-                                         else { Some(variable) }
+        def getVariableSignature(name) = resume(
+            name.mod match {
+                case None() => modules.get(currentModule).unpack().variables.get(name.name)
+                case Some(moduleinfo) => modules.get(moduleinfo).unpack().variables.get(name.name) match {
+                    case Some(variable) => if (not(variable.public) && (moduleinfo != currentModule)) { None() }
+                                           else { Some(variable) }
                     case None() => None()
                 }
-                case None() => None()
             }
         )
-        def getFunctionSignature(mod, name) = resume(
-            modules.get(mod) match {
-                case Some(moduleinfo) => moduleinfo.functions.get(name) match {
-                    case Some(function) => if (not(function.public) && (mod != currentModule)) { None() }
-                                         else { Some(function) }
+        def getFunctionSignature(name) = resume(
+            name.mod match {
+                case None() => modules.get(currentModule).unpack().functions.get(name.name)
+                case Some(moduleinfo) => modules.get(moduleinfo).unpack().functions.get(name.name) match {
+                    case Some(function) => if (not(function.public) && (moduleinfo != currentModule)) { None() }
+                                           else { Some(function) }
                     case None() => None()
                 }
-                case None() => None()
             }
         )
         def checkEntryPoint() = resume(modules.get("main") match {
