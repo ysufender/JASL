@@ -5,6 +5,17 @@
 #include "jasm.h"
 
 #include "stdlib.h"
+#include "float.h"
+
+Double string_to_float(struct Pos _str)
+{
+    Str str = (char*)c_bytearray_data(_str);
+    char* end;
+    float val = strtof(str, &end);
+
+    erasePositive(_str);
+    return (end == str) ? DBL_MAX : val;
+}
 
 Int random_range(Int min, Int max) {
     srand(time(NULL));

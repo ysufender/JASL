@@ -215,16 +215,19 @@ type UnaryOp {
 }
 
 type Expression {
-    Initialization(name: QualifiedName, initializers: List[Expression])
-    Identifier(name: QualifiedName)
-    Binary(binOp: BinaryOp)
-    Unary(unOp: UnaryOp)
-    Grouping(inside: Expression)
-    Literal(value: Literal)
-    Dot(lhs: Expression, member: String)
-    Scoping(lhs: QualifiedName, member: String)
-    Call(fn: Expression, args: List[Expression])
-    Block(inside: List[Statement], scope: ParserContext)
+    // done
+    Identifier(name: QualifiedName, pos: Position)
+    Binary(binOp: BinaryOp, pos: Position)
+    Unary(unOp: UnaryOp, pos: Position)
+    Grouping(inside: Expression, pos: Position)
+    Literal(value: Literal, pos: Position)
+    // Scoping(mod: String, member: String, pos: Position)
+    Block(inside: List[Statement], scope: ParserContext, pos: Position)
+    Dot(lhs: Expression, member: QualifiedName, pos: Position)
+    Call(fn: Expression, args: List[Expression], pos: Position)
+
+    // not done
+    Initialization(name: QualifiedName, initializers: List[Expression], pos: Position)
 }
 
 type Statement {
@@ -232,11 +235,11 @@ type Statement {
     VariableDefinition(signature: VariableSignature, initializer: Option[Expression], pos: Position)
     Conditional(condition: Expression, body: Statement, scope: ParserContext, fallback: Option[Statement], pos: Position)
     WhileStmt(condition: Expression, body: Statement, scope: ParserContext, pos: Position)
-    FnDefinition(signature: FunctionSignature, body: List[Statement], scope: ParserContext)
+    FnDefinition(signature: FunctionSignature, body: List[Statement], scope: ParserContext, pos: Position)
     // LayoutDeclaration(signature: LayoutSignature, pos: Position)
     ReturnStmt(returns: List[Expression], pos: Position)
     Assignment(lhs: Expression, rhs: Expression, pos: Position)
-    InlineAssembly(assembly: String)
+    InlineAssembly(assembly: String, pos: Position)
 }
 
 record LexerContext(name: String, tokens: List[Token])
@@ -253,7 +256,10 @@ interface CompilerContextRequest {
     def setWorkingModule(mod: String): Unit // set working module name to mangle function names.
     def getWorkingModule(): String // module name request.
     def checkDependency(file: String): Bool // import "file", if it's already processed returns true, if not returns false
-    def updateModule(variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layout: Map[String, LayoutSignature]): Unit / InternalError
+    // def updateModule(variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layout: Map[String, LayoutSignature]): Unit / InternalError
+    def addFunction(fn: FunctionSignature): Unit / InternalError
+    def addLayout(layout: LayoutSignature): Unit / InternalError
+    // def addVariable(): Unit / InternalError
     // def getWorkingModuleInfo(): ModuleInfo
     def increaseGlobalStackIndex(amount: Int): Unit
     def getGlobalStackIndex(): Int
@@ -270,6 +276,10 @@ __DEBUG_END__
     def emitAST(): AST / StopCompiler
 }
 
+def makePointer(signature: FunctionSignature): Type = {
+    FunctionPointer(signature.arguments.map{v => v.varType}, signature.returns)
+}
+
 def infixEq(l: Type, r: Type): Bool / CompilerContextRequest = (l, r) match {
     case (Type::Bool(), Type::Bool()) => true
     case (Type::UInt(), Type::UInt()) => true
@@ -277,6 +287,8 @@ def infixEq(l: Type, r: Type): Bool / CompilerContextRequest = (l, r) match {
     case (Type::Float(), Type::Float()) => true
     case (Type::UByte(), Type::UByte()) => true
     case (Type::Byte(), Type::Byte()) => true
+    case (Type::Pointer(Type::Void()), Type::Pointer(_)) => true
+    case (Type::Pointer(_), Type::Pointer(Type::Void())) => true
     case (Type::Pointer(p1), Type::Pointer(p2)) => (p1 == p2)
     case (Type::Void(), Type::Void()) => true
     case (Type::FunctionPointer(a1, r1), Type::FunctionPointer(a2, r2)) => (a1.compare(a2){(a, b) => a == b} && r1.compare(r2){(a, b) => a == b})
@@ -328,7 +340,7 @@ def unimplemented(file: String, line: String): Nothing / InternalError = {
 }
 
 def unreachable(file: String, line: String): Nothing / InternalError = {
-    do InternalError("This segment of the project is meant to be unreachable. Please contact the author to inform of this error.", file, line)
+    do InternalError("This segment of the project was meant to be unreachable. Please contact the author to inform of this error.", file, line)
 }
 
 def debugPrint(msg: String): Unit = {
@@ -368,7 +380,23 @@ def toType(tt: TokenType): Type / InternalError = tt match {
 def strEquals(l: String, r: String): Bool =
     l == r
 
-def strOrder(l: String, r: String): Ordering = if (strEquals(l, r)) { Equal() } else { Less() }
+def strOrder(l: String, r: String): Ordering = {
+    def loop(i: Int): Ordering = {
+        if (i >= l.length && i >= r.length) { Equal() }
+        else if (i >= l.length) { Less() }
+        else if (i >= r.length) { Greater() }
+        else {
+            val lc = l.unsafeCharAt(i)
+            val rc = r.unsafeCharAt(i)
+
+            if (lc < rc) { Less() }
+            else if (lc > rc) { Greater() }
+            else { loop(i + 1) }
+        }
+    }
+
+    loop(0)
+}
 
 // should be sure that option is defined
 def unpack[T](option: Option[T]): T = option match {
@@ -411,34 +439,45 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
         }
         def getWorkingModule() = resume(currentModule)
         def checkDependency(file) = resume(processedFiles.contains(file))
-        def updateModule(variables, functions, layouts) = resume {
-            if (modules.contains(currentModule)) try {
-                // overwrites
-                // modules = modules.put(currentModule, ModuleInfo(currentModule, variables, functions, layout))
+        def addFunction(fn) = resume { if (modules.contains(currentModule)) {
+            val oldInf = modules.get(currentModule).unpack()
 
-                // appends to the existing module
-                val oldInf = modules.get(currentModule).unpack()
-
-                try {
-                    val newInf = ModuleInfo(
-                        currentModule,
-                        oldInf.variables.combineMapNoDup(variables),
-                        oldInf.functions.combineMapNoDup(functions),
-                        oldInf.layouts.combineMapNoDup(layouts)
-                    )
-
-                    modules = modules.put(currentModule, newInf)
-                } with DuplicateKey[String] { k => {
-                    println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++k++"' in module '"++currentModule++"'.")
-                    exit(1)
-                }}
-            } with DuplicateKey[String] { signature => {
-                println("[PARSER ERROR] "++currentFile++" at "++"???:"++" Multiple definition of '"++currentModule++"::"++signature++"' in module '"++currentModule++"'.\n")
+            if (oldInf.functions.contains(fn.name)) {
+                println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++fn.name++"' in module '"++currentModule++"'.")
                 exit(1)
-            }} else {
-                do InternalError("Call 'context::setWorkingModule' before calling 'context::updateModule'", __FILE__, __LINE__)
             }
-        }
+
+            val newInf = ModuleInfo(
+                currentModule,
+                oldInf.variables,
+                oldInf.functions.put(fn.name, fn),
+                oldInf.layouts
+            )
+
+            modules = modules.put(currentModule, newInf)
+        } else {
+            do InternalError("Call 'context::setWorkingModule' before calling 'context::updateModule'", __FILE__, __LINE__)
+        }}
+        def addLayout(layout) = resume { if (modules.contains(currentModule)) {
+            val oldInf = modules.get(currentModule).unpack()
+
+            if (oldInf.layouts.contains(layout.name)) {
+                println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++layout.name++"' in module '"++currentModule++"'.")
+                exit(1)
+            }
+
+            val newInf = ModuleInfo(
+                currentModule,
+                oldInf.variables,
+                oldInf.functions,
+                oldInf.layouts.put(layout.name, layout)
+            )
+
+            modules = modules.put(currentModule, newInf)
+        } else {
+            do InternalError("Call 'context::setWorkingModule' before calling 'context::updateModule'", __FILE__, __LINE__)
+        }}
+        // def addVariable(): Unit / InternalError
         /*def getWorkingModuleInfo(): ModuleInfo = resume(
             try { modules.get(currentModule).unpack() }
             with InternalError { (_, _, _) => { <> }}
@@ -490,7 +529,7 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
             case Some(mod) => mod.functions.get("main") match {
                 case None() => false
                 case Some(fn) => fn.returns match {
-                    case Cons(Type::Int(), Nil()) => not(fn.public) && fn.arguments.isEmpty
+                    case Cons(Type::Void(), Nil()) => not(fn.public) && fn.arguments.isEmpty
                     case _ => false
                 }
             }

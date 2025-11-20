@@ -59,8 +59,8 @@ def main() = {
                 println("        and must have the signature fn () -> i32")
                 println("\n        Example:")
                 println("                module main")
-                println("                fn main() -> i32 {")
-                println("                    return 0;")
+                println("                fn main() -> void {")
+                println("                ")
                 println("                }")
                 exit(1)
             }
@@ -70,6 +70,8 @@ __DEBUG_START__
                 with tokenHandler(tokenized);
                 with contextHandler(emptyParserContext())
                 println("\nModule Info: "++name)
+
+                do setWorkingModule(name)
 
                 println("\tVariables:")
                 feed[VariableSignature] { vars.eachValue } { v => println("\t\t"++v.show()) }
@@ -88,6 +90,10 @@ __DEBUG_END__
                 debugPrint("Parse called for "++do getWorkingFile()++" module "++do getWorkingModule())
                 do registerAST(parser::parse(context.tokens))
             }}
+
+            while (true) {
+                val ast: AST = do emitAST()
+            }
 
             // val ast: AST = parser::parse(tokenized)
             // val asmfile: String = generator::generate_il(AST)

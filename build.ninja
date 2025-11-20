@@ -32,13 +32,13 @@ rule cc
     pool = cpool
     deps = gcc
     depfile = $out.d
-    command = gcc -O2 $in -c -o $out
+    command = gcc -O3 $in -c -o $out
 
 rule ccc
     pool = cpool
     deps = gcc
     depfile = $out.d
-    command = gcc -O2 $in -o $out
+    command = gcc -O3 $in -o $out
 
 rule link
     pool = linkpool
