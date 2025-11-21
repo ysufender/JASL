@@ -1,0 +1,43 @@
+module mem
+
+pub fn free(pointer: ptr, size: u32) -> void {
+    asm {
+        mov &ecx
+        rdl %ui 0
+        mov &ebx
+        del
+    }
+    return;
+}
+
+pub fn malloc(size: u32) -> ptr {
+    asm {
+        mov &ecx
+    }
+    let ret: ptr = nullptr;
+    asm {
+        dcr %ui &sp 4
+        alc
+        rda &ebx
+    }
+    return ret;
+}
+
+pub fn memcpy(src: ptr, dest: ptr, size: u32) -> void {
+    asm {
+        mov &ecx
+        swp %ui
+        mov &ebx
+        dcr %ui &sp 8
+        mov &eax
+        mcp %s %s
+    }
+    return;
+}
+
+pub fn offset(pointer: ptr, offBy: i32) -> ptr {
+    asm {
+        add %i
+    }
+    return pointer;
+}

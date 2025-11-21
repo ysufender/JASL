@@ -1,0 +1,13 @@
+module io
+
+include "lib/jasl/string.jasl"
+
+pub fn string::String::println() -> void {
+    asm {
+        inc %b &flg 1
+        mov 4 &bl
+        cal 0x0
+        dcr %b &flg 1
+    }
+    return;
+}

@@ -371,6 +371,7 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
                     case "i32" => do add_token(Token(LiteralT(IntT()), numberText, pos(numberText.length)))
                     case "u8"  => do add_token(Token(LiteralT(UByteT()),  numberText, pos(numberText.length)))
                     case "i8"  => do add_token(Token(LiteralT(ByteT()),  numberText, pos(numberText.length)))
+                    case "f" => do add_token(Token(LiteralT(FloatT()), numberText, pos(numberText.length)))
                     case "" =>
                         if (isFloat)
                             do add_token(Token(LiteralT(FloatT()), numberText, pos(numberText.length)))

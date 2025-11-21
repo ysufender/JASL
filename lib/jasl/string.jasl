@@ -1,1 +1,33 @@
-module string 
+module string
+
+include "lib/jasl/memory.jasl"
+
+pub wrapper layout String {
+    data: ptr;
+}
+
+pub fn String::size() -> u32 {
+    asm { mov &ebx rda %ui mov 4 &bl ret }
+    return 0u32;
+}
+
+pub fn String::data() -> i8* {
+    return mem::offset(this.data, 4);
+}
+
+pub fn String::delete() -> void {
+    return mem::free(this.data, size(this)+4u32);
+}
+
+pub fn String::clone() -> String {
+    let size: u32 = size(this);
+    let new: ptr = mem::malloc(size+4u32);
+    let _d: void = mem::memcpy(this.data, new, size);
+    return String(new);
+}
+
+pub fn empty() -> String {
+    let new: ptr = mem::malloc(4u32);
+    asm { mov &ebx stc %ui 0 ldc %ui }
+    return String(new);
+}

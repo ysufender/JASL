@@ -8,6 +8,7 @@ import map
 
 import native/native
 
+
 val helpLines: List[String] = [
     "Here",
     "No need to thank me",
@@ -221,25 +222,28 @@ type Expression {
     Unary(unOp: UnaryOp, pos: Position)
     Grouping(inside: Expression, pos: Position)
     Literal(value: Literal, pos: Position)
-    // Scoping(mod: String, member: String, pos: Position)
-    Block(inside: List[Statement], scope: ParserContext, pos: Position)
+    // Block(inside: List[Statement], scope: ParserContext, pos: Position)
     Dot(lhs: Expression, member: QualifiedName, pos: Position)
     Call(fn: Expression, args: List[Expression], pos: Position)
-
-    // not done
+    Scoping(name: QualifiedName, pos: Position)
     Initialization(name: QualifiedName, initializers: List[Expression], pos: Position)
+    ExpressionList(inside: List[Expression], pos: Position)
 }
 
 type Statement {
+    // done
+    FnDefinition(signature: FunctionSignature, body: List[Statement], scope: ParserContext, pos: Position)
+    ReturnStmt(returns: List[Expression], pos: Position)
+    InlineAssembly(assembly: String, pos: Position)
+    VariableDefinition(signature: List[VariableSignature], initializer: Option[Expression], pos: Position)
+    Block(inside: List[Statement], scope: ParserContext, pos: Position)
+
+    // not done
     ExpressionStatement(expr: Expression, pos: Position)
-    VariableDefinition(signature: VariableSignature, initializer: Option[Expression], pos: Position)
     Conditional(condition: Expression, body: Statement, scope: ParserContext, fallback: Option[Statement], pos: Position)
     WhileStmt(condition: Expression, body: Statement, scope: ParserContext, pos: Position)
-    FnDefinition(signature: FunctionSignature, body: List[Statement], scope: ParserContext, pos: Position)
     // LayoutDeclaration(signature: LayoutSignature, pos: Position)
-    ReturnStmt(returns: List[Expression], pos: Position)
     Assignment(lhs: Expression, rhs: Expression, pos: Position)
-    InlineAssembly(assembly: String, pos: Position)
 }
 
 record LexerContext(name: String, tokens: List[Token])
@@ -266,7 +270,7 @@ interface CompilerContextRequest {
     def registerLexerOutput(output: List[Token]): Unit
     def emitLexerOutput(): Unit / emit[(String, LexerContext)]
     def getLayoutSignature(name: QualifiedName): Option[LayoutSignature]
-    def getVariableSignature(name: QualifiedName): Option[VariableSignature]
+    // def getVariableSignature(name: QualifiedName): Option[VariableSignature]
     def getFunctionSignature(name: QualifiedName): Option[FunctionSignature]
     def checkEntryPoint(): Bool
 __DEBUG_START__
@@ -412,7 +416,20 @@ def combineMapNoDup[T, U](m1: Map[T, U], m2: Map[T, U]): Map[T, U] / DuplicateKe
     m1.union(m2)
 }
 
-def emptyModule(name: String): ModuleInfo = ModuleInfo(name, map::empty[String, VariableSignature](box strOrder), map::empty[String, FunctionSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
+val builtInFunctions: List[FunctionSignature] = [
+    /*FunctionSignature("offset", true, false, None(), [
+        VariableSignature("input", false, false, false, false, 0, Type::Pointer(Type::Void())),
+        VariableSignature("offBy", false, false, false, false, 4, Type::Int())
+    ], [Type::Pointer(Type::Void())])*/
+]
+
+def emptyModule(name: String): ModuleInfo = {
+    var fns = map::empty[String, FunctionSignature](box strOrder)
+    builtInFunctions.foreach { fn => {
+        fns = fns.put(fn.name, fn)
+    }}
+    ModuleInfo(name, map::empty[String, VariableSignature](box strOrder), fns, map::empty[String, LayoutSignature](box strOrder))
+}
 
 def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, InternalError} }: T / {InternalError, StopCompiler} = {
     var currentFile: String = ""
@@ -497,13 +514,17 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
         def getLayoutSignature(name) = resume(
             name.mod match {
                 case None() => modules.get(currentModule).unpack().layouts.get(name.name)
-                case Some(moduleinfo) => modules.get(moduleinfo).unpack().layouts.get(name.name) match {
-                    case Some(layout) => if (not(layout.public) && (moduleinfo != currentModule)) { None() }
-                                           else { Some(layout) }
-                    case None() => None()
-                }
+                case Some(moduleinfo) =>
+                    if (modules.contains(moduleinfo)) {
+                        modules.get(moduleinfo).unpack().layouts.get(name.name) match {
+                            case Some(layout) => if (not(layout.public) && (moduleinfo != currentModule)) { None() }
+                                                   else { Some(layout) }
+                            case None() => None()
+                        }
+                    } else { None() }
             }
         )
+/*
         def getVariableSignature(name) = resume(
             name.mod match {
                 case None() => modules.get(currentModule).unpack().variables.get(name.name)
@@ -514,14 +535,18 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
                 }
             }
         )
+*/
         def getFunctionSignature(name) = resume(
             name.mod match {
                 case None() => modules.get(currentModule).unpack().functions.get(name.name)
-                case Some(moduleinfo) => modules.get(moduleinfo).unpack().functions.get(name.name) match {
-                    case Some(function) => if (not(function.public) && (moduleinfo != currentModule)) { None() }
-                                           else { Some(function) }
-                    case None() => None()
-                }
+                case Some(moduleinfo) =>
+                    if (modules.contains(moduleinfo)) {
+                        modules.get(moduleinfo).unpack().functions.get(name.name) match {
+                            case Some(function) => if (not(function.public) && (moduleinfo != currentModule)) { None() }
+                                                   else { Some(function) }
+                            case None() => None()
+                        }
+                    } else { None() }
             }
         )
         def checkEntryPoint() = resume(modules.get("main") match {
