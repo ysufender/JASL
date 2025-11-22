@@ -62,6 +62,7 @@ def typeSize(t: Type): Int / {ParserError, ParserContextRequest, CompilerContext
         case None() => do ParserError("Given layout '"++name.show++"' couldn't be found in this context.", (do previous()).position)
     }
     case Type::FunctionPointer(_, _) => 4
+    case _ => 0
 }
 
 def foreachTypeList(list: List[Type]) { act: Type => Unit / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} }: Unit / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = list match {
@@ -120,10 +121,14 @@ def show(t: Type): String / {TokenRequest, ParserError, ParserContextRequest, Co
         str = str++")"
         str
     }
+    case TypeType(inner) => "type "++inner.show
+    case InternalAny() => "any"
+    case Depends(_) => "depends"
+    case Any(list) => "any of "++list.show
 }
 
 def typeString(t: Type): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = t.show()
-def typeString(dt: DataType): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = dt.toType().typeString()
+// def typeString(dt: DataType): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = dt.toType().typeString()
 
 __DEBUG_START__
 def show(v: VariableSignature): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
@@ -184,7 +189,6 @@ def isComptime(stmt: Statement): Bool / {InternalError, ParserContextRequest, Pa
     case FnDefinition(signature, body, scope, _) => signature.comptime
     // case LayoutDeclaration(signature, _) => true // Come on.
     case ReturnStmt(returns, _) => returns.all { r => isComptime(r) }
-    case Assignment(lhs, rhs, _) => isComptime(lhs) && isComptime(rhs)
     case InlineAssembly(_, _) => false
     case Block(inside, _, _) => inside.all { st => st.isComptime }
 }
@@ -210,6 +214,7 @@ def isComptime(op: UnaryOp): Bool / {InternalError, ParserContextRequest, Parser
 }
 
 def isComptime(expr: Expression): Bool / {InternalError, ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = expr match {
+    case Assignment(lhs, rhs, _) => isComptime(lhs) && isComptime(rhs)
     case Initialization(_, initializers, _) => initializers.all { init => init.isComptime }
     case Identifier(name, pos) =>
         if (do hasVar(name)) { (do getVar(name)).comptime }
@@ -448,14 +453,16 @@ def tokenHandler[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {
 def handleTypeName(): Type / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest, InternalError} = {
     val t: Type = (do advance()).tokenType match {
         case IdentifierT() => {
-            val mod = (do previous()).text
+            val mod = Some((do previous()).text)
             do checkReturnOrCrash(Symbol(DoubleColon()))
             (do advance()).tokenType match {
-                case TypeNameT(_) => Custom(QualifiedName(Some(mod), (do previous()).text))
+                // case TypeNameT(CustomT(name)) => Custom(QualifiedName(Some(mod), name))
+                case TypeNameT(t) => t.toType(mod)
                 case _ => do ParserError("Expected typename.", (do previous()).position)
             }
         }
-        case TypeNameT(_) => (do previous()).tokenType.toType()
+        // case TypeNameT(CustomT(name)) => Custom(QualifiedName(Some(do getWorkingModule()), name))
+        case TypeNameT(_) => (do previous()).tokenType.toType(Some(do getWorkingModule()))
         case Keyword(Fn()) => {
             // fn (params) -> returns
             do checkReturnOrCrash(Symbol(LParen()))
@@ -513,12 +520,15 @@ def handleTypeName(): Type / {TokenRequest, ParserError, ParserContextRequest, C
         case _ => do ParserError("Expected typename.", (do previous()).position)
     }
 
-    t match {
+    def check(t: Type): Type = t match {
         case Custom(name) =>
             if (do hasLayout(name)) t
             else do ParserError("Couldn't resolve type '"++t.typeString++"' in this context. Maybe you forgot to mark it 'pub'?", (do previous()).position)
+        case Pointer(inner) => Pointer(inner.check)
         case _ => t
     }
+
+    check(t)
 }
 
 def handleTypeNameNoCrashExceptUndefined(): Option[Type] / {TokenRequest, ParserContextRequest, CompilerContextRequest, ParserError, InternalError} = {
@@ -837,7 +847,8 @@ def __evalLogic(lhs: Expression, rhs: Expression, pos: Position): List[Type] / {
 }
 
 def evalType(expr: Expression): List[Type] / {InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = expr match {
-    case Initialization(name, _, pos) => [Custom(name)]
+    case Assignment(lhs, rhs, _) => lhs.evalType
+    case Initialization(name, _, pos) => [name]
     case Identifier(name, pos) => 
         if (do hasVar(name)) {
             [(do getVar(name)).varType]
@@ -886,7 +897,8 @@ def evalType(expr: Expression): List[Type] / {InternalError, TokenRequest, Parse
         case Literal::Float(_) => [Type::Float()]
         case Literal::UByte(_) => [Type::UByte()]
         case Literal::Byte(_) => [Type::Byte()]
-        case Literal::Nullptr() => [Type::Pointer(Type::Void())]
+        case Literal::Nullptr() => [Type::Pointer(Type::InternalAny())]
+        case Literal::TypeLiteral(inner) => [Type::TypeType(inner)]
     }
     case Dot(lhs, member, _) => try {
         lhs.evalType.head match {
@@ -899,9 +911,22 @@ def evalType(expr: Expression): List[Type] / {InternalError, TokenRequest, Parse
     } with Exception[MissingValue] {
         def raise(_, _) = unreachable(__FILE__, __LINE__)
     }
-    case Scoping(name, pos) => do ParserError("Scoping expressions are compile-time and they don't return any types.", pos)
+    case Scoping(name, pos) => do getFunctionSignature(name) match {
+        case Some(signature) => [signature.makePointer]
+        case None() => do ParserError("Type scopings are compile-time and return no types.", pos)
+    }
     case Call(fn, args, _) => fn.evalType match {
-        case Cons(FunctionPointer(_, returns), Nil()) => returns
+        case Cons(FunctionPointer(_, returns), Nil()) => {
+            def __inner(input: List[Type], acc: List[Type]): List[Type] = input match {
+                case Cons(head, rest) => head match {
+                    case Depends(decide) => __inner(rest, decide(args.evalType).append(acc))
+                    case _ => __inner(rest, Cons(head, acc))
+                }
+                case Nil() => acc
+            }
+
+            __inner(returns, [])
+        }
         case _ => unreachable(__FILE__, __LINE__)
     }
     //case Block(inside, scope, _) => unimplemented(__FILE__, __LINE__)
@@ -968,27 +993,6 @@ def handleReturnStatement(): Statement / {FunctionOwnership, ReturnTypeRegister,
     var returns: List[Expression] = []
 
     (do peek()).tokenType match {
-        // Only allow ExpressionList for multiple returns
-        /*case Symbol(LParen()) => {
-            do advance()
-            while (not(do is_eof()) && (do peek()).tokenType != Symbol(RParen())) {
-                returns = Cons(parseExpression(), returns)
-                if ((do peek()).tokenType != Symbol(RParen()))
-                    val _ = do checkReturnOrCrash(Symbol(Comma()))
-                ()
-            }
-            if (do is_eof())
-                do ParserError("Unclosed parentheses in return statement.", pos)
-            do advance()
-            do checkReturnOrCrash(Symbol(Semicolon()))
-            returns = returns.reverse
-            if (returns.isEmpty || returns.evalType.all{r => r == Type::Void()})
-                do returns([Type::Void()], pos)
-            else
-                do returns(returns.evalType, pos)
-            ReturnStmt(returns, pos)
-        }
-        */
         case Symbol(Semicolon()) => {
             do advance()
             do returns([Void()], pos)
@@ -1081,47 +1085,6 @@ def handleVariableDef(): Statement / {FunctionOwnership, ReturnTypeRegister, Int
     }
 }
 
-def handleAssignment(): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
-    def isSuitable(expr: Expression): Bool = expr match {
-        case Identifier(_, _) => true
-        case Grouping(inside, _) => inside.isSuitable
-        case Dot(lhs, _, _) => lhs.isSuitable
-        case ExpressionList(inside, _) => inside match {
-            case Cons(head, Nil()) => head.isSuitable
-            case _ => false
-        }
-        case _ => false
-    }
-
-    do rewind()
-    val position: Position = (do peek()).position
-    val left: Expression = parseExpression()
-
-    left match {
-        case Identifier(name, pos) => 
-            if (do hasVar(name) && do getVar(name).mutable) {}
-            else if (do hasVar(name)) do ParserError("Given variable '"++name.show++"' is not marked as mutable.", position)
-            else do ParserError("Given variable '"++name.show++"' doesn't exists in this cope.", position)
-        case Dot(lhs, member, pos) =>
-            if (lhs.isSuitable) {
-                do ParserError("Assignments to fields are not (yet) allowed. Stay tuned.", position)
-            }
-            else do ParserError("Expected an lvalue on the left of the assignment.", position)
-        case _ => do ParserError("Expected an lvalue on the left of the assignment.", position)
-    }
-
-    do checkReturnOrCrash(Symbol(Assign()))
-
-    val right: Expression = parseExpression()
-
-    do checkReturnOrCrash(Symbol(Semicolon()))
-
-    if (left.evalType.compare(right.evalType){(a, b) => a == b})
-        Assignment(left, right, position)
-    else
-        do ParserError("Missmatching types in assignment operation. Expected '"++left.evalType.show++"' got '"++right.evalType.show++"'.", position)
-}
-
 def handleBlockStatement(context: ParserContext): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     with contextHandler(context);
     
@@ -1204,33 +1167,6 @@ def checkReturns(conditional: Statement): Unit / {FunctionOwnership, ReturnTypeR
 }
 
 def parseStatement(): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = (do advance()).tokenType match {
-    case Keyword(Fn()) => handleFunctionDef()
-    case Assembly() => InlineAssembly((do previous()).text, (do previous()).position)
-    case Keyword(Return()) => handleReturnStatement()
-    case Keyword(Let()) => handleVariableDef()
-    case Symbol(LBrace()) => handleBlockStatement(do createChildContext())
-    case Keyword(If()) => handleConditional()
-    case Keyword(While()) => handleWhile()
-    case IdentifierT() =>
-        if (do hasVar(QualifiedName(None(), do previous().text))) handleAssignment()
-        else {
-            do rewind()
-            val pos: Position = do previous().position
-            val expr: Expression = parseExpression()
-            expr match {
-                case Call(_, _, _) => ()
-                case _ => do ParserError("Expressions beside calls are not supported here.", pos)
-            }
-            do checkReturnOrCrash(Symbol(Semicolon()))
-            ExpressionStatement(expr, pos)
-        }
-        /*else if (do getFunctionSignature(QualifiedName(None(), do previous().text)).isDefined) {
-            do rewind()
-            ExpressionStatement(parseExpression(), do previous().position)
-        }
-        else unimplemented(__FILE__, __LINE__)
-        */
-
     // skip these
     case Keyword(Preprocessor(_)) => {
         do advance()
@@ -1248,8 +1184,47 @@ def parseStatement(): Statement / {FunctionOwnership, ReturnTypeRegister, Intern
     case EOF() => InlineAssembly("", (do previous()).position)
     case Symbol(Semicolon()) => InlineAssembly("", (do previous()).position)
 
+    case Keyword(Fn()) => handleFunctionDef()
+    case Assembly() => InlineAssembly((do previous()).text, (do previous()).position)
+    case Keyword(Return()) => handleReturnStatement()
+    case Keyword(Let()) => handleVariableDef()
+    case Symbol(LBrace()) => handleBlockStatement(do createChildContext())
+    case Keyword(If()) => handleConditional()
+    case Keyword(While()) => handleWhile()
+    case IdentifierT() =>
+/*        if (do hasVar(QualifiedName(None(), do previous().text))) handleAssignment()
+        else {*/
+            do rewind()
+            val pos: Position = do previous().position
+            val expr: Expression = parseExpression()
+            expr match {
+                case Call(_, _, _) => ()
+                case Assignment(_, _, _) => ()
+                case _ => do ParserError("Expressions beside calls and assignments are not supported here.", pos)
+            }
+            do checkReturnOrCrash(Symbol(Semicolon()))
+            ExpressionStatement(expr, pos)
+//        }
+    case _ => {
+        do rewind()
+        val pos: Position = do previous().position
+        val expr: Expression = parseExpression()
+        expr match {
+            case Call(_, _, _) => ()
+            case _ => do ParserError("Expressions beside calls are not supported here.", pos)
+        }
+        do checkReturnOrCrash(Symbol(Semicolon()))
+            ExpressionStatement(expr, pos)
+    }
+        /*else if (do getFunctionSignature(QualifiedName(None(), do previous().text)).isDefined) {
+            do rewind()
+            ExpressionStatement(parseExpression(), do previous().position)
+        }
+        else unimplemented(__FILE__, __LINE__)
+        */
+
     //case Keyword(Let()) => handleVariableDefinition()
-    case _ => do ParserError("Unexpected token '"++(do previous()).text++"', expected statement.", (do previous()).position)
+    // case _ => do ParserError("Unexpected token '"++(do previous()).text++"', expected statement.", (do previous()).position)
 }
 
 def parsePrimary(): Expression / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
@@ -1281,7 +1256,8 @@ def parsePrimary(): Expression / {FunctionOwnership, ReturnTypeRegister, Interna
                     typeOrIdent.tokenType match {
                         case TypeNameT(typename) => typename match {
                             case CustomT(name) => do getLayoutSignature(QualifiedName(Some(token.text), name)) match {
-                                case Some(signature) => Scoping(QualifiedName(Some(token.text), name), token.position)
+                                // TODO: Use scoping only for functions. Turn the custom types to TypeLiteral.
+                                case Some(signature) => Literal(TypeLiteral(Custom(QualifiedName(Some(token.text), name))), token.position)
                                 case None() => do ParserError("Couldn't find type '"++name++"' in module '"++token.text++"'.", token.position)
                             }
                             case _ => do ParserError("Type '"++typeOrIdent.text++"' is not a part of any module.", typeOrIdent.position)
@@ -1308,7 +1284,8 @@ def parsePrimary(): Expression / {FunctionOwnership, ReturnTypeRegister, Interna
 
                 ExpressionList(list.reverse, token.position)
             }
-            case TypeNameT(CustomT(name)) => Scoping(QualifiedName(Some(do getWorkingModule()), name), token.position)
+            //case TypeNameT(CustomT(name)) => Scoping(QualifiedName(Some(do getWorkingModule()), name), token.position)
+            case TypeNameT(t) => Literal(TypeLiteral(t.toType(Some(do getWorkingModule()))), token.position)
             case _ => do ParserError("Expected expression, got unexpected token '"++token.text++"'", token.position)
         }
     } with Exception[WrongFormat] {
@@ -1320,49 +1297,110 @@ def parsePostfix(): Expression / {FunctionOwnership, ReturnTypeRegister, Interna
     def recurse(expr: Expression): Expression = (do peek()).tokenType match {
         case Symbol(DotSym()) => try {
             val pos: Position = (do advance()).position
-            val member: String = (do checkReturnOrCrash(IdentifierT())).text
-            val lType: List[Type] = expr.evalType 
-            if (lType.size != 1)
-                do ParserError("Member access is only supported on single values.", pos)
 
-            def _checkIfTemp(expr: Expression, pos: Position): Unit = expr match {
-                case Identifier(_, _) => ()
-                case Dot(_, _, _) => ()
-                case Grouping(inside, pos) => inside._checkIfTemp(pos)
-                case _ => do ParserError("Member access can't be done on temporary values, yet. Sorry.", pos)
-            }
+            def _direct(expr: Expression, member: String) = {
+                val lType = expr.evalType
+                if (lType.size != 1)
+                    do ParserError("Member access is only supported on single values.", pos)
 
-            expr._checkIfTemp(pos)
+                lType.head match {
+                    case Type::Custom(typename) => do getLayoutSignature(typename) match {
+                        case Some(signature) => try {
+                            if (not(do canAccess(lType.head)) && signature.wrapper) {
+                                do ParserError("Can't access the fields of a wrapper type inside a function that is not owned by that type.", pos)
+                            }
 
-            lType.head match {
-                case Type::Custom(typename) => do getLayoutSignature(typename) match {
-                    case Some(signature) => try {
-                        if (not(do canAccess(lType.head)) && signature.wrapper) {
-                            do ParserError("Can't access the fields of a wrapper type inside a function that is not owned by that type.", pos)
+                            val matchingFieldL: List[VariableSignature] = signature.fields.filter{f => f.name == member}
+
+                            if (matchingFieldL.size != 1) {
+                                do ParserError("Given type '"++typename.show++"' doesn't have a field named '"++member++"'.", pos)
+                            } else if (matchingFieldL.head.public || do canAccess(lType.head)){
+                                Dot(expr, QualifiedName(None(), member), pos)
+                            } else {
+                                do ParserError("Can't access the private field '"++member++"' of type '"++lType.head.typeString++"' in a function that is not owned by the type.", pos)
+                            }
+                        } with Exception[MissingValue] {
+                            def raise(_, _) = unreachable(__FILE__, __LINE__)
                         }
-
-                        val matchingFieldL: List[VariableSignature] = signature.fields.filter{f => f.name == member}
-
-                        if (matchingFieldL.size != 1) {
-                            do ParserError("Given type '"++typename.show++"' doesn't have a field named '"++member++"'.", pos)
-                        } else if (matchingFieldL.head.public || do canAccess(lType.head)){
-                            recurse(Dot(expr, QualifiedName(None(), member), pos))
-                        } else {
-                            do ParserError("Can't access the private field '"++member++"' of type '"++lType.head.typeString++"' in a function that is not owned by the type.", pos)
-                        }
-                    } with Exception[MissingValue] {
-                        def raise(_, _) = unreachable(__FILE__, __LINE__)
+                        case None() => unreachable(__FILE__, __LINE__)
                     }
-                    case None() => unreachable(__FILE__, __LINE__)
+                    case FunctionPointer(_, _) => do ParserError("Sadly, you can't access the members of a function. Since they don't have any.", pos)
+                    case Type::Pointer(Type::Custom(typename)) => do getLayoutSignature(typename) match {
+                        case Some(signature) => try {
+                            if (not(do canAccess(lType.head)) && signature.wrapper) {
+                                do ParserError("Can't access the fields of a wrapper type inside a function that is not owned by that type.", pos)
+                            }
+
+                            val matchingFieldL: List[VariableSignature] = signature.fields.filter{f => f.name == member}
+
+                            if (matchingFieldL.size != 1) {
+                                do ParserError("Given type '"++typename.show++"' doesn't have a field named '"++member++"'.", pos)
+                            } else if (matchingFieldL.head.public || do canAccess(lType.head)){
+                                val offset = Call(Identifier(QualifiedName(None(), "offset"), pos), [expr, Literal(Literal::UInt(matchingFieldL.head.stackIndex), pos)], pos)
+                                Call(Identifier(QualifiedName(None(), "ptrcast"), pos), [offset, Literal(TypeLiteral(matchingFieldL.head.varType), pos)], pos)
+                            } else {
+                                do ParserError("Can't access the private field '"++member++"' of type '"++lType.head.typeString++"' in a function that is not owned by the type.", pos)
+                            }
+                        } with Exception[MissingValue] {
+                            def raise(_, _) = unreachable(__FILE__, __LINE__)
+                        }
+                        case None() => unreachable(__FILE__, __LINE__)
+                    }
+                    case _ => do ParserError("I don't quite understand what you're trying to do here.", pos)
                 }
-                case FunctionPointer(_, _) => do ParserError("Sadly, you can't access the members of a function. Since they don't have any.", pos)
-                case _ => unimplemented(__FILE__, __LINE__)
             }
+
+            def _fnCall(expr: Expression, member: String) = {
+                do peek().tokenType match {
+                    case Symbol(DoubleColon()) => {
+                        do advance()
+                        val function: String = do checkReturnOrCrash(IdentifierT()).text
+                        val name = QualifiedName(Some(member), function)
+
+                        do getFunctionSignature(name) match {
+                            case Some(signature) => Dot(expr, name, pos)
+                            case None() => do ParserError("Couldn't find function '"++name.show++"' in this context.", pos)
+                        }
+                    }
+                    case Symbol(LParen()) => do getFunctionSignature(QualifiedName(None(), member)) match {
+                        case Some(signature) => Dot(expr, QualifiedName(None(), member), pos)
+                        case None() =>
+                            do ParserError(
+                                "You're either doing a member acces or a function call. A function named '"++member++"' couldn't be found and otherwise field access on temporary values are not allowed.",
+                                pos
+                            )
+                    }
+                    case _ => _direct(expr, member)
+                }
+            }
+
+            def _inner(expr: Expression, pos: Position, member: String): Expression = expr match {
+                case Dot(lhs, name, _) => {
+                    if (do hasFunction(QualifiedName(None(), member)) || do peek().tokenType == Symbol(DoubleColon()))
+                        _fnCall(expr, member)
+                    else
+                        _direct(expr, member)
+                }
+                case Grouping(inside, pos) => inside._inner(pos, member)
+                case Identifier(name, _) => _fnCall(expr, member)
+                case _ => {
+                    if (do check(Symbol(LParen())))
+                        _fnCall(expr, member)
+                    else if (do check(Symbol(DoubleColon())))
+                        _fnCall(expr, member)
+                    else if (expr.evalType is Cons(Type::Custom(_), Nil()))
+                        do ParserError("Member access can't be done on temporary values, yet. Sorry.", pos)
+                    else
+                        _direct(expr, member)
+                }
+            }
+
+            recurse(expr._inner(pos, (do checkReturnOrCrash(IdentifierT())).text))
         } with Exception[MissingValue] {
             def raise(_, _) = unreachable(__FILE__, __LINE__)
         }
         case Symbol(LParen()) => expr match {
-            case Scoping(name, pos) => do getLayoutSignature(name) match {
+            case Literal(TypeLiteral(Custom(name)), pos) => do getLayoutSignature(name) match {
                 case Some(signature) => {
                     val pos: Position = (do advance()).position
                     var initializer: List[Expression] = []
@@ -1379,7 +1417,29 @@ def parsePostfix(): Expression / {FunctionOwnership, ReturnTypeRegister, Interna
                     initializer = initializer.reverse
                     if (not(initializer.evalType.compare(signature.fields.map{f => f.varType}){(a, b) => a == b}))
                         do ParserError("Missmatching types on type initialization. Expected '"++signature.fields.map{f => f.varType}.show++"' got '"++initializer.evalType.show++"'.", pos)
-                    recurse(Initialization(name, initializer, pos))
+                    recurse(Initialization(Custom(name), initializer, pos))
+                }
+                case None() => unreachable(__FILE__, __LINE__)
+            }
+            case Dot(lhs, function, dpos) => do getFunctionSignature(function) match {
+                case Some(signature) => {
+                    val pos: Position = (do advance()).position
+                    var args: List[Expression] = []
+
+                    while (not(do is_eof()) && (do peek()).tokenType != Symbol(RParen())) {
+                        args = Cons(parseExpression(), args)
+                        if ((do peek()).tokenType != Symbol(RParen()))
+                            val _ = do checkReturnOrCrash(Symbol(Comma()))
+                        ()
+                    }
+                    if (do is_eof())
+                        do ParserError("Unclosed parentheses in function call.", pos)
+                    do advance()
+                    args = args.reverse
+                    args = Cons(lhs, args)
+                    if (not(args.evalType.compare(signature.arguments.map{a => a.varType}){(a, b) => a == b}))
+                        do ParserError("Missmatching types on function call. Expected '"++signature.arguments.map{a => a.varType}.show++"' got '"++args.evalType.show++"'.", pos)
+                    recurse(Call(Identifier(function, dpos), args, pos))
                 }
                 case None() => unreachable(__FILE__, __LINE__)
             }
@@ -1405,7 +1465,6 @@ def parsePostfix(): Expression / {FunctionOwnership, ReturnTypeRegister, Interna
                             do ParserError("Missmatching types on function call. Expected '"++fnArgs.show++"' got '"++args.evalType.show++"'.", pos)
                         recurse(Call(expr, args, pos))
                     }
-
                     case _ => do ParserError("Attempt to call non-function expression.", pos)
                 }
             }
@@ -1527,8 +1586,51 @@ def parseOrExpression(): Expression / {FunctionOwnership, ReturnTypeRegister, In
     recurse(parseAndExpression())
 }
 
+def parseAssignmentExpression(): Expression / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    def isSuitable(expr: Expression): Bool = expr match {
+        case Identifier(_, _) => true
+        case Grouping(inside, _) => inside.isSuitable
+        case Dot(lhs, member, pos) => lhs.evalType match {
+            case Cons(Type::Custom(name), Nil()) => do getLayoutSignature(name) match {
+                case Some(signature) => try {
+                    if (signature.fields.filter{f => f.name == member.name}.head.mutable)
+                        lhs.isSuitable
+                    else
+                        do ParserError("Can't modify the immutable field '"++member.show++"'.", pos)
+                } with Exception[MissingValue] {
+                    def raise(_, _) = unreachable(__FILE__, __LINE__)
+                }
+                case None() => unreachable(__FILE__, __LINE__)
+            }
+            case _ => lhs.isSuitable
+        }
+        case ExpressionList(inside, _) => inside match {
+            case Cons(head, Nil()) => head.isSuitable
+            case _ => false
+        }
+        case _ => false
+    }
+
+    def recurse(expr: Expression): Expression = do peek().tokenType match {
+        case Symbol(Assign()) => {
+            val pos: Position = do peek().position
+            if (not(expr.isSuitable))
+                do ParserError("Expected an lvalue on the left side of the expression.", pos)
+            do advance()
+            val rhs: Expression = parseExpression()
+            if (rhs.evalType.compare(expr.evalType){(a, b) => a == b})
+                recurse(Assignment(expr, rhs, pos))
+            else
+                do ParserError("Type missmatch in assignment operation. Expected '"++expr.evalType.show++"' got '"++rhs.evalType.show++"'.", pos)
+        }
+        case _ => expr
+    }
+
+    recurse(parseOrExpression())
+}
+
 def parseExpression(): Expression / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
-    parseOrExpression()
+    parseAssignmentExpression()
 }
 
 def parse(tokens: List[Token]): AST / {InternalError, CompilerContextRequest} = {

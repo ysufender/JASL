@@ -29,13 +29,13 @@ rule cc
     pool = cpool
     deps = gcc
     depfile = $out.d
-    command = gcc -O3 $in -c -o $out
+    command = gcc -ggdb -O0 $in -c -o $out
 
 rule ccc
     pool = cpool
     deps = gcc
     depfile = $out.d
-    command = gcc -O3 $in -o $out
+    command = gcc -ggdb -O0 $in -o $out
 
 rule link
     pool = linkpool
@@ -43,7 +43,7 @@ rule link
 
 rule lc
     pool = cpool
-    command = llc $in -O0 -opaque-pointers -filetype=obj -o $out
+    command = llc $in --debugger-tune=gdb -O0 -opaque-pointers -filetype=obj -o $out
 
 rule las
     pool = cpool

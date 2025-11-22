@@ -30,13 +30,3 @@ pub fn memcpy(src: ptr, dest: ptr, size: u32) -> void {
         mcp %s %s
     }
 }
-
-pub fn offset(pointer: ptr, offBy: i32) -> ptr {
-    asm { add %i }
-    return pointer;
-}
-
-pub fn uoffset(pointer: ptr, offBy: u32) -> ptr {
-    asm { add %i }
-    return pointer;
-}

@@ -48,6 +48,16 @@ def unpackOrCrash[T](optional: Option[T]): T / InternalError = optional match {
     case None() => do InternalError("Expected a defined option.", __FILE__, __LINE__)
 }
 
+def compareHead[T](head: List[T], full: List[T]) {eq: (T, T) => Bool }: Bool = {
+    if (head is Nil()) true
+    else if (full is Nil()) false
+    else if (head is Cons(h1, r1) and full is Cons(h2, r2)) {
+        if (h1.eq(h2)) compareHead(r1, r2) { eq }
+        else false
+    }
+    else false
+}
+
 def compare[T](lhs: List[T], rhs: List[T]) { eq: (T, T) => Bool }: Bool = {
     if (lhs is Cons(head1, rest1) and rhs is Cons(head2, rest2)) {
         if (head1.eq(head2)) compare(rest1, rest2) { eq }
@@ -68,6 +78,10 @@ type Type {
     Void()
     FunctionPointer(arguments: List[Type], returns: List[Type])
     Custom(name: QualifiedName)
+    InternalAny()
+    TypeType(inner: Type)
+    Depends(decide: List[Type] => List[Type] at { io })
+    Any(these: List[Type])
     // MAYBE: add type Runtime() for runtime sized types.
     // because the bytecode can return differing sizes from functions and
     // thanks to bl register the caller can know the return size. Also
@@ -84,13 +98,6 @@ record FunctionSignature(
     returns: List[Type]
 )
 
-record LayoutSignature(
-    name: String,
-    public: Bool,
-    wrapper: Bool,
-    fields: List[VariableSignature]
-)
-
 record VariableSignature(
     name: String,
     public: Bool,
@@ -99,6 +106,13 @@ record VariableSignature(
     global: Bool,
     stackIndex: Int,
     varType: Type
+)
+
+record LayoutSignature(
+    name: String,
+    public: Bool,
+    wrapper: Bool,
+    fields: List[VariableSignature]
 )
 
 type PreprocessorKeywordType {
@@ -193,6 +207,7 @@ type Literal {
     UByte(value: Int)
     Byte(value: Int)
     Nullptr()
+    TypeLiteral(value: Type)
 }
 
 type BinaryOp {
@@ -226,8 +241,11 @@ type Expression {
     Dot(lhs: Expression, member: QualifiedName, pos: Position)
     Call(fn: Expression, args: List[Expression], pos: Position)
     Scoping(name: QualifiedName, pos: Position)
-    Initialization(name: QualifiedName, initializers: List[Expression], pos: Position)
+    Initialization(name: Type, initializers: List[Expression], pos: Position)
     ExpressionList(inside: List[Expression], pos: Position)
+
+    // not done
+    Assignment(lhs: Expression, rhs: Expression, pos: Position)
 }
 
 type Statement {
@@ -240,9 +258,6 @@ type Statement {
     Conditional(condition: Expression, body: Statement, scope: ParserContext, fallback: Option[Statement], pos: Position)
     WhileStmt(condition: Expression, body: Statement, scope: ParserContext, pos: Position)
     ExpressionStatement(expr: Expression, pos: Position)
-
-    // partially done
-    Assignment(lhs: Expression, rhs: Expression, pos: Position)
 
     // LayoutDeclaration(signature: LayoutSignature, pos: Position)
 }
@@ -286,14 +301,19 @@ def makePointer(signature: FunctionSignature): Type = {
 }
 
 def infixEq(l: Type, r: Type): Bool / CompilerContextRequest = (l, r) match {
+    case (Type::Any(list), other) => list.any{t => t == other}
+    case (other, Type::Any(list)) => list.any{t => t == other}
+    case (_, InternalAny()) => true
+    case (InternalAny(), _) => true
+    case (Type::Pointer(InternalAny()), Type::FunctionPointer(_, _)) => true
+    case (Type::FunctionPointer(_, _), Type::Pointer(InternalAny())) => true
     case (Type::Bool(), Type::Bool()) => true
     case (Type::UInt(), Type::UInt()) => true
     case (Type::Int(), Type::Int()) => true
     case (Type::Float(), Type::Float()) => true
     case (Type::UByte(), Type::UByte()) => true
+    case (TypeType(t1), TypeType(t2)) => t1 == t2
     case (Type::Byte(), Type::Byte()) => true
-    case (Type::Pointer(Type::Void()), Type::Pointer(_)) => true
-    case (Type::Pointer(_), Type::Pointer(Type::Void())) => true
     case (Type::Pointer(p1), Type::Pointer(p2)) => (p1 == p2)
     case (Type::Void(), Type::Void()) => true
     case (Type::FunctionPointer(a1, r1), Type::FunctionPointer(a2, r2)) => (a1.compare(a2){(a, b) => a == b} && r1.compare(r2){(a, b) => a == b})
@@ -364,21 +384,21 @@ def show(n: QualifiedName): String = n.mod match {
     case None() => n.name
 }
 
-def toType(dt: DataType): Type = dt match {
+def toType(dt: DataType, mod: Option[String]): Type = dt match {
     case BoolT(_) => Bool()
-    case StringT() => Custom(QualifiedName(None(), "String"))
+    case StringT() => Custom(QualifiedName(Some("string"), "String"))
     case UIntT() => UInt()
     case IntT() => Int()
     case FloatT() => Float()
     case UByteT() => UByte()
     case ByteT() => Byte()
-    case PointerT(ptrType) => Pointer(ptrType.toType())
+    case PointerT(ptrType) => Pointer(ptrType.toType(mod))
     case VoidT() => Void()
-    case CustomT(name) => Custom(QualifiedName(None(), name))
+    case CustomT(name) => Custom(QualifiedName(mod, name))
 }
 
-def toType(tt: TokenType): Type / InternalError = tt match {
-    case TypeNameT(dt) => dt.toType()
+def toType(tt: TokenType, mod: Option[String]): Type / InternalError = tt match {
+    case TypeNameT(dt) => dt.toType(mod)
     case _ => do InternalError("Can't turn a token type other than TypeNameT to Type", __FILE__, __LINE__)
 }
 
@@ -433,6 +453,73 @@ def emptyModule(name: String): ModuleInfo = {
 }
 
 def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, InternalError} }: T / {InternalError, StopCompiler} = {
+    val _builtIns = [
+        FunctionSignature("offset", true, false, None(), [
+            VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny())),
+            VariableSignature("off", false, true, false, false, 4, Type::Any([Type::Int(), Type::UInt()])),
+        ], [ Type::Depends(box { l => {
+            if (l is Cons(head, _))
+                [head]
+            else
+                <>
+        }})]),
+
+        FunctionSignature("sizeof", true, true, None(), [
+            VariableSignature("var", false, true, false, false, 0, Type::InternalAny())
+        ], [ Type::UInt() ]),
+
+        FunctionSignature("ptrcast", true, true, None(), [
+            VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny())),
+            VariableSignature("newType", false, true, false, false, 4, Type::TypeType(Type::InternalAny()))
+        ], [ Type::Depends(box { l => {
+            if (l is Cons(_, Cons(Type::TypeType(newType), _)))
+                [Type::Pointer(newType)]
+            else <>
+        }})]),
+
+        FunctionSignature("intcast", true, false, None(), [
+            VariableSignature("var", false, true, false, false, 0, Type::Any([
+                Type::Int(), Type::UInt(), Type::Byte(), Type::UByte(), Type::Float()
+            ])),
+            VariableSignature("to", false, true, false, false, 4, TypeType(Type::Any([
+                Type::Int(), Type::UInt(), Type::Byte(), Type::UByte(), Type::Float()
+            ])))
+        ], [ Type::Depends( box { l => {
+            if (l is Cons(_, Cons(Type::TypeType(newType), _)))
+                [newType]
+            else <>
+        }})]),
+
+        FunctionSignature("deref", true, false, None(), [
+            VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny()))
+        ], [ Type::Depends(box { l => {
+            if (l is Cons(Type::Pointer(returnType), Nil()))
+                [returnType]
+            else <>
+        }})]),
+
+        FunctionSignature("ref", true, false, None(), [
+            VariableSignature("var", false, true, false, false, 0, Type::InternalAny())
+        ], [ Type::Depends(box { l => {
+            if (l is Cons(t, Nil()))
+                [Type::Pointer(t)]
+            else <>
+        }})]),
+
+        // newValue is not type checked in parser, type check at IL generation
+        FunctionSignature("set", true, false, None(), [
+            VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny())),
+            VariableSignature("newValue", false, true, false, false, 4, Type::InternalAny())
+        ], [ Type::Depends(box { l => {
+            if (l is Cons(t, Nil()))
+                [t]
+            else <>
+        }})])
+    ]
+    var builtIns: Map[String, FunctionSignature] = map::empty(box strOrder)
+
+    _builtIns.foreach{b => builtIns = builtIns.put(b.name, b)}
+
     var currentFile: String = ""
     var currentModule: String = ""
     var processedFiles: Map[String, LexerContext] = map::empty(box strOrder)
@@ -460,7 +547,9 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
         def addFunction(fn) = resume { if (modules.contains(currentModule)) {
             val oldInf = modules.get(currentModule).unpack()
 
-            if (oldInf.functions.contains(fn.name)) {
+            if (builtIns.contains(fn.name)) {
+                println("[WARNING] "++currentFile++" at ???: User defined function '"++fn.name++"' will be shadowed by the built-in '"++fn.name++"'. Use a qualified name ('"++currentModule++"::"++fn.name++"') to use the function.")
+            } else if (oldInf.functions.contains(fn.name)) {
                 println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++fn.name++"' in module '"++currentModule++"'.")
                 exit(1)
             }
@@ -538,7 +627,8 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
         )
 */
         def getFunctionSignature(name) = resume(
-            name.mod match {
+            if (name.mod is None() and builtIns.contains(name.name)) builtIns.get(name.name)
+            else name.mod match {
                 case None() => modules.get(currentModule).unpack().functions.get(name.name)
                 case Some(moduleinfo) =>
                     if (modules.contains(moduleinfo)) {
