@@ -1,0 +1,75 @@
+ninja_required_version = 1.11
+
+libdir = lib
+etcdir = etc
+effektdir = $libdir/effekt
+sourcedir = src
+debug = false
+basebuild = build
+builddir = $basebuild/release
+
+pool cpool
+    depth = 4
+
+pool linkpool
+    depth = 4
+
+pool ppool
+    depth = 4
+
+rule prp
+    pool = ppool
+    command = ./$basebuild/preprocessor $in $debug > ${out}
+
+rule efc
+    pool = cpool
+    command = effekt -c --backend llvm $in -o $builddir --includes $builddir
+
+rule cc
+    pool = cpool
+    deps = gcc
+    depfile = $out.d
+    command = gcc -O3 $in -c -o $out
+
+rule ccc
+    pool = cpool
+    deps = gcc
+    depfile = $out.d
+    command = gcc -O3 $in -o $out
+
+rule link
+    pool = linkpool
+    command = g++ $in -O3 -flto -no-pie -o $out -luv -lpthread -ldl
+
+rule lc
+    pool = cpool
+    command = llc $in -O3 -opaque-pointers -filetype=obj -o $out
+
+rule las
+    pool = cpool
+    command = llvm-as $in -o $out -opaque-pointers
+
+build $basebuild/preprocessor: ccc $etcdir/preprocessor.c
+
+build $basebuild/bytearray.o: cc $effektdir/bytearray.c
+build $basebuild/main.o: cc $effektdir/main.c
+build $basebuild/io.o: cc $effektdir/io.c
+build $basebuild/panic.o: cc $effektdir/panic.c
+
+#build $builddir/rts.bs: las $effektdir/rts.ll
+#build $builddir/rts.o: lc $builddir/rts.bs
+
+build $builddir/lexer/lexer.effekt: prp $sourcedir/lexer/lexer.effekt | $basebuild/preprocessor
+build $builddir/parser/parser.effekt: prp $sourcedir/parser/parser.effekt | $basebuild/preprocessor
+build $builddir/context/context.effekt: prp $sourcedir/context/context.effekt | $basebuild/preprocessor
+build $builddir/native/native.effekt: prp $sourcedir/native/native.effekt | $basebuild/preprocessor
+build $builddir/main.effekt: prp $sourcedir/main.effekt | $basebuild/preprocessor
+
+build $builddir/main.ll: efc $builddir/main.effekt | $builddir/lexer/lexer.effekt $builddir/parser/parser.effekt $builddir/context/context.effekt $builddir/native/native.effekt
+
+build $builddir/jasl.bs: las $builddir/main.ll
+build $builddir/jasl.o: lc $builddir/jasl.bs
+
+build $basebuild/jasm_wrapper.o: cc $libdir/jasm/jasm.c | $libdir/jasm/jasm.h
+
+build $builddir/jasl: link $builddir/jasl.o $basebuild/main.o $basebuild/io.o $basebuild/panic.o $basebuild/bytearray.o  $basebuild/jasm_wrapper.o $libdir/jasm/libjasm.a

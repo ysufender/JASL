@@ -1,4 +1,4 @@
-module mem
+module memory
 
 pub fn free(pointer: ptr, size: u32) -> void {
     asm {
@@ -7,13 +7,10 @@ pub fn free(pointer: ptr, size: u32) -> void {
         mov &ebx
         del
     }
-    return;
 }
 
 pub fn malloc(size: u32) -> ptr {
-    asm {
-        mov &ecx
-    }
+    asm { mov &ecx }
     let ret: ptr = nullptr;
     asm {
         dcr %ui &sp 4
@@ -32,12 +29,14 @@ pub fn memcpy(src: ptr, dest: ptr, size: u32) -> void {
         mov &eax
         mcp %s %s
     }
-    return;
 }
 
 pub fn offset(pointer: ptr, offBy: i32) -> ptr {
-    asm {
-        add %i
-    }
+    asm { add %i }
+    return pointer;
+}
+
+pub fn uoffset(pointer: ptr, offBy: u32) -> ptr {
+    asm { add %i }
     return pointer;
 }

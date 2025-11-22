@@ -1,6 +1,9 @@
 module string
 
 include "lib/jasl/memory.jasl"
+include "lib/jasl/io.jasl"
+
+// TODO: Improve this.
 
 pub wrapper layout String {
     data: ptr;
@@ -12,22 +15,71 @@ pub fn String::size() -> u32 {
 }
 
 pub fn String::data() -> i8* {
-    return mem::offset(this.data, 4);
+    return memory::offset(this.data, 4);
 }
 
 pub fn String::delete() -> void {
-    return mem::free(this.data, size(this)+4u32);
+    return memory::free(this.data, size(this)+4u32);
 }
 
 pub fn String::clone() -> String {
     let size: u32 = size(this);
-    let new: ptr = mem::malloc(size+4u32);
-    let _d: void = mem::memcpy(this.data, new, size);
+    let new: ptr = memory::malloc(size+4u32);
+    memory::memcpy(this.data, new, size);
     return String(new);
 }
 
+// returns false if index is out of bounds
+pub fn String::get(index: u32) -> (bool, u8) {
+    if size(this) <= index {
+        return {false, 0u8};
+    }
+
+    asm { add %ui mov &ebx }
+    let mut char: u8;
+    asm { dcr %ui &sp 1 rda %ub }
+    return {true, char};
+}
+
+pub fn String::equals(other: String) -> bool {
+    let thisSize: u32 = size(this);
+    if thisSize != size(other) {
+        return false;
+    }
+
+    let mut condition: bool = true;
+    let mut index: u32 = 0u32;
+    while condition {
+        if get(this, index) != get(other, index) {
+            return false;
+        }
+
+        index = index + 1u32;
+        if index == thisSize {
+            condition = false;
+        }
+    }
+
+    return false;
+}
+
+// returns false if out of bounds occurs
+pub fn String::substring(start: u32, n: u32) -> (bool, String) {
+    if start + n > size(this) {
+        return {false, String(nullptr)};
+    }
+
+    let substr: ptr = memory::malloc(n+4u32);
+    memory::memcpy(memory::uoffset(this.data, start), substr, n);
+    return {true, String(substr)};
+}
+
+pub fn String::isEmpty() -> bool {
+    return size(this) == 0u32;
+}
+
 pub fn empty() -> String {
-    let new: ptr = mem::malloc(4u32);
+    let new: ptr = memory::malloc(4u32);
     asm { mov &ebx stc %ui 0 ldc %ui }
     return String(new);
 }

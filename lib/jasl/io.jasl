@@ -9,5 +9,4 @@ pub fn string::String::println() -> void {
         cal 0x0
         dcr %b &flg 1
     }
-    return;
 }

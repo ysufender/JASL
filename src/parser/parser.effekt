@@ -27,6 +27,7 @@ interface TokenRequest {
     def checkOrCrash(token: TokenType): Bool / ParserError
     def checkReturnOrCrash(token: TokenType): Token / ParserError
     def advance(): Token / ParserError
+    def rewind(): Token
     def peek(): Token
     def previous(): Token
     def is_eof(): Bool
@@ -268,6 +269,15 @@ def parser_report[T] { prog: () => T / {ParserError, InternalError} }: T / {Inte
     }}
 }
 
+
+def ignoreReturns[T]() { prog: () => T / ReturnTypeRegister }: T / {ParserError, TokenRequest, CompilerContextRequest, ParserContextRequest} = {
+    try { prog() }
+    with ReturnTypeRegister {
+        def returns(_, _) = resume { }
+        def addPath() = resume(())
+    }
+}
+
 def returnHandler[T]() { prog: () => T / ReturnTypeRegister }: T / {ParserError, TokenRequest, CompilerContextRequest, ParserContextRequest} = {
     try { prog() }
     with ReturnTypeRegister {
@@ -287,8 +297,8 @@ def returnHandler[T](expected: List[Type]) { prog: () => T / ReturnTypeRegister 
 
     try {
         val res: T = prog()
-        if (returns != codePaths)
-            do ParserError("All code paths doesn't return in this context. Check again please.", pos)
+        if (returns < codePaths)
+            do ParserError("All code paths doesn't return in this context. Paths: "++codePaths.show++", Returns: "++returns.show++". Check again please.", pos)
         res
     }
     with ReturnTypeRegister {
@@ -422,6 +432,10 @@ def tokenHandler[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {
             }
         }
         def advance() = resume { next() }
+        def rewind() = {
+            tokens = Cons(previousToken, tokens)
+            resume(previousToken)
+        }
         def peek() = resume(try { tokens.head }
                             with Exception[MissingValue] {
                                 def raise(_, _) = previousToken
@@ -816,10 +830,10 @@ def __evalBin(lhs: Expression, rhs: Expression, pos: Position): List[Type] / {In
 def __evalLogic(lhs: Expression, rhs: Expression, pos: Position): List[Type] / {InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     val t1: List[Type] = lhs.evalType
     val t2: List[Type] = rhs.evalType
-    if (t1.compare(t2){(a, b) => a == b} && t1.compare([Type::Bool()]){(a, b) => a == b})
-        t1
+    if (t1.compare(t2){(a, b) => a == b})
+        [Type::Bool()]
     else
-        do ParserError("Type missmatch between the sides of binary expression. Expected 'bool' on both, got '"++t2.typeString++"' instead on one side.", pos)
+        do ParserError("Type missmatch between the sides of binary expression. Expected '"++t1.typeString++"' on both, got '"++t2.typeString++"' instead on one side.", pos)
 }
 
 def evalType(expr: Expression): List[Type] / {InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = expr match {
@@ -836,12 +850,12 @@ def evalType(expr: Expression): List[Type] / {InternalError, TokenRequest, Parse
         case Subtraction(lhs, rhs) => __evalBin(lhs, rhs, pos)
         case Division(lhs, rhs) => __evalBin(lhs, rhs, pos)
         case Multiplication(lhs, rhs) => __evalBin(lhs, rhs, pos)
-        case Equality(lhs, rhs) => __evalBin(lhs, rhs, pos)
-        case Inequality(lhs, rhs) => __evalBin(lhs, rhs, pos)
-        case Great(lhs, rhs) => __evalBin(lhs, rhs, pos)
-        case Lesser(lhs, rhs) => __evalBin(lhs, rhs, pos)
-        case GreaterEqual(lhs, rhs) => __evalBin(lhs, rhs, pos)
-        case LesserEqual(lhs, rhs) => __evalBin(lhs, rhs, pos)
+        case Equality(lhs, rhs) => __evalLogic(lhs, rhs, pos)
+        case Inequality(lhs, rhs) => __evalLogic(lhs, rhs, pos)
+        case Great(lhs, rhs) => __evalLogic(lhs, rhs, pos)
+        case Lesser(lhs, rhs) => __evalLogic(lhs, rhs, pos)
+        case GreaterEqual(lhs, rhs) => __evalLogic(lhs, rhs, pos)
+        case LesserEqual(lhs, rhs) => __evalLogic(lhs, rhs, pos)
         case And(lhs, rhs) => __evalLogic(lhs, rhs, pos)
         case Or(lhs, rhs) => __evalLogic(lhs, rhs, pos)
     }
@@ -926,14 +940,27 @@ def handleFunctionDef(): Statement / {InternalError, TokenRequest, ParserError, 
     var functionScope = do createChildContext()
     functionScope = ParserContext(functionScope.parent, functionScope.stackIndex, args)
 
-    val (body, scope) = parseBlockStatement(functionScope) match {
+    val (body, scope) = handleBlockStatement(functionScope) match {
         case Block(i, s, _) => (i, s)
         case _ => unreachable(__FILE__, __LINE__)
     }
+    
+    try {
+        body.last match {
+            case Conditional(_, _, _, _, _) => body.last.checkReturns
+            case _ => ()
+        }
+    } with Exception[MissingValue] {
+        def raise(_, _) = ()
+    }
+
+    if (signature.returns.compare([Type::Void()]){(a, b) => a == b})
+        do returns([Type::Void()], pos)
+
     FnDefinition(signature, body, scope, pos)
 }
 
-def parseReturnStatement(): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleReturnStatement(): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     if (do isTopLevel())
         do ParserError("Returns in top-level are not allowed.", (do previous()).position)
 
@@ -941,7 +968,8 @@ def parseReturnStatement(): Statement / {FunctionOwnership, ReturnTypeRegister, 
     var returns: List[Expression] = []
 
     (do peek()).tokenType match {
-        case Symbol(LParen()) => {
+        // Only allow ExpressionList for multiple returns
+        /*case Symbol(LParen()) => {
             do advance()
             while (not(do is_eof()) && (do peek()).tokenType != Symbol(RParen())) {
                 returns = Cons(parseExpression(), returns)
@@ -960,6 +988,7 @@ def parseReturnStatement(): Statement / {FunctionOwnership, ReturnTypeRegister, 
                 do returns(returns.evalType, pos)
             ReturnStmt(returns, pos)
         }
+        */
         case Symbol(Semicolon()) => {
             do advance()
             do returns([Void()], pos)
@@ -1052,14 +1081,155 @@ def handleVariableDef(): Statement / {FunctionOwnership, ReturnTypeRegister, Int
     }
 }
 
+def handleAssignment(): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    def isSuitable(expr: Expression): Bool = expr match {
+        case Identifier(_, _) => true
+        case Grouping(inside, _) => inside.isSuitable
+        case Dot(lhs, _, _) => lhs.isSuitable
+        case ExpressionList(inside, _) => inside match {
+            case Cons(head, Nil()) => head.isSuitable
+            case _ => false
+        }
+        case _ => false
+    }
+
+    do rewind()
+    val position: Position = (do peek()).position
+    val left: Expression = parseExpression()
+
+    left match {
+        case Identifier(name, pos) => 
+            if (do hasVar(name) && do getVar(name).mutable) {}
+            else if (do hasVar(name)) do ParserError("Given variable '"++name.show++"' is not marked as mutable.", position)
+            else do ParserError("Given variable '"++name.show++"' doesn't exists in this cope.", position)
+        case Dot(lhs, member, pos) =>
+            if (lhs.isSuitable) {
+                do ParserError("Assignments to fields are not (yet) allowed. Stay tuned.", position)
+            }
+            else do ParserError("Expected an lvalue on the left of the assignment.", position)
+        case _ => do ParserError("Expected an lvalue on the left of the assignment.", position)
+    }
+
+    do checkReturnOrCrash(Symbol(Assign()))
+
+    val right: Expression = parseExpression()
+
+    do checkReturnOrCrash(Symbol(Semicolon()))
+
+    if (left.evalType.compare(right.evalType){(a, b) => a == b})
+        Assignment(left, right, position)
+    else
+        do ParserError("Missmatching types in assignment operation. Expected '"++left.evalType.show++"' got '"++right.evalType.show++"'.", position)
+}
+
+def handleBlockStatement(context: ParserContext): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    with contextHandler(context);
+    
+    var body: List[Statement] = []
+    val pos: Position = (do previous()).position
+    while ((do peek()).tokenType != Symbol(RBrace())) {
+        body = Cons(parseStatement(), body)
+    }
+    do advance()
+
+    Block(body.reverse, do getCurrentContext(), pos)
+}
+
+def handleConditional(): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    with ignoreReturns;
+
+    val pos: Position = (do previous()).position
+    val condition: Expression = parseExpression()
+    val scope: ParserContext = do createChildContext()
+
+    if (not(condition.evalType.compare([Type::Bool()]){(a, b) => a == b}))
+        do ParserError("If condition must return type '(bool)'. Got '"++condition.evalType.show++"' instead.", pos)
+
+    val body: Statement = (do advance()).tokenType match {
+        case Symbol(LBrace()) => handleBlockStatement(scope)
+        case _ => do ParserError("Expected a block after if statement.", pos)
+    }
+
+    val fallback: Option[Statement] = (do peek()).tokenType match {
+        case Keyword(Else()) => {
+            do advance()
+            (do advance()).tokenType match {
+                case Symbol(LBrace()) => Some(handleBlockStatement(do createChildContext()))
+                case Keyword(If()) => Some(handleConditional())
+                case _ => do ParserError("Expected either an 'if' statement or a block after 'else'.", (do previous()).position)
+            }
+        }
+        case _ => None()
+    }
+
+    Conditional(condition, body, scope, fallback, pos)
+}
+
+def handleWhile(): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    val pos: Position = (do previous()).position
+    val condition: Expression = parseExpression()
+    val scope: ParserContext = do createChildContext()
+
+    if (not(condition.evalType.compare([Type::Bool()]){(a, b) => a == b}))
+        do ParserError("While condition must return type '(bool)'. Got '"++condition.evalType.show++"' instead.", pos)
+
+    val body: Statement = (do advance()).tokenType match {
+        case Symbol(LBrace()) => handleBlockStatement(scope)
+        case _ => do ParserError("Expected a block after if statement.", pos)
+    }
+
+    WhileStmt(condition, body, scope, pos)
+}
+
+def checkReturns(conditional: Statement): Unit / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = conditional match {
+    case ReturnStmt(returns, pos) => do returns(returns.evalType, pos)
+    case Block(inside, scope, _) => {
+        with contextHandler(scope);
+        inside.foreach{s => s.checkReturns}
+    }
+    case Conditional(_, body, scope, fallback, _) => {
+        contextHandler(scope) {
+            do addPath()
+            body.checkReturns
+        }
+
+        fallback match {
+            case Some(stmt) => {
+                stmt.checkReturns
+            }
+            case None() => ()
+        }
+    }
+    case _ => ()
+}
+
 def parseStatement(): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = (do advance()).tokenType match {
     case Keyword(Fn()) => handleFunctionDef()
     case Assembly() => InlineAssembly((do previous()).text, (do previous()).position)
-    case Keyword(Return()) => parseReturnStatement()
+    case Keyword(Return()) => handleReturnStatement()
     case Keyword(Let()) => handleVariableDef()
-    case Symbol(LBrace()) => parseBlockStatement(do createChildContext())
-
-    // TODO: Continue the statements from here.
+    case Symbol(LBrace()) => handleBlockStatement(do createChildContext())
+    case Keyword(If()) => handleConditional()
+    case Keyword(While()) => handleWhile()
+    case IdentifierT() =>
+        if (do hasVar(QualifiedName(None(), do previous().text))) handleAssignment()
+        else {
+            do rewind()
+            val pos: Position = do previous().position
+            val expr: Expression = parseExpression()
+            expr match {
+                case Call(_, _, _) => ()
+                case _ => do ParserError("Expressions beside calls are not supported here.", pos)
+            }
+            do checkReturnOrCrash(Symbol(Semicolon()))
+            ExpressionStatement(expr, pos)
+        }
+        /*else if (do getFunctionSignature(QualifiedName(None(), do previous().text)).isDefined) {
+            do rewind()
+            ExpressionStatement(parseExpression(), do previous().position)
+        }
+        else unimplemented(__FILE__, __LINE__)
+        */
 
     // skip these
     case Keyword(Preprocessor(_)) => {
@@ -1080,19 +1250,6 @@ def parseStatement(): Statement / {FunctionOwnership, ReturnTypeRegister, Intern
 
     //case Keyword(Let()) => handleVariableDefinition()
     case _ => do ParserError("Unexpected token '"++(do previous()).text++"', expected statement.", (do previous()).position)
-}
-
-def parseBlockStatement(context: ParserContext): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
-    with contextHandler(context);
-    
-    var body: List[Statement] = []
-    val pos: Position = (do previous()).position
-    while ((do peek()).tokenType != Symbol(RBrace())) {
-        body = Cons(parseStatement(), body)
-    }
-    do advance()
-
-    Block(body.reverse, do getCurrentContext(), pos)
 }
 
 def parsePrimary(): Expression / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
@@ -1137,7 +1294,7 @@ def parsePrimary(): Expression / {FunctionOwnership, ReturnTypeRegister, Interna
                 }
                 case _ => Identifier(QualifiedName(None(), token.text), token.position)
             }
-            // case Symbol(LBrace()) => parseBlockStatement(do createChildContext())
+            // case Symbol(LBrace()) => handleBlockStatement(do createChildContext())
             case Symbol(LBrace()) => {
                 var list: List[Expression] = []
 
@@ -1149,7 +1306,7 @@ def parsePrimary(): Expression / {FunctionOwnership, ReturnTypeRegister, Interna
                 }
                 do advance()
 
-                ExpressionList(list, token.position)
+                ExpressionList(list.reverse, token.position)
             }
             case TypeNameT(CustomT(name)) => Scoping(QualifiedName(Some(do getWorkingModule()), name), token.position)
             case _ => do ParserError("Expected expression, got unexpected token '"++token.text++"'", token.position)
@@ -1167,6 +1324,16 @@ def parsePostfix(): Expression / {FunctionOwnership, ReturnTypeRegister, Interna
             val lType: List[Type] = expr.evalType 
             if (lType.size != 1)
                 do ParserError("Member access is only supported on single values.", pos)
+
+            def _checkIfTemp(expr: Expression, pos: Position): Unit = expr match {
+                case Identifier(_, _) => ()
+                case Dot(_, _, _) => ()
+                case Grouping(inside, pos) => inside._checkIfTemp(pos)
+                case _ => do ParserError("Member access can't be done on temporary values, yet. Sorry.", pos)
+            }
+
+            expr._checkIfTemp(pos)
+
             lType.head match {
                 case Type::Custom(typename) => do getLayoutSignature(typename) match {
                     case Some(signature) => try {
