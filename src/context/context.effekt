@@ -134,6 +134,7 @@ type KeywordType {
     If()
     Else()
     Mut()
+    Defer()
 }
 
 type SymbolType {
@@ -258,8 +259,10 @@ type Statement {
     Conditional(condition: Expression, body: Statement, scope: ParserContext, fallback: Option[Statement], pos: Position)
     WhileStmt(condition: Expression, body: Statement, scope: ParserContext, pos: Position)
     ExpressionStatement(expr: Expression, pos: Position)
-
     // LayoutDeclaration(signature: LayoutSignature, pos: Position)
+
+    // not done
+    DeferStmt(statement: Statement, pos: Position)
 }
 
 record LexerContext(name: String, tokens: List[Token])
@@ -363,6 +366,10 @@ def feed[T] { stream: () => Unit / emit[T] } { prog: (T) => Unit / {CompilerCont
 
 def unimplemented(file: String, line: String): Nothing / InternalError = {
     do InternalError("This segment of the project is still unimplemented. Please stay tuned.", file, line)
+}
+
+def unimplemented(file: String, line: String, message: String): Nothing / InternalError = {
+    do InternalError("This segment of the project is still unimplemented. Please stay tuned.\n\t\tDetailed Message: "++message, file, line)
 }
 
 def unreachable(file: String, line: String): Nothing / InternalError = {
@@ -502,7 +509,13 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
             if (l is Cons(t, Nil()))
                 [t]
             else <>
-        }})])
+        }})]),
+
+        FunctionSignature("static_assert", true, true, None(), [
+            VariableSignature("condition", false, false, true, false, 0, Type::Bool())
+        ], [ Type::InternalAny() ]),
+
+        FunctionSignature("unreachable", true, true, None(), [], [ Type::InternalAny() ])
     ]
     var builtIns: Map[String, FunctionSignature] = map::empty(box strOrder)
 

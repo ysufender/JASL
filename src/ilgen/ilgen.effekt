@@ -1,0 +1,29 @@
+module ilgen
+
+import parser/parser
+import lexer/lexer
+import context/context
+import stringbuffer
+
+interface ILGenerator {
+    def spit(asm: String): Unit
+}
+
+// TODO: This place.
+
+def ilgen[T](target: String) { prog: T / ILGenerator }: T / GenerationError = {
+    with filesystem;
+    with stringbuffer;
+
+    try { prog() }
+    with ILGenerator {
+        def spit(asm) = {
+            do write(asm)
+            do write("\n")
+        }
+    }
+
+    do writeFile(do flush(), target)
+}
+
+def gen(target: String)

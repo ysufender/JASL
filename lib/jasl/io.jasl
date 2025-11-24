@@ -10,3 +10,7 @@ pub fn string::String::println() -> void {
         dcr %b &flg 1
     }
 }
+
+pub fn readln() -> string::String {
+    return static_assert(false);
+}

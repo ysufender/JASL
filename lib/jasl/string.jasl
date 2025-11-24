@@ -10,18 +10,22 @@ pub wrapper layout String {
 }
 
 pub fn String::size() -> u32 {
+    if this.data == nullptr { return 0u32; }
     return this.data.ptrcast(u32).deref();
 }
 
 pub fn String::data() -> i8* {
+    if this.data == nullptr { return nullptr; }
     return this.data.offset(4).ptrcast(i8);
 }
 
-pub fn String::delete() -> bool {
+pub fn String::free() -> bool {
+    if this.data == nullptr { return false; }
     return this.data.memory::free(this.size()+4u32);
 }
 
 pub fn String::clone() -> String {
+    if this.data == nullptr { return empty(); }
     let size := this.size();
     let new := memory::malloc(size+4u32, nullptr);
     this.data.memory::memcpy(new, size);
@@ -30,6 +34,7 @@ pub fn String::clone() -> String {
 
 // returns false if index is out of bounds
 pub fn String::get(index: u32) -> (bool, u8) {
+    if this.data == nullptr { return {false, 0u8}; }
     if this.size() <= index {
         return {false, 0u8};
     }
@@ -61,19 +66,23 @@ pub fn String::equals(other: String) -> bool {
 
 // returns false if out of bounds occurs
 pub fn String::substring(start: u32, n: u32) -> (bool, String) {
+    if this.data == nullptr { return {false, empty()}; }
     if start + n > this.size() {
-        return {false, String(nullptr)};
+        return {false, empty()};
     }
 
     let substr := memory::malloc(n+4u32, nullptr);
-    this.data
-        .offset(start)
-        .memory::memcpy(substr, n);
+    this.data.offset(start).memory::memcpy(substr, n);
     return {true, String(substr)};
 }
 
 pub fn String::isEmpty() -> bool {
+    if this.data == nullptr { return false; }
     return this.size() == 0u32;
+}
+
+pub fn String::isNull() -> bool {
+    return this.data == nullptr;
 }
 
 pub fn empty() -> String {
