@@ -1,15 +1,17 @@
 #include "../effekt/types.h"
 #include "../effekt/bytearray.h"
 
+/*
 #define JASM_EMBED
 #include "jasm.h"
+*/
 
 #include "stdlib.h"
 #include "float.h"
 
 Double string_to_float(struct Pos _str)
 {
-    Str str = (char*)c_bytearray_data(_str);
+    const char* str = (char*)c_bytearray_data(_str);
     char* end;
     float val = strtof(str, &end);
 
@@ -22,6 +24,7 @@ Int random_range(Int min, Int max) {
     return rand() % (max - min + 1) + min;
 }
 
+/*
 void assemble_il_call(struct Pos filePath)
 {
     Str fileName = (char*)c_bytearray_data(filePath);
@@ -41,3 +44,4 @@ void assemble_il_call(struct Pos filePath)
 
     erasePositive(filePath);
 }
+*/

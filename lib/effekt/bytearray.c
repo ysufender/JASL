@@ -4,6 +4,7 @@
 #include <string.h> // For memcopy
 #include <malloc.h>
 #include <inttypes.h>
+#include <stdio.h>
 
 #include "types.h"
 

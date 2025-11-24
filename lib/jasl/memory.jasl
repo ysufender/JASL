@@ -1,26 +1,48 @@
 module memory
 
-pub fn free(pointer: ptr, size: u32) -> void {
+// frees the given address, must be on heap. Only use with memory::malloc.
+// returns true if success, false otherwise
+pub fn free(pointer: void*, size: u32) -> bool {
+    if size == 0u32 || pointer == nullptr {
+        return false;
+    }
+
     asm {
         mov &ecx
-        rdl %ui 0
+        pop %ui
         mov &ebx
         del
     }
+    return true;
 }
 
-pub fn malloc(size: u32) -> ptr {
-    asm { mov &ecx }
-    let ret: ptr = nullptr;
+// allocates 'size' bytes from heap and returns the address. nullptr if some error occurs.
+// to use default allocator, pass 'nullptr' as the second parameter.
+// in case of a custom allocator refer to the allocators standards for the returned value
+pub fn malloc(size: u32, allocator: fn (u32) -> void*) -> void* {
+    if size == 0u32 {
+        return nullptr;
+    }
+    else if allocator != nullptr {
+        return allocator(size);
+    }
+
     asm {
-        dcr %ui &sp 4
+        pop %ui
+        mov &ecx
         alc
         rda &ebx
     }
-    return ret;
+    return allocator.ptrcast(void);
 }
 
-pub fn memcpy(src: ptr, dest: ptr, size: u32) -> void {
+// copy 'size' bytes from 'src' to 'dest'
+// returns true if success, false otherwise
+pub fn memcpy(src: void*, dest: void*, size: u32) -> bool {
+    if size == 0u32 || src == nullptr || dest == nullptr {
+        return false;
+    }
+
     asm {
         mov &ecx
         swp %ui
@@ -29,4 +51,5 @@ pub fn memcpy(src: ptr, dest: ptr, size: u32) -> void {
         mov &eax
         mcp %s %s
     }
+    return true;
 }

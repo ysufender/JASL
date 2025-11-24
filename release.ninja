@@ -8,6 +8,12 @@ debug = false
 basebuild = build
 builddir = $basebuild/release
 
+CC = gcc
+CL = g++
+CFLAGS = -O3
+LFLAGS = -O3 -flto -no-pie
+LLFLAGS = -O3 -opaque-pointers
+
 pool cpool
     depth = 4
 
@@ -29,21 +35,21 @@ rule cc
     pool = cpool
     deps = gcc
     depfile = $out.d
-    command = gcc -O3 $in -c -o $out
+    command = $CC $CFLAGS $in -c -o $out
 
 rule ccc
     pool = cpool
     deps = gcc
     depfile = $out.d
-    command = gcc -O3 $in -o $out
+    command = $CC $in -o $out
 
 rule link
     pool = linkpool
-    command = g++ $in -O3 -flto -no-pie -o $out -luv -lpthread -ldl
+    command = $CL $in $LFLAGS -o $out -luv -lpthread -ldl
 
 rule lc
     pool = cpool
-    command = llc $in -O3 -opaque-pointers -filetype=obj -o $out
+    command = llc $in $LLFLAGS -filetype=obj -o $out
 
 rule las
     pool = cpool
@@ -51,10 +57,10 @@ rule las
 
 build $basebuild/preprocessor: ccc $etcdir/preprocessor.c
 
-build $basebuild/bytearray.o: cc $effektdir/bytearray.c
-build $basebuild/main.o: cc $effektdir/main.c
-build $basebuild/io.o: cc $effektdir/io.c
-build $basebuild/panic.o: cc $effektdir/panic.c
+build $builddir/bytearray.o: cc $effektdir/bytearray.c
+build $builddir/main.o: cc $effektdir/main.c
+build $builddir/io.o: cc $effektdir/io.c
+build $builddir/panic.o: cc $effektdir/panic.c
 
 #build $builddir/rts.bs: las $effektdir/rts.ll
 #build $builddir/rts.o: lc $builddir/rts.bs
@@ -70,6 +76,7 @@ build $builddir/main.ll: efc $builddir/main.effekt | $builddir/lexer/lexer.effek
 build $builddir/jasl.bs: las $builddir/main.ll
 build $builddir/jasl.o: lc $builddir/jasl.bs
 
-build $basebuild/jasm_wrapper.o: cc $libdir/jasm/jasm.c | $libdir/jasm/jasm.h
+build $builddir/jasm_wrapper.o: cc $libdir/jasm/jasm.c | $libdir/jasm/jasm.h
 
-build $builddir/jasl: link $builddir/jasl.o $basebuild/main.o $basebuild/io.o $basebuild/panic.o $basebuild/bytearray.o  $basebuild/jasm_wrapper.o $libdir/jasm/libjasm.a
+# build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o  $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a
+build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o  $builddir/jasm_wrapper.o

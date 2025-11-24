@@ -5,76 +5,76 @@ import process
 import context/context
 
 def show(t: PreprocessorKeywordType): String = t match {
-    case Module() => "Module"
-    case Include() => "Include"
+    case Module() => "module"
+    case Include() => "include"
 }
 
 def show(t: KeywordType): String = t match {
-    case Preprocessor(pWord) => "Preprocessor Directive "++show(pWord)
-    case Wrapper() => "Wrapper"
-    case Layout() => "Layout"
-    case Fn() => "Fn"
-    case Pub() => "Pub"
-    case Return() => "Return"
-    case Let() => "Let"
-    case KeywordType::Void() => "Void"
-    case While() => "While"
-    case Extern() => "Extern"
-    case If() => "If"
-    case Else() => "Else"
-    case Mut() => "Mut"
+    case Preprocessor(pWord) => "#"++show(pWord)
+    case Wrapper() => "wrapper"
+    case Layout() => "layout"
+    case Fn() => "fn"
+    case Pub() => "pub"
+    case Return() => "return"
+    case Let() => "let"
+    case KeywordType::Void() => "void"
+    case While() => "while"
+    case Extern() => "extern"
+    case If() => "if"
+    case Else() => "else"
+    case Mut() => "mut"
 }
 
 def show(t: SymbolType): String = t match {
-    case LParen() => "LParen"
-    case RParen() => "RParen"
-    case LBrace() => "LBrace"
-    case RBrace() => "RBrace"
-    case Comma() => "Comma"
-    case Colon() => "Colon"
-    case Semicolon() => "Semicolon"
-    case DotSym() => "DotSym"
-    case DoubleColon() => "DoubleColon"
-    case Arrow() => "Arrow"
-    case Assign() => "Assign"
-    case Asterix() => "Asterix"
-    case LessSym() => "Less"
-    case GreatSym() => "GreatSym"
-    case LessEq() => "LessEq"
-    case GreatEq() => "GreatEq"
-    case Equals() => "Equals"
-    case NotEq() => "NotEq"
-    case NotSym() => "NotSym"
-    case Minus() => "Minus"
-    case Plus() => "Plus"
-    case Divide() => "Divide"
-    case AndSym() => "AndSym"
-    case OrSym() => "OrSym"
+    case LParen() => "("
+    case RParen() => ")"
+    case LBrace() => "{"
+    case RBrace() => "}"
+    case Comma() => ","
+    case Colon() => ":"
+    case Semicolon() => ";"
+    case DotSym() => "."
+    case DoubleColon() => "::"
+    case Arrow() => "->"
+    case Assign() => "="
+    case Asterix() => "*"
+    case LessSym() => "<"
+    case GreatSym() => ">"
+    case LessEq() => "<="
+    case GreatEq() => ">="
+    case Equals() => "=="
+    case NotEq() => "!="
+    case NotSym() => "!"
+    case Minus() => "-"
+    case Plus() => "+"
+    case Divide() => "/"
+    case AndSym() => "&&"
+    case OrSym() => "||"
 }
 
 def show(t: DataType): String = t match {
-    case BoolT(Some(true)) => "True Bool"
-    case BoolT(Some(false)) => "False Bool"
-    case BoolT(None()) => "Bool"
-    case StringT() => "String"
-    case UIntT() => "UInt"
-    case IntT() => "Int"
-    case FloatT() => "Float"
-    case UByteT() => "UByte"
-    case ByteT() => "Byte"
-    case PointerT(ptrType) => show(ptrType)++" Pointer"
-    case VoidT() => "Void"
-    case CustomT(name) => "Custom Type "++name
+    case BoolT(Some(true)) => "true"
+    case BoolT(Some(false)) => "false"
+    case BoolT(None()) => "bool"
+    case StringT() => "string"
+    case UIntT() => "u32"
+    case IntT() => "i32"
+    case FloatT() => "float"
+    case UByteT() => "u8"
+    case ByteT() => "i8"
+    case PointerT(ptrType) => show(ptrType)++"*"
+    case VoidT() => "void"
+    case CustomT(name) => "custom type "++name
 }
 
 def show(t: TokenType): String = t match {
-    case LiteralT(valueType) => show(valueType)++" Literal"
-    case IdentifierT() => "Identifier"
-    case Keyword(keywordType) => "Keyword "++show(keywordType)
-    case Symbol(symbolType) => show(symbolType)++" Symbol"
-    case TypeNameT(typeType) => "TypeName "++show(typeType)
+    case LiteralT(valueType) => show(valueType)++" literal"
+    case IdentifierT() => "identifier"
+    case Keyword(keywordType) => "keyword "++show(keywordType)
+    case Symbol(symbolType) => show(symbolType)++" symbol"
+    case TypeNameT(typeType) => "typename "++show(typeType)
     case EOF() => "EOF"
-    case Assembly() => "Assembly Block"
+    case Assembly() => "assembly block"
 }
 
 def show(p: Position): String =
@@ -217,7 +217,7 @@ val symbols: List[Char] = [
 ]
 
 val builtinTypeNames: List[String] = [
-    "u32", "i32", "u8", "i8", "float", "ptr", "void", "bool"
+    "u32", "i32", "u8", "i8", "float", "void", "bool"
 ]
 
 def firstof[T](list: List[T]) { pred: T => Bool }: Option[T] = list match {
@@ -404,7 +404,6 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
                         case "u8" => UByteT()
                         case "i8" => ByteT()
                         case "float" => FloatT()
-                        case "ptr" => PointerT(VoidT())
                         case "void" => VoidT()
                         case "bool" => BoolT(None())
                         case _ => do InternalError("This place should've been unreachable. Handle builtin type names corrently.", __FILE__, __LINE__)

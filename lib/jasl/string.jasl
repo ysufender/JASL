@@ -6,25 +6,24 @@ include "lib/jasl/io.jasl"
 // TODO: Improve this.
 
 pub wrapper layout String {
-    data: ptr;
+    data: void*;
 }
 
 pub fn String::size() -> u32 {
-    asm { mov &ebx rda %ui mov 4 &bl ret }
-    return 0u32;
+    return this.data.ptrcast(u32).deref();
 }
 
 pub fn String::data() -> i8* {
     return this.data.offset(4).ptrcast(i8);
 }
 
-pub fn String::delete() -> void {
+pub fn String::delete() -> bool {
     return this.data.memory::free(this.size()+4u32);
 }
 
 pub fn String::clone() -> String {
-    let size: u32 = this.size();
-    let new: ptr = memory::malloc(size+4u32);
+    let size := this.size();
+    let new := memory::malloc(size+4u32, nullptr);
     this.data.memory::memcpy(new, size);
     return String(new);
 }
@@ -35,20 +34,17 @@ pub fn String::get(index: u32) -> (bool, u8) {
         return {false, 0u8};
     }
 
-    asm { add %ui mov &ebx }
-    let mut char: u8;
-    asm { dcr %ui &sp 1 rda %ub }
-    return {true, char};
+    return {true, this.data.offset(index).ptrcast(u8).deref()};
 }
 
 pub fn String::equals(other: String) -> bool {
-    let thisSize: u32 = this.size();
+    let thisSize := this.size();
     if thisSize != other.size() {
         return false;
     }
 
-    let mut condition: bool = true;
-    let mut index: u32 = 0u32;
+    let mut condition := true;
+    let mut index := 0u32;
     while condition {
         if this.get(index) != other.get(index) {
             return false;
@@ -69,7 +65,7 @@ pub fn String::substring(start: u32, n: u32) -> (bool, String) {
         return {false, String(nullptr)};
     }
 
-    let substr: ptr = memory::malloc(n+4u32);
+    let substr := memory::malloc(n+4u32, nullptr);
     this.data
         .offset(start)
         .memory::memcpy(substr, n);
@@ -81,7 +77,7 @@ pub fn String::isEmpty() -> bool {
 }
 
 pub fn empty() -> String {
-    let new: ptr = memory::malloc(4u32);
-    asm { mov &ebx stc %ui 0 ldc %ui }
-    return String(new);
+    let new := memory::malloc(4u32, nullptr).ptrcast(u32);
+    new.set(0);
+    return String(new.ptrcast(void));
 }

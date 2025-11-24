@@ -279,14 +279,15 @@ interface CompilerContextRequest {
     // def updateModule(variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layout: Map[String, LayoutSignature]): Unit / InternalError
     def addFunction(fn: FunctionSignature): Unit / InternalError
     def addLayout(layout: LayoutSignature): Unit / InternalError
-    // def addVariable(): Unit / InternalError
+    def addVariable(variable: VariableSignature): Unit / InternalError
+    def makeComptime(isFn: Bool, name: QualifiedName): Unit
     // def getWorkingModuleInfo(): ModuleInfo
     def increaseGlobalStackIndex(amount: Int): Unit
     def getGlobalStackIndex(): Int
     def registerLexerOutput(output: List[Token]): Unit
     def emitLexerOutput(): Unit / emit[(String, LexerContext)]
     def getLayoutSignature(name: QualifiedName): Option[LayoutSignature]
-    // def getVariableSignature(name: QualifiedName): Option[VariableSignature]
+    def getVariableSignature(name: QualifiedName): Option[VariableSignature]
     def getFunctionSignature(name: QualifiedName): Option[FunctionSignature]
     def checkEntryPoint(): Bool
 __DEBUG_START__
@@ -437,20 +438,7 @@ def combineMapNoDup[T, U](m1: Map[T, U], m2: Map[T, U]): Map[T, U] / DuplicateKe
     m1.union(m2)
 }
 
-val builtInFunctions: List[FunctionSignature] = [
-    /*FunctionSignature("offset", true, false, None(), [
-        VariableSignature("input", false, false, false, false, 0, Type::Pointer(Type::Void())),
-        VariableSignature("offBy", false, false, false, false, 4, Type::Int())
-    ], [Type::Pointer(Type::Void())])*/
-]
-
-def emptyModule(name: String): ModuleInfo = {
-    var fns = map::empty[String, FunctionSignature](box strOrder)
-    builtInFunctions.foreach { fn => {
-        fns = fns.put(fn.name, fn)
-    }}
-    ModuleInfo(name, map::empty[String, VariableSignature](box strOrder), fns, map::empty[String, LayoutSignature](box strOrder))
-}
+def emptyModule(name: String): ModuleInfo = ModuleInfo(name, map::empty[String, VariableSignature](box strOrder), map::empty[String, FunctionSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
 
 def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, InternalError} }: T / {InternalError, StopCompiler} = {
     val _builtIns = [
@@ -525,7 +513,9 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
     var processedFiles: Map[String, LexerContext] = map::empty(box strOrder)
     var modules: Map[String, ModuleInfo] = map::empty(box strOrder)
     var asts: List[AST] = []
-    var globalStackIndex: Int = 0
+    var globalStackIndex: Int = 32
+    // first 64 bytes are empty because of potential nullptr reads.
+    // nullptr == 0 on VM RAM
 
     try { prog() }
     with CompilerContextRequest {
@@ -584,11 +574,29 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
         } else {
             do InternalError("Call 'context::setWorkingModule' before calling 'context::updateModule'", __FILE__, __LINE__)
         }}
-        // def addVariable(): Unit / InternalError
-        /*def getWorkingModuleInfo(): ModuleInfo = resume(
-            try { modules.get(currentModule).unpack() }
-            with InternalError { (_, _, _) => { <> }}
-        )*/
+        def addVariable(variable) = resume { if (modules.contains(currentModule)) {
+            val oldInf = modules.get(currentModule).unpack()
+
+            if (oldInf.variables.contains(variable.name)) {
+                println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++variable.name++"' in module '"++currentModule++"'.")
+                exit(1)
+            }
+
+            val newInf = ModuleInfo(
+                currentModule,
+                oldInf.variables.put(variable.name, variable),
+                oldInf.functions,
+                oldInf.layouts
+            )
+
+            modules = modules.put(currentModule, newInf)
+        } else {
+            do InternalError("Call 'context::setWorkingModule' before calling 'context::updateModule'", __FILE__, __LINE__)
+        }}
+        def makeComptime(isFn, name) = resume(isFn match {
+            case true => ()
+            case false => ()
+        })
         def increaseGlobalStackIndex(amount) = {
             globalStackIndex = globalStackIndex + amount
             resume(())
@@ -614,18 +622,19 @@ def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, Intern
                     } else { None() }
             }
         )
-/*
         def getVariableSignature(name) = resume(
             name.mod match {
                 case None() => modules.get(currentModule).unpack().variables.get(name.name)
-                case Some(moduleinfo) => modules.get(moduleinfo).unpack().variables.get(name.name) match {
-                    case Some(variable) => if (not(variable.public) && (moduleinfo != currentModule)) { None() }
-                                           else { Some(variable) }
-                    case None() => None()
-                }
+                case Some(moduleinfo) =>
+                    if (modules.contains(moduleinfo)) {
+                        modules.get(moduleinfo).unpack().variables.get(name.name) match {
+                            case Some(variable) => if (not(variable.public) && (moduleinfo != currentModule)) { None() }
+                                                   else { Some(variable) }
+                            case None() => None()
+                        }
+                    } else { None() }
             }
         )
-*/
         def getFunctionSignature(name) = resume(
             if (name.mod is None() and builtIns.contains(name.name)) builtIns.get(name.name)
             else name.mod match {

@@ -2,7 +2,7 @@ module native
 
 extern llvm """
     declare %Int @random_range(%Int, %Int)
-    declare void @assemble_il_call(%Pos)
+    ; declare void @assemble_il_call(%Pos)
     declare %Double @string_to_float(%Pos)
 """
 
@@ -12,11 +12,12 @@ extern def random_range(min: Int, max: Int): Int =
         ret %Int %r
     """
 
-extern def AssembleIL(filePath: String): Unit =
+/*extern def AssembleIL(filePath: String): Unit =
     llvm """
         call void @assemble_il_call(%Pos ${filePath})
         ret %Pos zeroinitializer
     """
+*/
 
 extern def str_to_float(str: String): Double =
     llvm """

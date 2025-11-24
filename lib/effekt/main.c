@@ -1,3 +1,4 @@
+#include <float.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -8,6 +9,7 @@
 #define DEBUG_REFCOUNT (false)
 
 #include "bytearray.h"
+#include "types.h"
 
 extern void effektMain();
 

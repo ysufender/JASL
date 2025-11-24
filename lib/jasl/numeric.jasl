@@ -1,0 +1,17 @@
+module numeric
+
+pub layout U32Limits { pub min: u32; pub max: u32; }
+pub layout I32Limits { pub min: i32; pub max: i32; }
+pub layout U8Limits { pub min: u8; pub max: u8; }
+pub layout I8Limits { pub min: i8; pub max: i8; }
+pub layout FloatLimits {
+    pub absoluteMin: float;
+    pub absoluteMax: float;
+    // TODO: Add epsilon, positive min etc.
+}
+
+pub let u8Limits: U8Limits = U8Limits(0u8, 4294967295u8);
+pub let i8Limits: I8Limits = I8Limits(-128i8, 127i8);
+pub let u32Limits: U32Limits = U32Limits(0u32, 0u32);
+pub let i32Limits: I32Limits = I32Limits(-2147483648, 2147483647);
+pub let floatLimits: FloatLimits = FloatLimits(5f, 0f);

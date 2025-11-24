@@ -42,7 +42,37 @@ interface FunctionOwnership {
     def canAccess(t: Type): Bool
 }
 
+interface GlobalVariableRegister {
+    def registerGlobalVar(variable: Statement): Statement / CompilerContextRequest
+    def getGlobalVarASTs(): List[AST]
+}
+
 effect ParserError(msg: String, pos: Position): Nothing / CompilerContextRequest
+
+def enforceStaticType(s: VariableSignature, pos: Position): VariableSignature / {ParserError, CompilerContextRequest, InternalError} = s.varType match {
+    case Type::InternalAny() => do ParserError("Type inferrence is not possible here.", pos)
+    case _ => s
+}
+
+def handleGlobals[T]() { prog: () => T / GlobalVariableRegister }: T / {InternalError, CompilerContextRequest} = {
+    var globalVars: Map[String, List[Statement]] = map::empty(box strOrder)
+    try { prog() }
+    with GlobalVariableRegister {
+        def registerGlobalVar(variable) = resume {
+            val old = globalVars.get(do getWorkingModule()) match {
+                case Some(stmts) => stmts
+                case None() => Nil()
+            }
+            globalVars = globalVars.put(do getWorkingModule(), Cons(variable, old))
+            InlineAssembly("", Position(0, 0, 0))
+        }
+        def getGlobalVarASTs() = {
+            var asts: List[AST] = []
+            globalVars.foreach { (mod, stmts) => { asts = Cons(AST(mod, stmts), asts) }}
+            resume(asts)
+        }
+    }
+}
 
 def typeSize(l: LayoutSignature): Int / {ParserError, ParserContextRequest, CompilerContextRequest, TokenRequest} = {
     l.fields.map{ v => v.varType.typeSize() }.sum()
@@ -215,7 +245,13 @@ def isComptime(op: UnaryOp): Bool / {InternalError, ParserContextRequest, Parser
 
 def isComptime(expr: Expression): Bool / {InternalError, ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = expr match {
     case Assignment(lhs, rhs, _) => isComptime(lhs) && isComptime(rhs)
-    case Initialization(_, initializers, _) => initializers.all { init => init.isComptime }
+    case Initialization(typename, initializers, _) => typename match {
+        case Custom(t) => do getLayoutSignature(t) match {
+            case Some(s) => initializers.all{init => init.isComptime} && s.fields.all{f => not(f.mutable)}
+            case _ => unreachable(__FILE__, __LINE__)
+        }
+        case _ => unreachable(__FILE__, __LINE__)
+    }
     case Identifier(name, pos) =>
         if (do hasVar(name)) { (do getVar(name)).comptime }
         else if (do hasFunction(name)) {
@@ -335,22 +371,16 @@ def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRe
     var context = _context
     var stackIndex: Int = 0
 
-    def _getVar(name: QualifiedName): VariableSignature / {ParserError, CompilerContextRequest} = /* do getVariableSignature(name) match {
-        case Some(signature) => signature
-        case None() =>*/ {
-            val v = context.variables.get(name.name)
-            v match {
-                case Some(sign) => sign 
-                case None() => context.parent match {
-                    case Some(parent) => {
-                        with contextHandler(parent);
-                        do getVar(name)
-                    }
-                    case  _ => do ParserError("Given variable '"++name.show++"' doesn't exists in the current context.", (do previous()).position)
-                }
+    def _getVar(name: QualifiedName, ctx: ParserContext): VariableSignature / {ParserError, CompilerContextRequest} = ctx.variables.get(name.name) match {
+        case Some(sign) => sign
+        case None() => ctx.parent match {
+            case Some(parent) => _getVar(name, parent)
+            case None() => do getVariableSignature(name) match {
+                case Some(sign) => sign
+                case None() => do ParserError("Given variable '"++name.show++"' doesn't exists in the current context.", (do previous()).position)
             }
         }
-    /*}*/
+    }
 
     def _getFunction(name: QualifiedName): FunctionSignature / {ParserError, CompilerContextRequest} = do getFunctionSignature(name) match {
         case Some(sign) => sign
@@ -364,9 +394,9 @@ def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRe
 
     try { prog() }
     with ParserContextRequest {
-        def getVar(name) = resume { _getVar(name) }
+        def getVar(name) = resume { _getVar(name, context) }
         def hasVar(name) = resume {
-            try { _getVar(name); true }
+            try { _getVar(name, context); true }
             with ParserError { (_, _) => false }
         } 
         def hasFunction(name) = resume {
@@ -398,13 +428,15 @@ def tokenHandler[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {
     var previousToken: Token = Token(EOF(), "", Position(0, 0, 0))
 
     def next() = {
-        if (tokens.isEmpty)
-            do ParserError("Unexpected EOF.", previousToken.position)
         with on[MissingValue].default{ <> };
-
-        previousToken = tokens.head
-        tokens = tokens.tail
-        previousToken
+        if (tokens.isEmpty)
+            Token(EOF(), "", previousToken.position)
+            // do ParserError("Unexpected EOF.", previousToken.position)
+        else {
+            previousToken = tokens.head
+            tokens = tokens.tail
+            previousToken
+        }
     }
 
     try { prog() }
@@ -535,6 +567,13 @@ def handleTypeNameNoCrashExceptUndefined(): Option[Type] / {TokenRequest, Parser
     try { Some(handleTypeName()) }
     with ParserError { (msg, pos) => if (msg.startsWith("Couldn't resolve type")) { do ParserError(msg, pos) } else { None() }}
 }
+
+def inferType(vars: List[VariableSignature], expressions: List[Type]): List[VariableSignature] = {
+    vars.zipWith(expressions){ (a, b) => a.varType match {
+        case Type::InternalAny() => VariableSignature(a.name, a.public, a.mutable, a.comptime, a.global, a.stackIndex, b)
+        case _ => a
+    }}
+}
  
 // This will prepass all used files and register their Tokens and names to the CompilerContext
 // also will register all symbols from all modules including module names to the CompilerContext
@@ -553,34 +592,60 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, ParserContextR
 
     debugPrint("Prepassing Module: "++do getWorkingModule())
 
-    def handleVariable(public: Bool, mutable: Bool, index: Int): (String, VariableSignature) = {
+    def handleVariable(public: Bool, index: Int) = {
+        val mutable = if (do check(Keyword(Mut()))) { do advance(); true } else { false }
         val identifier: Token = do checkReturnOrCrash(IdentifierT())
         val colon: Token = do checkReturnOrCrash(Symbol(Colon()))
-        val typename: Type = handleTypeName()
+        val typename: Type = handleTypeNameNoCrashExceptUndefined() match {
+            case Some(typenm) => typenm
+            case None() => do rewind().tokenType match {
+                case Symbol(Assign()) => Type::InternalAny()
+                case Symbol(Semicolon()) => Type::InternalAny()
+                case Symbol(Comma()) => Type::InternalAny()
+                case Symbol(RParen()) => Type::InternalAny()
+                case _ => do ParserError("Expected '=' in variable definition.", do previous().position)
+            }
+        }
 
-/*
-        if (variableSignatures.contains(identifier.text))
-            do ParserError("Multiple definition of variable '"++identifier.text++"'.", identifier.position)
-*/
-
-        (identifier.text, VariableSignature(identifier.text, public, mutable, false, true, index, typename))
+        VariableSignature(identifier.text, public, mutable, false, true, index, typename)
     }
     def handleLet(public: Bool): Unit = {
-        do ParserError("Top-level global variables are not (yet) supported.", (do previous()).position)
-    /*
+        // do ParserError("Top-level global variables are not (yet) supported.", (do previous()).position)
+        val pos = do previous().position
+
+        // TODO: Type inference at top-level, requires parsing the expressions right here but anyway.
+
         (do peek()).tokenType match {
-            case Keyword(Mut()) => {
+            case Symbol(LParen()) => {
                 do advance()
-                val (name, signature) = handleVariable(public, true, do getGlobalStackIndex())
-                variableSignatures = variableSignatures.put(name, signature)
+                while (not(do is_eof()) && (do peek()).tokenType != Symbol(RParen())) {
+                    val v: VariableSignature = handleVariable(public, do getGlobalStackIndex()).enforceStaticType(pos)
+
+                    if (do hasVar(QualifiedName(None(), v.name)))
+                        do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                    
+                    if ((do peek()).tokenType != Symbol(RParen()))
+                        val _ = do checkReturnOrCrash(Symbol(Comma()))
+
+                    do addVariable(v)
+                }
+                if (do is_eof())
+                    do ParserError("Expected ')' symbol but got EOF.", pos)
+                val _ = do advance()
             }
-            case IdentifierT() => {
-                val (name, signature) = handleVariable(public, false, do getGlobalStackIndex())
-                variableSignatures = variableSignatures.put(name, signature)
+            case _ => {
+                val v: VariableSignature = handleVariable(public, do getGlobalStackIndex()).enforceStaticType(pos)
+                if (do hasVar(QualifiedName(None(), v.name)) && not(v.global && do isTopLevel()))
+                    do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                do addVariable(v)
             }
-            case _ => do ParserError("Epected keyword 'mut' or identifier after 'let'.", (do previous()).position)
         }
-    */
+        
+        while (not(do is_eof()) && (do peek()).tokenType != Symbol(Semicolon()))
+            val _ = do advance()
+        if (do is_eof())
+            do ParserError("Unterminated statement line detected. You forgot the ';' champ.", pos)
+        val _ = do advance()
     }
     def handleLayout(public: Bool, wrapper: Bool): Unit / ParserContextRequest = {
         val name: String = (do advance()).tokenType match {
@@ -591,8 +656,6 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, ParserContextR
         if ((do getLayoutSignature(QualifiedName(None(), name))) is Some(_))
             do ParserError("Multiple definition of layout '"++name++"'.", (do previous()).position)
 
-        // TODO: Check circular dependency through fields.
-
         val pos: Position = (do previous()).position
         
         do checkReturnOrCrash(Symbol(LBrace()))
@@ -600,33 +663,15 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, ParserContextR
         var layout: List[VariableSignature] = []
         while ((do peek()).tokenType != Symbol(RBrace())) {
             var pos: Position = Position(0, 0, 0)
-            val (_, signature) = (do peek()).tokenType match {
+            val signature = ((do peek()).tokenType match {
                 case Keyword(Pub()) => {
                     if (wrapper)
                         do ParserError("Public fields in wrapper layouts are not allowed.", (do peek()).position)
                     do advance()
-                    (do peek()).tokenType match {
-                        case Keyword(Mut()) => {
-                            do advance()
-                            pos = (do peek()).position
-                            handleVariable(true, true, innerIndex)
-                        }
-                        case _ => {
-                            pos = (do peek()).position
-                            handleVariable(true, false, innerIndex)
-                        }
-                    }
+                    handleVariable(true, innerIndex)
                 }
-                case Keyword(Mut()) => {
-                    do advance()
-                    pos = (do peek()).position
-                    handleVariable(false, true, innerIndex)
-                }
-                case _ => {
-                    pos = (do peek()).position
-                    handleVariable(false, false, innerIndex)
-                }
-            }
+                case _ => handleVariable(false, innerIndex)
+            }).enforceStaticType(pos)
             if (signature.varType == Custom(QualifiedName(Some(do getWorkingModule()), name)))
                 do ParserError("Recursive layouts are not allowed.", pos)
             if (layout.any { s => s.name == signature.name })
@@ -675,7 +720,7 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, ParserContextR
             if ((do peek()).tokenType != Symbol(RParen()))
             {
                 val pos: Position = (do peek()).position
-                val (_, signature) = handleVariable(false, false, stackIndexArgs)
+                val signature = handleVariable(false, stackIndexArgs)
                 if (arguments.any { v => v.name == signature.name })
                     do ParserError("Multiple definitions of argument '"++signature.name++"' in function '"++name.show++"'.", pos)
                 arguments = Cons(signature, arguments)
@@ -730,7 +775,7 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, ParserContextR
             case Keyword(Layout()) => do ParserError("Layout definitions in non top-level contexts are not permitted.", (do previous()).position)
             case Keyword(Wrapper()) => do ParserError("Wrapper definitions in non top-level contexts are not permitted.", (do previous()).position)
             case Keyword(Pub()) => do ParserError("Public identifiers in non top-level contexts are not permitted.", (do previous()).position)
-            case Keyword(Fn()) => do ParserError("Function definitions in non top-level contexts are not permitted.", (do previous()).position)
+            // case Keyword(Fn()) => do ParserError("Function definitions in non top-level contexts are not permitted.", (do previous()).position)
             case _ => ()
         }
         if (do is_eof())
@@ -792,10 +837,10 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, ParserContextR
     // do updateModule(variableSignatures, functionSignatures, layoutSignatures)
 }
 
-def prepass(tokens: List[Token]): Unit / {InternalError, CompilerContextRequest} = {
+def prepass(tokens: List[Token], topLevel: ParserContext): Unit / {InternalError, CompilerContextRequest} = {
     with parser_report;
     with tokenHandler(tokens);
-    with contextHandler(emptyParserContext())
+    with contextHandler(topLevel)
 
     tokenHandler(tokens) { // needs a separate handler since it eats
         _prepass()
@@ -944,8 +989,11 @@ def evalType(tl: List[Expression]): List[Type] / {InternalError, TokenRequest, P
     case Nil() => Nil()
 }
 
-def handleFunctionDef(): Statement / {InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleFunctionDef(): Statement / {GlobalVariableRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     // non-top level checks are already done by prepass
+    if (not(do isTopLevel()))
+        do ParserError("Function definitions in non top-level contexts are not permitted.", (do previous()).position)
+
     val pos: Position = (do previous()).position
     handleTypeNameNoCrashExceptUndefined() match {
         case Some(_) => {do advance(); val _ = do advance() }
@@ -1007,9 +1055,8 @@ def handleReturnStatement(): Statement / {FunctionOwnership, ReturnTypeRegister,
     }
 }
 
-def handleVariableDef(): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
-    if (do isTopLevel())
-        do ParserError("Global variable definitions at top-level are not (yet) allowed.", (do previous()).position)
+def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    //    do ParserError("Global variable definitions at top-level are not (yet) allowed.", (do previous()).position)
 
     // let mut name: Type = expression;
     // let name: Type = expression;
@@ -1020,9 +1067,25 @@ def handleVariableDef(): Statement / {FunctionOwnership, ReturnTypeRegister, Int
         val mutable = if (do check(Keyword(Mut()))) { do advance(); true } else { false }
         val identifier: Token = do checkReturnOrCrash(IdentifierT())
         val colon: Token = do checkReturnOrCrash(Symbol(Colon()))
-        val typename: Type = handleTypeName()
+        val typename: Type = handleTypeNameNoCrashExceptUndefined() match {
+            case Some(typenm) => typenm
+            case None() => do rewind().tokenType match {
+                case Symbol(Assign()) => Type::InternalAny()
+                case Symbol(Semicolon()) => Type::InternalAny()
+                case Symbol(Comma()) => Type::InternalAny()
+                case Symbol(RParen()) => Type::InternalAny()
+                case _ => do ParserError("Expected '=' in variable definition.", do previous().position)
+            }
+        }
 
         VariableSignature(identifier.text, false, mutable, false, true, do stackIndex(), typename)
+    }
+
+    def inferType(vars: List[VariableSignature], expressions: List[Type]): List[VariableSignature] = {
+        vars.zipWith(expressions){ (a, b) => a.varType match {
+            case Type::InternalAny() => VariableSignature(a.name, a.public, a.mutable, a.comptime, a.global, a.stackIndex, b)
+            case _ => a
+        }}
     }
 
     (do peek()).tokenType match {
@@ -1031,7 +1094,7 @@ def handleVariableDef(): Statement / {FunctionOwnership, ReturnTypeRegister, Int
             while (not(do is_eof()) && (do peek()).tokenType != Symbol(RParen())) {
                 val v: VariableSignature = handleVariable()
 
-                if (do hasVar(QualifiedName(None(), v.name)))
+                if (do hasVar(QualifiedName(None(), v.name)) && not(v.global && do isTopLevel()))
                     do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
                 
                 vars = Cons(v, vars)
@@ -1046,7 +1109,7 @@ def handleVariableDef(): Statement / {FunctionOwnership, ReturnTypeRegister, Int
         }
         case _ => {
             val v: VariableSignature = handleVariable()
-            if (do hasVar(QualifiedName(None(), v.name)))
+            if (do hasVar(QualifiedName(None(), v.name)) && not(v.global && do isTopLevel()))
                 do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
             vars = Cons(v, vars)
         }
@@ -1056,15 +1119,22 @@ def handleVariableDef(): Statement / {FunctionOwnership, ReturnTypeRegister, Int
 
     if (do check(Symbol(Semicolon()))) {
         do advance()
-        if (not(vars.all{v => v.mutable}))
+        if (vars.any{v => v.mutable})
             do ParserError("Uninitialized immutable variable detected.", pos)
+        else if (vars.any{v => v.varType match { case Type::InternalAny() => true; case _ => false; }})
+            do ParserError("Can't infer the type of an uninitialized variable.", pos)
         else {
-            vars.foreach{v => {
-                if (do hasVar(QualifiedName(None(), v.name)))
-                    do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
-                do addVar(v.name, v)
-            }}
-            VariableDefinition(vars, None(), pos)
+            val vd = VariableDefinition(vars, None(), pos)
+            if (do isTopLevel() && vars.all{v => v.global})
+                do registerGlobalVar(vd)
+            else { 
+                vars.foreach{v => {
+                    if (do hasVar(QualifiedName(None(), v.name)))
+                        do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                    do addVar(v.name, v)
+                }}
+                vd
+            }
         }
     } else {
         do checkReturnOrCrash(Symbol(Assign()))
@@ -1073,19 +1143,26 @@ def handleVariableDef(): Statement / {FunctionOwnership, ReturnTypeRegister, Int
 
         if (expr.evalType.compare(vars.map{v => v.varType}){(a, b) => a == b})
         {
-            vars.foreach{v => {
-                if (do hasVar(QualifiedName(None(), v.name)))
-                    do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
-                do addVar(v.name, v)
-            }}
-            VariableDefinition(vars, Some(expr), pos)
+            vars = vars.inferType(expr.evalType);
+
+            val vd = VariableDefinition(vars, Some(expr), pos)
+            if (do isTopLevel() && vars.all{v => v.global})
+                do registerGlobalVar(vd)
+            else { 
+                vars.foreach{v => {
+                    if (do hasVar(QualifiedName(None(), v.name)))
+                        do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                    do addVar(v.name, v)
+                }}
+                vd
+            }
         }
         else
             do ParserError("Missmatching types in variable definition. Expected '"++vars.map{v => v.varType}.show++"' got '"++expr.evalType.show++"'.", pos)
     }
 }
 
-def handleBlockStatement(context: ParserContext): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleBlockStatement(context: ParserContext): Statement / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     with contextHandler(context);
     
     var body: List[Statement] = []
@@ -1098,7 +1175,7 @@ def handleBlockStatement(context: ParserContext): Statement / {FunctionOwnership
     Block(body.reverse, do getCurrentContext(), pos)
 }
 
-def handleConditional(): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleConditional(): Statement / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     with ignoreReturns;
 
     val pos: Position = (do previous()).position
@@ -1128,7 +1205,7 @@ def handleConditional(): Statement / {FunctionOwnership, ReturnTypeRegister, Int
     Conditional(condition, body, scope, fallback, pos)
 }
 
-def handleWhile(): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleWhile(): Statement / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     val pos: Position = (do previous()).position
     val condition: Expression = parseExpression()
     val scope: ParserContext = do createChildContext()
@@ -1166,7 +1243,7 @@ def checkReturns(conditional: Statement): Unit / {FunctionOwnership, ReturnTypeR
     case _ => ()
 }
 
-def parseStatement(): Statement / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = (do advance()).tokenType match {
+def parseStatement(): Statement / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = (do advance()).tokenType match {
     // skip these
     case Keyword(Preprocessor(_)) => {
         do advance()
@@ -1633,11 +1710,11 @@ def parseExpression(): Expression / {FunctionOwnership, ReturnTypeRegister, Inte
     parseAssignmentExpression()
 }
 
-def parse(tokens: List[Token]): AST / {InternalError, CompilerContextRequest} = {
+def parse(tokens: List[Token], topLevel: ParserContext): AST / {GlobalVariableRegister, InternalError, CompilerContextRequest} = {
     with parser_report;
     with tokenHandler(tokens);
-    with contextHandler(emptyParserContext());
-    with returnHandler;
+    with contextHandler(topLevel);
+    with ignoreReturns;
     with functionOwnershipHandler(None());
     with on[MissingValue].panic;
 
@@ -1646,13 +1723,7 @@ def parse(tokens: List[Token]): AST / {InternalError, CompilerContextRequest} = 
     var statements: List[Statement] = []
 
     while (not(do is_eof())) {
-        try { statements = Cons(parseStatement(), statements) }
-        with ReturnTypeRegister {
-            def returns(_, pos) = { 
-                unreachable(__FILE__, __LINE__)
-            }
-            def addPath() = unreachable(__FILE__, __LINE__)
-        }
+        statements = Cons(parseStatement(), statements)
     }
 
     AST(do getWorkingModule(), statements.reverse)
