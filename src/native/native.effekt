@@ -12,6 +12,8 @@ extern def random_range(min: Int, max: Int): Int =
         ret %Int %r
     """
 
+val i64Max: Int = 9223372036854775807
+
 /*extern def AssembleIL(filePath: String): Unit =
     llvm """
         call void @assemble_il_call(%Pos ${filePath})

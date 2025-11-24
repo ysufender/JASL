@@ -24,6 +24,8 @@ def show(t: KeywordType): String = t match {
     case Else() => "else"
     case Mut() => "mut"
     case Defer() => "defer"
+    case Break() => "break"
+    case Continue() => "continue"
 }
 
 def show(t: SymbolType): String = t match {
@@ -107,6 +109,9 @@ def infixEq(l: KeywordType, r: KeywordType): Bool = {
         case (If(), If()) => true
         case (Else(), Else()) => true
         case (Mut(), Mut()) => true
+        case (Defer(), Defer()) => true
+        case (Break(), Break()) => true
+        case (Continue(), Continue()) => true
         case _ => false
     }
 }
@@ -243,6 +248,10 @@ def countWhiteSpace[T]{ prog: () => T / skip_whitespace } = {
 }
 
 def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHandler, CompilerContextRequest, InternalError} = {
+    if (in.length == 0) {
+        do LexerError("Did you really give me an empty file? Try starting it with 'module <some name>'", Position(0, 0, 0))
+    }
+
     var line: Int = 1;
     var col: Int = 1;
     var index: Int = 0;
@@ -441,6 +450,8 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
                 case "extern" => do add_token(Token(Keyword(Extern()), text, pos(text.length)))
                 case "mut" => do add_token(Token(Keyword(Mut()), text, pos(text.length)))
                 case "defer" => do add_token(Token(Keyword(Defer()), text, pos(text.length)))
+                case "break" => do add_token(Token(Keyword(Break()), text, pos(text.length)))
+                case "continue" => do add_token(Token(Keyword(Continue()), text, pos(text.length)))
                 case "asm" => {
                     if (skipWhiteSpace{advance} != '{')
                         do LexerError("Expected a block '{ ... }' after 'asm' directive.", pos(1))

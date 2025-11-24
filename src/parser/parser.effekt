@@ -47,12 +47,33 @@ interface GlobalVariableRegister {
     def getGlobalVarASTs(): List[AST]
 }
 
+interface LoopHandler {
+    def inLoop(): Bool
+    def getLoopID(): Int
+}
+
 effect ParserError(msg: String, pos: Position): Nothing / CompilerContextRequest
 effect defer(stmt: Statement): Unit
 
 def enforceStaticType(s: VariableSignature, pos: Position): VariableSignature / {ParserError, CompilerContextRequest, InternalError} = s.varType match {
     case Type::InternalAny() => do ParserError("Type inferrence is not possible here.", pos)
     case _ => s
+}
+
+def handleLoop[T](id: Int) { prog: () => T / LoopHandler } = {
+    try { prog() }
+    with LoopHandler {
+        def inLoop() = resume(true)
+        def getLoopID() = resume(id)
+    }
+}
+
+def noLoop[T]() { prog: () => T / LoopHandler } = {
+    try { prog() }
+    with LoopHandler {
+        def inLoop() = resume(false)
+        def getLoopID() = unreachable(__FILE__, __LINE__)
+    }
 }
 
 def handleGlobals[T]() { prog: () => T / GlobalVariableRegister }: T / {InternalError, CompilerContextRequest} = {
@@ -216,13 +237,15 @@ def isComptime(stmt: Statement): Bool / {InternalError, ParserContextRequest, Pa
     case ExpressionStatement(expr, _) => expr.isComptime
     case VariableDefinition(signature, initializer, _) => if (initializer is Some(expr)) { isComptime(expr) } else { true }
     case Conditional(condition, body, scope, fallback, _) => isComptime(condition) && isComptime(body) && (if (fallback is Some(else_block)) { isComptime(else_block) } else { true })
-    case WhileStmt(condition, body, scope, _) => false // No.
+    case WhileStmt(condition, body, scope, _, _) => false // No. For now. TODO
     case FnDefinition(signature, body, scope, _) => signature.comptime
     // case LayoutDeclaration(signature, _) => true // Come on.
     case ReturnStmt(returns, _) => returns.all { r => isComptime(r) }
     case InlineAssembly(_, _) => false
     case Block(inside, _, _) => inside.all { st => st.isComptime }
     case DeferStmt(stmt, _) => stmt.isComptime
+    case BreakStmt(_, _) => true
+    case ContinueStmt(_, _) => true
 }
 
 def isComptime(op: BinaryOp): Bool / {InternalError, ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = op match {
@@ -809,7 +832,7 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, ParserContextR
                 {
                     val currentFile: String = do getWorkingFile()
                     val currentModule: String = do getWorkingModule()
-                    do setWorkingFile(token.text)
+                    do setWorkingFile(token.text++".jasl")
                     val tokenized: List[Token] = lexer::lex()
 
                     with parser_report;
@@ -1001,7 +1024,7 @@ def evalType(tl: List[Expression]): List[Type] / {InternalError, TokenRequest, P
     case Nil() => Nil()
 }
 
-def handleFunctionDef(): Statement / {defer, GlobalVariableRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleFunctionDef(): Statement / {defer, LoopHandler, GlobalVariableRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     // non-top level checks are already done by prepass
     if (not(do isTopLevel()))
         do ParserError("Function definitions in non top-level contexts are not permitted.", (do previous()).position)
@@ -1174,7 +1197,7 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
     }
 }
 
-def handleBlockStatement(context: ParserContext): Statement / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleBlockStatement(context: ParserContext): Statement / {LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     var body: List[Statement] = []
     var deferred: List[Statement] = []
     val pos: Position = (do previous()).position
@@ -1195,7 +1218,7 @@ def handleBlockStatement(context: ParserContext): Statement / {GlobalVariableReg
     }}
 }
 
-def handleConditional(): Statement / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleConditional(): Statement / {LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     with ignoreReturns;
 
     val pos: Position = (do previous()).position
@@ -1233,24 +1256,49 @@ def handleWhile(): Statement / {GlobalVariableRegister, FunctionOwnership, Retur
     if (not(condition.evalType.compare([Type::Bool()]){(a, b) => a == b}))
         do ParserError("While condition must return type '(bool)'. Got '"++condition.evalType.show++"' instead.", pos)
 
+    val loopID = native::random_range(0, native::i64Max)
+    with handleLoop(loopID);
+
     val body: Statement = (do advance()).tokenType match {
         case Symbol(LBrace()) => handleBlockStatement(scope)
         case _ => do ParserError("Expected a block after if statement.", pos)
     }
 
-    WhileStmt(condition, body, scope, pos)
+    WhileStmt(condition, body, scope, loopID, pos)
 }
 
 def handleDefer(): Statement / {defer, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    with noLoop;
+
     val pos = do previous().position
-    //if (do isTopLevel())
-        //do ParserError("Defer statements at top-level are not allowed.", pos)
     val stmt: Statement = parseStatement()
     do defer(stmt)
     InlineAssembly("", pos)
-    // unimplemented(__FILE__, __LINE__, "Deferred statements are coming soon, stay tuned!")
 }
 
+// TODO: Break from nth loop
+def handleBreak(): Statement / {LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    val pos = do previous().position
+
+    if (do inLoop()) {
+        do checkReturnOrCrash(Symbol(Semicolon()))
+        BreakStmt(do getLoopID(), pos)
+    } else {
+        do ParserError("'break' statements are not allowed when not inside a loop body.", pos)
+    }
+}
+
+// TODO: Continue from nth loop
+def handleContinue(): Statement / {LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    val pos = do previous().position
+
+    if (do inLoop()) {
+        do checkReturnOrCrash(Symbol(Semicolon()))
+        ContinueStmt(do getLoopID(), pos)
+    } else {
+        do ParserError("'break' statements are not allowed when not inside a loop body.", pos)
+    }
+}
 
 def checkReturns(conditional: Statement): Unit / {FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = conditional match {
     case ReturnStmt(returns, pos) => do returns(returns.evalType, pos)
@@ -1276,7 +1324,7 @@ def checkReturns(conditional: Statement): Unit / {FunctionOwnership, ReturnTypeR
     case _ => ()
 }
 
-def parseStatement(): Statement / {defer, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = (do advance()).tokenType match {
+def parseStatement(): Statement / {defer, LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = (do advance()).tokenType match {
     // skip these
     case Keyword(Preprocessor(_)) => {
         do advance()
@@ -1294,6 +1342,8 @@ def parseStatement(): Statement / {defer, GlobalVariableRegister, FunctionOwners
     case EOF() => InlineAssembly("", (do previous()).position)
     case Symbol(Semicolon()) => InlineAssembly("", (do previous()).position)
 
+    case Keyword(Break()) => handleBreak()
+    case Keyword(Continue()) => handleContinue()
     case Keyword(Defer()) => handleDefer()
     case Keyword(Fn()) => handleFunctionDef()
     case Assembly() => InlineAssembly((do previous()).text, (do previous()).position)
@@ -1747,6 +1797,7 @@ def parseExpression(): Expression / {FunctionOwnership, ReturnTypeRegister, Inte
 def parse(tokens: List[Token], topLevel: ParserContext): AST / {GlobalVariableRegister, InternalError, CompilerContextRequest} = {
     with parser_report;
     with tokenHandler(tokens);
+    with noLoop;
     with ignoreDefer;
     with contextHandler(topLevel);
     with ignoreReturns;

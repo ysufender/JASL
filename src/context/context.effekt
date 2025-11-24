@@ -135,6 +135,8 @@ type KeywordType {
     Else()
     Mut()
     Defer()
+    Break()
+    Continue()
 }
 
 type SymbolType {
@@ -257,12 +259,14 @@ type Statement {
     VariableDefinition(signature: List[VariableSignature], initializer: Option[Expression], pos: Position)
     Block(inside: List[Statement], scope: ParserContext, pos: Position)
     Conditional(condition: Expression, body: Statement, scope: ParserContext, fallback: Option[Statement], pos: Position)
-    WhileStmt(condition: Expression, body: Statement, scope: ParserContext, pos: Position)
+    WhileStmt(condition: Expression, body: Statement, scope: ParserContext, id: Int, pos: Position)
     ExpressionStatement(expr: Expression, pos: Position)
+    DeferStmt(statement: Statement, pos: Position)
+    BreakStmt(loopID: Int, pos: Position)
+    ContinueStmt(loopID: Int, pos: Position)
     // LayoutDeclaration(signature: LayoutSignature, pos: Position)
 
     // not done
-    DeferStmt(statement: Statement, pos: Position)
 }
 
 record LexerContext(name: String, tokens: List[Token])
