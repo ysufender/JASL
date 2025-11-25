@@ -5,6 +5,6 @@ import src/lib
 
 def main() = mainSuite("lib") {
   test("Hello world") {
-    assertEqual(helloWorld(), "Hello, world!")
+    assertEqual(helloWorld(), "Hello, world!", "Expected 'Hello World'.") { (a, b) => a == b }
   }
 }
