@@ -193,7 +193,7 @@ interface Lexer {
 
 effect LexerError(msg: String, pos: Position): Nothing / CompilerContextRequest
 
-def lexer_report[T]() { prog: () => T / {LexerError, InternalError} }: T / {CompilerContextRequest, InternalError} = {
+def lexer_report[T]() { prog: () => T / {LexerError, InternalError} }: T / {CompilerSettingsRegister, CompilerContextRequest, InternalError} = {
     try { prog() }
     with LexerError { (msg, pos) => resume {
         val source: String = openRead(do getWorkingFile())
@@ -566,7 +566,7 @@ def handleTokenList() { prog: () => Unit / TokenListHandler }: List[Token] = {
     }
 }
 
-def lex(): List[Token] / {CompilerContextRequest, InternalError} = {
+def lex(): List[Token] / {CompilerSettingsRegister, CompilerContextRequest, InternalError} = {
     with lexer_report;
 
     val source: String = openRead(do getWorkingFile())

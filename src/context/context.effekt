@@ -277,6 +277,41 @@ record ModuleInfo(name: String, variables: Map[String, VariableSignature], funct
 
 effect StopCompiler(): Nothing
 
+type TargetType {
+    Executable()
+    Static()
+    Dynamic()
+}
+
+type BuildType {
+    Debug()
+    Release(jitCompatible: Bool)
+}
+
+type PipelineMode {
+    Full()
+    ILOnly()
+    TypeCheckOnly()
+}
+
+interface CompilerSettingsRegister {
+    // setters
+    def typeCheckOnly(): Unit
+    def compileOnly(): Unit
+    def buildStatic(): Unit
+    def buildDynamic(): Unit
+    def releaseBuild(jit: Bool): Unit
+    def setOutputFile(name: String): Unit
+    def setWorkingDir(dir: String): Unit
+
+    // getters
+    def getTargetType(): TargetType
+    def getBuildType(): BuildType
+    def getOutFile(): String
+    def getWorkingDir(): String
+    def getPipelineMode(): PipelineMode
+}
+
 interface CompilerContextRequest {
     def setWorkingFile(file: String): Unit // sets the current working file to return fi file name request comes.
     def getWorkingFile(): String // file name request
@@ -353,17 +388,25 @@ def infixEq(l: QualifiedName, r: QualifiedName): Bool = {
     b1 && (l.name == r.name)
 }
 
-def openRead(file: String): String / InternalError = {
+def openRead(file: String): String / {InternalError, CompilerSettingsRegister} = {
+    val file = do getWorkingDir()++file
     try { with filesystem; readFile(file) }
     with Exception[IOError] {
-        def raise(_, _) = do InternalError("Couldn't open file at path '"++file++"'.", __FILE__, __LINE__)
+        def raise(_, _) = {
+            println("Couldn't open file at path '"++file++"'.")
+            exit(1)
+        }
     }
 }
 
-def openWrite(file: String, content: String): Unit / InternalError = {
+def openWrite(file: String, content: String): Unit / {InternalError, CompilerSettingsRegister} = {
+    val file = do getWorkingDir()++file
     try { with filesystem; writeFile(file, content) }
     with Exception[IOError] {
-        def raise(_, _) = do InternalError("Couldn't open and write to file at path '"++file++"'.", __FILE__, __LINE__)
+        def raise(_, _) = {
+            println("Couldn't open and write to file at path '"++file++"'.")
+            exit(1)
+        }
     }
 }
 
@@ -458,7 +501,7 @@ def combineMapNoDup[T, U](m1: Map[T, U], m2: Map[T, U]): Map[T, U] / DuplicateKe
 
 def emptyModule(name: String): ModuleInfo = ModuleInfo(name, map::empty[String, VariableSignature](box strOrder), map::empty[String, FunctionSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
 
-def compilerContextHandler[T] { prog: () => T /  {CompilerContextRequest, InternalError} }: T / {InternalError, StopCompiler} = {
+def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {InternalError, StopCompiler, CompilerSettingsRegister} = {
     val _builtIns = [
         FunctionSignature("offset", true, false, None(), [
             VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny())),
@@ -701,5 +744,68 @@ __DEBUG_END__
                 case Nil() => do StopCompiler()
             }
         }
+    }
+}
+
+def settingsHandler[T] { prog: () => T /  CompilerSettingsRegister }: T / StopCompiler = {
+    var buildType = Debug();
+    var targetType = Executable()
+    var pipeline = Full()
+    var workingDir = ""
+    var outputFile = "out"
+
+    def getExtension() = targetType match {
+        case Executable() => ".jef"
+        case Static() => ".stc"
+        case Dynamic() => ".shd"
+    }
+
+    try { prog() }
+    with CompilerSettingsRegister {
+        // setters
+        def typeCheckOnly() = {
+            pipeline = TypeCheckOnly()
+            resume(())
+        }
+        def compileOnly() = {
+            pipeline = ILOnly()
+            resume(())
+        }
+        def buildStatic() = {
+            targetType = Static()
+            resume(())
+        }
+        def buildDynamic() = {
+            targetType  = Dynamic()
+            resume(())
+        }
+        def releaseBuild(jit) = {
+            buildType = Release(jit)
+            resume(())
+        }
+        def setOutputFile(name) = {
+            outputFile = name
+            resume(())
+        }
+        def setWorkingDir(dir) = {
+            if (dir.endsWith("/") || dir.endsWith("\\"))
+                workingDir = dir
+            else workingDir = dir++"/"
+            resume(())
+        }
+
+        // getters
+        def getTargetType() = resume(targetType)
+        def getBuildType() = resume(buildType)
+        def getOutFile() = resume(
+            if (outputFile.endsWith(getExtension()))
+                outputFile
+            else {
+                outputFile = outputFile++getExtension()
+                outputFile
+            }
+        )
+        def getWorkingDir() = resume(workingDir)
+        def getPipelineMode() = resume(pipeline)
     }
 }

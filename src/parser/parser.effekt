@@ -313,7 +313,7 @@ def emptyParserContext(): ParserContext =
     // ParserContext(None(), 0, map::empty[String, FunctionSignature](box strOrder), map::empty[String, VariableSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
     ParserContext(None(), 0, map::empty[String, VariableSignature](box strOrder))
 
-def parser_report[T] { prog: () => T / {ParserError, InternalError} }: T / {InternalError, CompilerContextRequest} = {
+def parser_report[T] { prog: () => T / {ParserError, InternalError} }: T / {CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
     try { prog() }
     with ParserError { (msg, pos) => {
         val source = openRead(do getWorkingFile())
@@ -518,6 +518,62 @@ def tokenHandler[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {
     }
 }
 
+def makeFunctionType(): Type / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest, InternalError} = {
+    // expect do peek() to be '('
+    do checkReturnOrCrash(Symbol(LParen()))
+
+    var arguments: List[Type] = []
+    var bodyOn: Bool = true
+    while (bodyOn) {
+        if ((do peek()).tokenType != Symbol(RParen()))
+        {
+            val pos: Position = (do peek()).position
+            val typename = handleTypeName()
+            arguments = Cons(typename, arguments)
+
+            (do advance()).tokenType match {
+                case Symbol(RParen()) => bodyOn = false
+                case Symbol(Comma()) => ()
+                case _ => do ParserError("Unexpected token '"++(do previous()).text++"' in function signature.", (do previous()).position)
+            }
+        } else {
+            bodyOn = false
+            val _ = do advance()
+        }
+    }
+
+    do checkReturnOrCrash(Symbol(Arrow()))
+
+    var returns: List[Type] = []
+    bodyOn = true
+    (do peek()).tokenType match {
+        case Symbol(LParen()) => {
+            do advance()
+            while (bodyOn) (do peek()).tokenType match {
+                case Symbol(RParen()) => {
+                    do advance()
+                    bodyOn = false
+                }
+                case _ => {
+                    val t: Type = handleTypeName()
+                    returns = Cons(t, returns)
+                    (do peek()).tokenType match {
+                        case Symbol(RParen()) => ()
+                        case Symbol(Comma()) => { val _ = do advance() } 
+                        case _ => do ParserError("Unexpected token '"++(do peek()).text++"' in function signature.", (do peek()).position)
+                    }
+                }
+            }
+        }
+        case _ => {
+            val t: Type = handleTypeName()
+            returns = Cons(t, returns)
+        }
+    }
+
+    FunctionPointer(arguments.reverse, returns.reverse)
+}
+
 def handleTypeName(): Type / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest, InternalError} = {
     val t: Type = (do advance()).tokenType match {
         case IdentifierT() => {
@@ -533,57 +589,7 @@ def handleTypeName(): Type / {TokenRequest, ParserError, ParserContextRequest, C
         case TypeNameT(_) => (do previous()).tokenType.toType(Some(do getWorkingModule()))
         case Keyword(Fn()) => {
             // fn (params) -> returns
-            do checkReturnOrCrash(Symbol(LParen()))
-
-            var arguments: List[Type] = []
-            var bodyOn: Bool = true
-            while (bodyOn) {
-                if ((do peek()).tokenType != Symbol(RParen()))
-                {
-                    val pos: Position = (do peek()).position
-                    val typename = handleTypeName()
-                    arguments = Cons(typename, arguments)
-
-                    (do advance()).tokenType match {
-                        case Symbol(RParen()) => bodyOn = false
-                        case Symbol(Comma()) => ()
-                        case _ => do ParserError("Unexpected token '"++(do previous()).text++"' in function signature.", (do previous()).position)
-                    }
-                } else {
-                    bodyOn = false
-                    val _ = do advance()
-                }
-            }
-
-            do checkReturnOrCrash(Symbol(Arrow()))
-
-            var returns: List[Type] = []
-            bodyOn = true
-            (do peek()).tokenType match {
-                case Symbol(LParen()) => {
-                    do advance()
-                    while (bodyOn) (do peek()).tokenType match {
-                        case Symbol(RParen()) => {
-                            do advance()
-                            bodyOn = false
-                        }
-                        case _ => {
-                            val t: Type = handleTypeName()
-                            returns = Cons(t, returns)
-                            (do peek()).tokenType match {
-                                case Symbol(RParen()) => ()
-                                case Symbol(Comma()) => { val _ = do advance() } 
-                                case _ => do ParserError("Unexpected token '"++(do peek()).text++"' in function signature.", (do peek()).position)
-                            }
-                        }
-                    }
-                }
-                case _ => {
-                    val t: Type = handleTypeName()
-                    returns = Cons(t, returns)
-                }
-            }
-            FunctionPointer(arguments.reverse, returns.reverse)
+            makeFunctionType()
         }
         case _ => do ParserError("Expected typename.", (do previous()).position)
     }
@@ -613,7 +619,7 @@ def inferType(vars: List[VariableSignature], expressions: List[Type]): List[Vari
  
 // This will prepass all used files and register their Tokens and names to the CompilerContext
 // also will register all symbols from all modules including module names to the CompilerContext
-def _prepass(): Unit / {ParserError, TokenRequest, InternalError, ParserContextRequest, CompilerContextRequest} = {
+def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, InternalError, ParserContextRequest, CompilerContextRequest} = {
     if (not(do check(Keyword(Preprocessor(Module()))))) {
         val token = do peek()
         do ParserError("Expected 'module' statement at the beginning of the file. Got '"++token.text++"' instead.", token.position)
@@ -877,7 +883,7 @@ def _prepass(): Unit / {ParserError, TokenRequest, InternalError, ParserContextR
     // do updateModule(variableSignatures, functionSignatures, layoutSignatures)
 }
 
-def prepass(tokens: List[Token], topLevel: ParserContext): Unit / {InternalError, CompilerContextRequest} = {
+def prepass(tokens: List[Token], topLevel: ParserContext): Unit / {CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
     with parser_report;
     with tokenHandler(tokens);
     with ignoreDefer;
@@ -1820,7 +1826,7 @@ def parseExpression(): Expression / {GlobalVariableRegister, FunctionOwnership, 
     parseAssignmentExpression()
 }
 
-def parse(tokens: List[Token], topLevel: ParserContext): AST / {GlobalVariableRegister, InternalError, CompilerContextRequest} = {
+def parse(tokens: List[Token], topLevel: ParserContext): AST / {CompilerSettingsRegister, GlobalVariableRegister, InternalError, CompilerContextRequest} = {
     with parser_report;
     with tokenHandler(tokens);
     with noLoop;

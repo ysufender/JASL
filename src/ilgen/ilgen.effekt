@@ -10,11 +10,13 @@ import io/filesystem
 
 interface ILGenerator {
     def spit(asm: String): Unit
+    def beginBlock(): Unit
+    def endBlock(): Unit
 }
 
 effect ILGenError(msg: String, pos: Position): Nothing / CompilerContextRequest
 
-def ilgen_report[T] { prog: () => T / ILGenError }: T / {InternalError, CompilerContextRequest} = {
+def ilgen_report[T] { prog: () => T / ILGenError }: T / {CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
     try { prog() }
     with ILGenError { (msg, pos) => {
         val source = openRead(do getWorkingFile())
@@ -37,8 +39,9 @@ def ilgen_report[T] { prog: () => T / ILGenError }: T / {InternalError, Compiler
     }}
 }
 
-def ilgen[T](target: String) { prog: () => T / ILGenerator }: T / {ILGenError, InternalError} = {
+def ilgen[T](target: String) { prog: () => T / ILGenerator }: T / {CompilerSettingsRegister, ILGenError, InternalError} = {
     with stringBuffer;
+    var tab = 0;
 
     try {
         val res = prog()
@@ -47,8 +50,17 @@ def ilgen[T](target: String) { prog: () => T / ILGenerator }: T / {ILGenError, I
         res
     } with ILGenerator {
         def spit(asm) = {
+            each(0, tab){ _ => do write("    ") }
             do write(asm)
             resume(do write("\n"))
+        }
+        def beginBlock() = {
+            tab = tab + 1
+            resume(())
+        }
+        def endBlock() = {
+            tab = tab - 1
+            resume(())
         }
     }
 }
@@ -67,7 +79,7 @@ def ignoreStop[T]() { prog: () => T / StopCompiler }: Unit = {
 
 def statementGen(stmt: Statement): Unit / {ILGenerator, CompilerContextRequest} = stmt match {
     case FnDefinition(sign, _, _, _) => {
-        do spit(do getWorkingModule()++if(sign.public){"$$pub"}else{"$$priv"}++"$$"++sign.name++":")
+        do spit("\n"++do getWorkingModule()++if(sign.public){"$$pub"}else{"$$priv"}++"$$"++sign.name++":")
     }
     case _ => ()
 }
@@ -80,15 +92,23 @@ def _gen(stmts: List[Statement]): Unit / {ILGenerator, CompilerContextRequest} =
     case Nil() => ()
 }
 
-def gen(target: String): Unit / {InternalError, CompilerContextRequest} = {
+def gen(target: String): Unit / {CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
     with ilgen_report;
     with ilgen(target);
     compilerStopHandler {
         do spit("This file is generated automatically by the JASL Compiler")
-        do spit("\n\n.prep\n\torg jasl$$internal$$main\n\tsts 256000\n\tsth 64000")
-        do spit(".body\n\tjasl$$internal$$main:")
-        do spit("mov 0 &bl cal main$$priv$$main")
-        do spit("jmp jasl$$internal$$end$$here")
+        do spit("\n.prep")
+        do beginBlock()
+            do spit("org jasl$$internal$$main")
+            do spit("sts 256000")
+            do spit("sth 64000")
+        do endBlock()
+        do spit(".body")
+        do beginBlock()
+            do spit("jasl$$internal$$main:")
+            do spit("mov 0 &bl")
+            do spit("cal main$$priv$$main")
+            do spit("jmp jasl$$internal$$end$$here")
 
         while (true) {
             val AST(filename, modulename, statements) = do emitAST()
@@ -98,6 +118,8 @@ def gen(target: String): Unit / {InternalError, CompilerContextRequest} = {
         }
     }
 
+    do endBlock()
     do spit("\tjasl$$internal$$end$$here:")
-    do spit(".end\n\nEnd of generated IL")
+    do spit(".end")
+    do spit("End of generated IL")
 }
