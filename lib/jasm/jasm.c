@@ -9,7 +9,7 @@
 #include "stdlib.h"
 #include "float.h"
 
-Double string_to_float(struct Pos _str)
+Double string_to_float(String _str)
 {
     const char* str = (char*)c_bytearray_data(_str);
     char* end;

@@ -1,7 +1,6 @@
 module string
 
-include "lib/jasl/memory.jasl"
-include "lib/jasl/io.jasl"
+include "lib/jasl/memory"
 
 // TODO: Improve this.
 

@@ -1,6 +1,6 @@
 module io
 
-include "lib/jasl/string.jasl"
+include "lib/jasl/string"
 
 pub fn string::String::println() -> void {
     asm {

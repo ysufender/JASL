@@ -3,27 +3,101 @@ module ilgen
 import parser/parser
 import lexer/lexer
 import context/context
+
 import stringbuffer
+import process
+import io/filesystem
 
 interface ILGenerator {
     def spit(asm: String): Unit
 }
 
-// TODO: This place.
+effect ILGenError(msg: String, pos: Position): Nothing / CompilerContextRequest
 
-def ilgen[T](target: String) { prog: T / ILGenerator }: T / GenerationError = {
-    with filesystem;
-    with stringbuffer;
-
+def ilgen_report[T] { prog: () => T / ILGenError }: T / {InternalError, CompilerContextRequest} = {
     try { prog() }
-    with ILGenerator {
+    with ILGenError { (msg, pos) => {
+        val source = openRead(do getWorkingFile())
+        val errLine: String = try {
+                                val line = pos.line - 1
+                                val lines = source.split("\n")
+                                lines.get(line)
+                            } with Exception[OutOfBounds] {
+                                def raise(_, _) = "<unknown>"
+                            }
+
+        val spaces: String = " ".repeat(pos.col+7)
+        val helpLine: String = getHelpLine()
+
+        println("[ILGEN ERROR] "++do getWorkingFile()++" at "++show(pos)++": "++msg)
+        println("\n        "++errLine)
+        println(spaces++"^")
+        println(spaces++helpLine)
+        exit(1)
+    }}
+}
+
+def ilgen[T](target: String) { prog: () => T / ILGenerator }: T / {ILGenError, InternalError} = {
+    with stringBuffer;
+
+    try {
+        val res = prog()
+        openWrite(target, do flush())
+        println("[ILGEN] IL output written to path: "++target)
+        res
+    } with ILGenerator {
         def spit(asm) = {
             do write(asm)
-            do write("\n")
+            resume(do write("\n"))
+        }
+    }
+}
+
+def compilerStopHandler[T]() { prog: () => T / StopCompiler }: Unit / {ILGenerator, ILGenError, InternalError} = {
+    try { prog(); () }
+    with StopCompiler {
+        println("[ILGEN] Compiler exited without any errors.")
+    }
+}
+
+def ignoreStop[T]() { prog: () => T / StopCompiler }: Unit = {
+    try { prog(); () }
+    with StopCompiler { () }
+}
+
+def statementGen(stmt: Statement): Unit / {ILGenerator, CompilerContextRequest} = stmt match {
+    case FnDefinition(sign, _, _, _) => {
+        do spit(do getWorkingModule()++if(sign.public){"$$pub"}else{"$$priv"}++"$$"++sign.name++":")
+    }
+    case _ => ()
+}
+
+def _gen(stmts: List[Statement]): Unit / {ILGenerator, CompilerContextRequest} = stmts match {
+    case Cons(stmt, rest) => {
+        statementGen(stmt)
+        _gen(rest)
+    }
+    case Nil() => ()
+}
+
+def gen(target: String): Unit / {InternalError, CompilerContextRequest} = {
+    with ilgen_report;
+    with ilgen(target);
+    compilerStopHandler {
+        do spit("This file is generated automatically by the JASL Compiler")
+        do spit("\n\n.prep\n\torg jasl$$internal$$main\n\tsts 256000\n\tsth 64000")
+        do spit(".body\n\tjasl$$internal$$main:")
+        do spit("mov 0 &bl cal main$$priv$$main")
+        do spit("jmp jasl$$internal$$end$$here")
+
+        while (true) {
+            val AST(filename, modulename, statements) = do emitAST()
+            do setWorkingFile(filename)
+            do setWorkingModule(modulename)
+            _gen(statements)
         }
     }
 
-    do writeFile(do flush(), target)
+    do spit("\tjasl$$internal$$end$$here:")
+    do spit(".end\n\nEnd of generated IL")
 }
-
-def gen(target: String)

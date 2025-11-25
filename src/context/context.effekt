@@ -270,7 +270,7 @@ type Statement {
 }
 
 record LexerContext(name: String, tokens: List[Token])
-record AST(moduleName: String, body: List[Statement])
+record AST(filename: String, moduleName: String, body: List[Statement])
 
 record QualifiedName(mod: Option[String], name: String)
 record ModuleInfo(name: String, variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layouts: Map[String, LayoutSignature])
@@ -353,10 +353,17 @@ def infixEq(l: QualifiedName, r: QualifiedName): Bool = {
     b1 && (l.name == r.name)
 }
 
-def openRead(file: String): String / {CompilerContextRequest, InternalError} = {
+def openRead(file: String): String / InternalError = {
     try { with filesystem; readFile(file) }
     with Exception[IOError] {
         def raise(_, _) = do InternalError("Couldn't open file at path '"++file++"'.", __FILE__, __LINE__)
+    }
+}
+
+def openWrite(file: String, content: String): Unit / InternalError = {
+    try { with filesystem; writeFile(file, content) }
+    with Exception[IOError] {
+        def raise(_, _) = do InternalError("Couldn't open and write to file at path '"++file++"'.", __FILE__, __LINE__)
     }
 }
 

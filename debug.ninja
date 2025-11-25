@@ -25,7 +25,7 @@ pool ppool
 
 rule prp
     pool = ppool
-    command = ./$basebuild/preprocessor $in $debug > ${out}
+    command = ./$basebuild/preprocessor $in $out $debug
 
 rule efc
     pool = cpool
@@ -69,9 +69,10 @@ build $builddir/lexer/lexer.effekt: prp $sourcedir/lexer/lexer.effekt | $basebui
 build $builddir/parser/parser.effekt: prp $sourcedir/parser/parser.effekt | $basebuild/preprocessor
 build $builddir/context/context.effekt: prp $sourcedir/context/context.effekt | $basebuild/preprocessor
 build $builddir/native/native.effekt: prp $sourcedir/native/native.effekt | $basebuild/preprocessor
+build $builddir/ilgen/ilgen.effekt: prp $sourcedir/ilgen/ilgen.effekt | $basebuild/preprocessor
 build $builddir/main.effekt: prp $sourcedir/main.effekt | $basebuild/preprocessor
 
-build $builddir/main.ll: efc $builddir/main.effekt | $builddir/lexer/lexer.effekt $builddir/parser/parser.effekt $builddir/context/context.effekt $builddir/native/native.effekt
+build $builddir/main.ll: efc $builddir/main.effekt | $builddir/lexer/lexer.effekt $builddir/parser/parser.effekt $builddir/context/context.effekt $builddir/native/native.effekt $builddir/ilgen/ilgen.effekt
 
 build $builddir/jasl.bs: las $builddir/main.ll
 build $builddir/jasl.o: lc $builddir/jasl.bs

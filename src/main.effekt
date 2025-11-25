@@ -8,12 +8,14 @@
 // Jasl will have objects but won't have inheritance since I don't want to deal
 // with vtables. No interfaces either, at least for now.
 
-import process
-import args
+import native/native
 import context/context
 import lexer/lexer
 import parser/parser
-import native/native
+import ilgen/ilgen
+
+import args
+import process
 import map
 
 def printHelp(): Unit = {
@@ -23,6 +25,7 @@ def printHelp(): Unit = {
 }
 
 def main() = {
+    with ignoreStop;
     // 1- Parse command line
     // 2- Lex input file(s)
     // 3- Prepass file(s)
@@ -40,76 +43,68 @@ def main() = {
         printHelp()
     } else {
         with internalErrorHandler;
-        try {
-            with compilerContextHandler;
-            with handleGlobals;
-            with on[OutOfBounds].panic;
+        with compilerContextHandler;
+        with handleGlobals;
+        with on[OutOfBounds].panic;
 
-            do setWorkingFile(llvm::argument(1))
+        do setWorkingFile(llvm::argument(1))
 
-            val tokenized: List[Token] = lexer::lex()
-            val topLevel: ParserContext = emptyParserContext()
-            parser::prepass(tokenized, topLevel)
+        val tokenized: List[Token] = lexer::lex()
+        val topLevel: ParserContext = emptyParserContext()
+        parser::prepass(tokenized, topLevel)
 
-            // check for main module and entry point.
-            // every project must include a main module that has a main function
-            // with a signature fn () -> i32
-            // entry point must be private.
-            if (not(do checkEntryPoint())) {
-                println("[ERROR] Couldn't find entry point accross the project.")
-                println("        The entry point must reside in module 'main', must not be public,")
-                println("        and must have the signature fn () -> i32")
-                println("\n        Example:")
-                println("                module main")
-                println("                fn main() -> void {")
-                println("                ")
-                println("                }")
-                exit(1)
-            }
+        // check for main module and entry point.
+        // every project must include a main module that has a main function
+        // with a signature fn () -> i32
+        // entry point must be private.
+        if (not(do checkEntryPoint())) {
+            println("[ERROR] Couldn't find entry point accross the project.")
+            println("        The entry point must reside in module 'main', must not be public,")
+            println("        and must have the signature fn () -> i32")
+            println("\n        Example:")
+            println("                module main")
+            println("                fn main() -> void {")
+            println("                ")
+            println("                }")
+            exit(1)
+        }
 
 __DEBUG_START__
-            feed[ModuleInfo] { () => do emitModules() } { case ModuleInfo(name, vars, fns, lays) => {
-                with parser_report;
-                with tokenHandler(tokenized);
-                with contextHandler(emptyParserContext())
-                println("\nModule Info: "++name)
+        feed[ModuleInfo] { () => do emitModules() } { case ModuleInfo(name, vars, fns, lays) => {
+            with parser_report;
+            with tokenHandler(tokenized);
+            with contextHandler(emptyParserContext())
+            println("\nModule Info: "++name)
 
-                do setWorkingModule(name)
+            do setWorkingModule(name)
 
-                println("\tVariables:")
-                feed[VariableSignature] { vars.eachValue } { v => println("\t\t"++v.show()) }
+            println("\tVariables:")
+            feed[VariableSignature] { vars.eachValue } { v => println("\t\t"++v.show()) }
 
-                println("\tFunctions:")
-                feed[FunctionSignature] { fns.eachValue } { v => println("\t\t"++v.show()) }
+            println("\tFunctions:")
+            feed[FunctionSignature] { fns.eachValue } { v => println("\t\t"++v.show()) }
 
-                println("\tLayouts:")
-                feed[LayoutSignature] { lays.eachValue } { v => println("\t\t"++v.show()) }
-            }} 
+            println("\tLayouts:")
+            feed[LayoutSignature] { lays.eachValue } { v => println("\t\t"++v.show()) }
+        }} 
 __DEBUG_END__
 
-            feed[(String, LexerContext)]{ () => do emitLexerOutput() } { case (filename, context) => {
-                do setWorkingFile(filename)
-                do setWorkingModule(context.name)
-                debugPrint("Parse called for "++do getWorkingFile()++" module "++do getWorkingModule())
-                do registerAST(parser::parse(context.tokens, topLevel))
-            }}
+        feed[(String, LexerContext)]{ () => do emitLexerOutput() } { case (filename, context) => {
+            do setWorkingFile(filename)
+            do setWorkingModule(context.name)
+            debugPrint("Parse called for "++do getWorkingFile()++" module "++do getWorkingModule())
+            do registerAST(parser::parse(context.tokens, topLevel))
+        }}
 
-            // register global variable ASTs, the AST register is LIFO
-            (do getGlobalVarASTs()).foreach{ ast => {
-                debugPrint("Registering global variables for module "++ast.moduleName++".")
-                do registerAST(ast)
-            }}
+        // register global variable ASTs, the AST register is LIFO
+        (do getGlobalVarASTs()).foreach{ ast => {
+            debugPrint("Registering global variables for module "++ast.moduleName++".")
+            do registerAST(ast)
+        }}
 
-            while (true) {
-                val ast: AST = do emitAST()
-            }
+        ilgen::gen("out.jasm")
 
-            // val ast: AST = parser::parse(tokenized)
-            // val asmfile: String = generator::generate_il(AST)
-            // AssembleIL(asmfile)
-        } with StopCompiler {
-            println("Compiler exited without any errors.")
-        }
+        // AssembleIL()
     }
 }
 
