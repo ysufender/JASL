@@ -1,127 +1,93 @@
-# Effekt Template
+# JASL - Just A Scripting Language
 
-> [!WARNING]
-> This is a work-in-progress, feel free to contribute!
+> STATUS: Writing the parser [AST Generation]
+> UPCOMING: JASM IL generation from AST
 
-This template provides a starting point for Effekt projects.
+JASL is a statically typed, low-level(!) and byte-compiled scripting language backed by JASM and CSR. JASL is
+written in the [Effekt research language](https://effekt-lang.org/) and is compiled into JASM IL. The rest is done
+by the [JASM Assembler and Linker](https://github.com/ysufender/JASM) and [CSR](https://github.com/ysufender/CSR).
 
-## Table of contents
+Since it is backed by JASM and CSR, JASL can call C ABI compatible functions with a specific signature (given in 
+CSR documentation). So as long as you provide a clean wrapper for JASL to call, native calls are completely possible.
 
-- [First steps](#first-steps)
-- [Useful commands](#useful-commands)
-  - [Effekt commands](#effekt-commands)
-  - [Nix-related commands](#nix-related-commands)
-- [Example projects](#example-projects-using-this-template)
-- [Repository structure](#repository-structure)
-- [CI](#ci)
+JASL looks and feels like Zig/C and allows you to use raw pointers, pointer arithmetic and unsafe actions. However
+these are all done on VM level, the pointers are not "real" pointers so it's all safe to mess up. CSR is completely
+sandboxed (not if on JIT (perhaps depends on CSR implementation)) and (hopefully) crash-free.
 
----
+JASL is NOT object oriented, I think. But you can define layouts. Like C structs but different because you can directly
+define "methods" for them. See below:
 
-## First steps
+```rust
+// every file is a module and must start with a module directive
+module main
 
-After using this template, follow these steps to set up your project:
+include "math" // includes 'math.jasl' from the search path
+// Circular dependencies are allowed, the linker handles them.
 
-1. Set up your development environment:
-   - Clone this repository locally.
-   - Open it in VSCode.
-   - Install the Effekt VSCode extension offered in the pop-up in the bottom right.
+// Wrapper layout means everything inside this layout is
+// hidden from outside. It is, in fact, a wrapper for what's inside.
+wrapper layout String {
+    data: void*;
 
-2. Customize the project:
-   - Open `flake.nix` and update the project name and other relevant values (follow the comments).
-   - Push your `flake.nix` file after the changes and see if the CI agrees.
+    //pub someField: u32; // [PARSER ERROR] main.jasl at 9:5: Public fields in wrapper layouts are not allowed. 
+};
 
-3. Set-up auto-update CI in order to get weekly PRs on Tuesday which update the Effekt version in CI:
-   - Go to Settings -> Actions -> General:
-     - and set "Workflow permissions" to "Read and write permissions"
-     - and check "Allow GitHub Actions to create and approve pull requests"    
-   - See the [CI](#ci) section for more details
+// Oh yeah, multiple returns. This is not a tuple mind you.
+pub fn String::unpack() -> (u32, i8*) {
+    // all variables are immutable by default. Use 'mut' after 'let' to make them mutable.
+    let size: u32 = this.data.ptrcast(u32).deref();
+    let data: i8* = this.data.ptrcast(i8).offset(sizeof(u32))); // no overloaded arithmetic operators
+    return { size, data }; // braces are expression lists, used to return multiple values
+}
 
-3. Replace this `README` with your own!
+fn main() -> void {
+    /*
+        Block comment
+        /* And nested comments are allowed. */
+    */
+    let someStr: String = "Hello World";
 
-## Useful commands
+    let (size: u32, data: i8*) = someStr.unpack(); // this is just syntax sugar
+                              // String::unpack(someStr);
 
-### Effekt commands
-
-Run the main file:
-```sh
-effekt src/main.effekt
-```
-This (like many other Effekt commands) uses the JavaScript backend by default.
-To use a different backend, add the `--backend <backend>` flag.
-
-Run the tests:
-```sh
-effekt src/test.effekt
-```
-
-Open the REPL:
-```sh
-effekt
+    // ':=' is not a token, it's just ':' and '='
+    let inferredFromRhs := math::abs(-12);
+    let (multiple:, infer:) = { 5u32, 6i8 };
+}
 ```
 
-Build the project:
-```sh
-effekt --build src/main.effekt
+## Quickstart
+
+### Installation
+
+You can either grab the compiled binaries from the release section (if there is any), or build JASL from source. I recommend
+building from source since it's pretty easy.
+
+#### Building From The Source
+
+##### Prerequisites
+
+- Ninja Makefiles 1.11+
+- Effekt 0.49+
+
+The Effekt version must be exactly the same for a smooth experience. Since it is a research language I can't promise for any kind
+of backwards compatibility.
+
+##### Building
+
+Just run `ninja -f <configuration>.ninja` and the final executable `jasl(.exe optionally)` will be written to `$SOURCE_DIR/build/$CONFIGURATION/`
+
+### Basic CLI Usage
+
+Here is the helper text from the current version of JASL:
+
 ```
-This builds the project into the `out/` directory, creating a runnable file `out/main`.
+The JASL Compiler
+        Version: 0.0.1
 
-To see all available options and backends, run:
-```sh
-effekt --help
+Usage:
+        jasl [flags] <file>
+
+        Flags:
+                -h : Prints this help message.
 ```
-
-### Nix-related commands
-
-While Nix installation is optional, it provides several benefits:
-
-Update dependencies (also runs automatically in CI):
-```sh
-nix flake update
-```
-
-Open a shell with all necessary dependencies:
-```sh
-nix develop
-```
-
-Run the main entry point:
-```sh
-nix run
-```
-
-Build the project (output in `result/bin/`):
-```sh
-nix build
-```
-
-## Example projects using this template
-
-- [see the `effekt-community` GitHub organization](https://github.com/effekt-community/)
-- This very project!
-
-## Repository structure
-
-- `.github/workflows/*.yml`: Contains the [CI](#ci) definitions
-- `src/`: Contains the source code
-  - `main.effekt`: Main entry point
-  - `test.effekt`: Entry point for tests
-  - `lib.effekt`: Library code imported by `main` and `test`
-- `flake.nix`: Package configuration in a Nix flake
-- `flake.lock`: Auto-generated lockfile for dependencies
-- `LICENSE`: Project license
-- `README`: This README file
-
-## CI
-
-Two GitHub Actions are set up:
-
-1. `flake-check`:
-   - Checks the `flake.nix` file, builds and tests the project
-   - Runs on demand, on `main`, and on PRs
-   - To run custom commands, add a step using:
-     - `nix run -- <ARGS>` to run the main entry point with the given arguments
-     - `nix develop -c '<bash command to run>'` to run commands in the correct environment
-
-2. `update-flake-lock`:
-   - Updates package versions in `flake.nix`
-   - Runs on demand and weekly (Tuesdays at 00:00 UTC)
