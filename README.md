@@ -85,10 +85,19 @@ Here is the helper text from the current version of JASL:
 ```
 The JASL Compiler
         Version: 0.0.1
+        Usage:
+        jasl <input_file> [flags]
+                Flags:
+                --help                  : print this help message
 
-Usage:
-        jasl [flags] <file>
+                --typecheck             : do not compile or assemble, typecheck only
+                --compile               : do not assemble, generate IL only
 
-        Flags:
-                -h : Prints this help message.
+                --static                : build a static library
+                --dynamic               : build a dynamic library
+
+                --release [jit = false] : build in release mode, with optional jit support. defaults to false.
+
+                --output <file_name>    : set output file name
+                --working <file_name>   : set working directory
 ```
