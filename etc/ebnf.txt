@@ -1,0 +1,97 @@
+<program> ::= { <top-level> }
+
+<identifier> ::= { "_" } letter { letter | digit | "_" }
+<int>        ::= digit { digit }
+<float>      ::= digit { digit } "." digit { digit }
+<string>     ::= '"' { any-char-except-quote } '"'
+<boolean>    ::= "true" | "false"
+<nullptr>    ::= "nullptr"
+
+<type-name> ::= "ptr" | "bool" | "u32" | "i32" | "float" | "u8" | "i8" | <custom-type>
+<type>      ::= <type-name> | "void" | <pointer-type>
+
+<pointer-type> ::= <type> "*"
+<custom-type> ::= uppercase-letter <identifier>
+
+<literal> ::= <boolean> | <string> | <uint-literal> | <int-literal> | <float-literal> | <ubyte-literal> | <byte-literal> | "nullptr"
+
+<uint-literal>  ::= <int> "u32"
+<int-literal>   ::= <int>
+<float-literal> ::= <float>
+<ubyte-literal> ::= <int> "u8"
+<byte-literal>  ::= <int> "i8"
+
+<qualified-name> ::= <type-name> "::" <identifier>
+
+<var-signature> ::= [ "mut" ] <identifier> ":" <type>
+
+<function-signature> ::= [ "pub" ] "fn" (<identifier> | <qualified-name>) "(" [ <param-list> ] ")" [ "->" <return-list> ]
+
+<param-list> ::= <var-signature> { "," <var-signature> }
+<return-list> ::= <type> | "(" <type> { "," <type> } ")"
+
+<layout-signature> ::= [ "pub" ] [ "wrapper" ] "layout" <identifier> "{" { <var-signature> ";" } "}"
+
+<expression> ::= <conditional-expression>
+
+<conditional-expression> ::= <logical-or-expression>
+
+<logical-or-expression> ::= <logical-and-expression> { "||" <logical-and-expression> }
+
+<logical-and-expression> ::= <equality-expression> { "&&" <equality-expression> }
+
+<equality-expression> ::= <relational-expression> { ( "==" | "!=" ) <relational-expression> }
+
+<relational-expression> ::= <additive-expression> { ( ">" | "<" | ">=" | "<=" ) <additive-expression> }
+
+<additive-expression> ::= <multiplicative-expression> { ( "+" | "-" ) <multiplicative-expression> }
+
+<multiplicative-expression> ::= <unary-expression> { ( "*" | "/" ) <unary-expression> }
+
+<unary-expression> ::= ( "-" | "!" | "not" ) <unary-expression> | <postfix-expression>
+
+<postfix-expression> ::= <primary-expression> { <postfix-suffix> }
+
+<postfix-suffix> ::= "." <identifier> | "(" [ <arg-list> ] ")" | "::" <identifier>
+
+<arg-list> ::= <expression> { "," <expression> }
+
+<primary-expression> ::= <identifier>
+                       | <literal>
+                       | "(" <expression> ")"
+                       | <block-expression>
+
+<block-expression> ::= "{" { <statement> } "}"
+
+<statement> ::= <expression-statement>
+              | <variable-definition>
+              | <if-statement>
+              | <while-statement>
+              | <fn-declaration>
+              | <layout-declaration>
+              | <return-statement>
+              | <assignment-statement>
+
+<expression-statement> ::= <expression> ";"
+
+<variable-definition> ::= "let" <var-signature> [ "=" <expression> ] ";"
+
+<if-statement> ::= "if" "(" <expression> ")" <block-body> [ "else" ( <block-body> | <if-statement> ) ]
+
+<while-statement> ::= "while" "(" <expression> ")" <block-body>
+
+<fn-declaration> ::= <function-signature> <block-body>
+
+<block-body> ::= "{" { <statement> } "}"
+
+<layout-declaration> ::= <layout-signature>
+
+<return-statement> ::= "return" [ <expression-list> ] ";"
+
+<expression-list> ::= <expression> { "," <expression> }
+
+<assignment-statement> ::= <lvalue> "=" <expression> ";"
+
+<lvalue> ::= <identifier> | <lvalue> . <identifier>
+
+<top-level> ::= { <fn-declaration> | <layout-declaration> | [ "pub" ] <variable-definition> }

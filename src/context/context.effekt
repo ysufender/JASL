@@ -1,0 +1,814 @@
+module context
+
+import process
+import io/filesystem
+import io/error
+import io
+import map
+
+import native/native
+
+
+val helpLines: List[String] = [
+    "Here",
+    "No need to thank me",
+    "Right here buddy",
+    "It's here lad",
+    "I spotted it, just for you",
+    "I FOUND HIM BOSS",
+    "You seriously missed this?",
+    "Come on, it's here",
+    "You should be a bit more careful with your code",
+    "Hm. Here",
+    "|____ <- There",
+    "I'm running out of ideas for error indicator messages",
+    "You can't hate yourself, not yet"
+]
+
+def getHelpLine(): String = try { 
+        val rand: Int = random_range(0, helpLines.size() - 1)
+        helpLines.get(rand)
+    } with Exception[OutOfBounds] {
+        def raise(_, _) = "<unknown>"
+    }
+
+effect InternalError(msg: String, file: String, line: String): Nothing
+
+def internalErrorHandler[T]{ prog: () => T / InternalError }: T = {
+    try { prog() }
+    with InternalError { (msg, file, line) => {
+        println("[INTERNAL ERROR "++file++":"++line++"] The program ran into an unexpected internal error. Please report this issue to the author.")
+        println("        Internal Message: "++msg)
+        exit(1)
+    }}
+}
+
+def unpackOrCrash[T](optional: Option[T]): T / InternalError = optional match {
+    case Some(value) => value
+    case None() => do InternalError("Expected a defined option.", __FILE__, __LINE__)
+}
+
+def compareHead[T](head: List[T], full: List[T]) {eq: (T, T) => Bool }: Bool = {
+    if (head is Nil()) true
+    else if (full is Nil()) false
+    else if (head is Cons(h1, r1) and full is Cons(h2, r2)) {
+        if (h1.eq(h2)) compareHead(r1, r2) { eq }
+        else false
+    }
+    else false
+}
+
+def compare[T](lhs: List[T], rhs: List[T]) { eq: (T, T) => Bool }: Bool = {
+    if (lhs is Cons(head1, rest1) and rhs is Cons(head2, rest2)) {
+        if (head1.eq(head2)) compare(rest1, rest2) { eq }
+        else false
+    }
+    else if (lhs.isEmpty && rhs.isEmpty) { true }
+    else false
+}
+
+type Type {
+    Bool()
+    UInt()
+    Int()
+    Float()
+    UByte()
+    Byte()
+    Pointer(ptrType: Type)
+    Void()
+    FunctionPointer(arguments: List[Type], returns: List[Type])
+    Custom(name: QualifiedName)
+    InternalAny()
+    TypeType(inner: Type)
+    Depends(decide: List[Type] => List[Type] at { io })
+    Any(these: List[Type])
+    // MAYBE: add type Runtime() for runtime sized types.
+    // because the bytecode can return differing sizes from functions and
+    // thanks to bl register the caller can know the return size. Also
+    // the callee can know the parameter size like that too so we can do
+    // insane unsafe calls (long as it's 256 bytes max) and returns.
+}
+
+record FunctionSignature(
+    name: String,
+    public: Bool,
+    comptime: Bool,
+    ofType: Option[Type],
+    arguments: List[VariableSignature],
+    returns: List[Type]
+)
+
+record VariableSignature(
+    name: String,
+    public: Bool,
+    mutable: Bool,
+    comptime: Bool,
+    global: Bool,
+    stackIndex: Int,
+    varType: Type
+)
+
+record LayoutSignature(
+    name: String,
+    public: Bool,
+    wrapper: Bool,
+    fields: List[VariableSignature]
+)
+
+type PreprocessorKeywordType {
+    Module()
+    Include()
+}
+
+type KeywordType {
+    Preprocessor(pWord: PreprocessorKeywordType)
+    Wrapper()
+    Layout()
+    Fn()
+    Pub()
+    Return()
+    Let()
+    Void()
+    While()
+    Extern()
+    If()
+    Else()
+    Mut()
+    Defer()
+    Break()
+    Continue()
+}
+
+type SymbolType {
+    LParen()
+    RParen()
+    LBrace()
+    RBrace()
+    Comma()
+    Colon()
+    Semicolon()
+    DotSym()
+    DoubleColon()
+    Arrow()
+    Assign()
+    Asterix()
+    LessSym()
+    GreatSym()
+    LessEq()
+    GreatEq()
+    Equals()
+    NotEq()
+    NotSym()
+    Minus()
+    Plus()
+    Divide()
+    AndSym()
+    OrSym()
+}
+
+type DataType {
+    BoolT(value: Option[Bool]) // for 'true' and 'false' keywords.
+    StringT()
+    UIntT()
+    IntT()
+    FloatT()
+    UByteT()
+    ByteT()
+    PointerT(ptrType: DataType)
+    VoidT()
+    CustomT(name: String)
+}
+
+type TokenType {
+    LiteralT(valueType: DataType)
+    IdentifierT()
+    Keyword(keywordType: KeywordType)
+    Symbol(symbolType: SymbolType)
+    TypeNameT(typeType: DataType)
+    Assembly()
+    EOF()
+}
+
+record Position(line: Int, col: Int, index: Int)
+record Token(tokenType: TokenType, text: String, position: Position)
+
+record ParserContext(
+    parent: Option[ParserContext],
+    stackIndex: Int, // for in-function blocks to get the local variables easily.
+    variables: Map[String, VariableSignature]
+    // these are already in CompilerContext
+    // functions: Map[String, FunctionSignature],
+    // layouts: Map[String, LayoutSignature]
+)
+
+type Literal {
+    Bool(value: Bool)
+    String(value: String)
+    UInt(value: Int)
+    Int(value: Int)
+    Float(value: Double)
+    UByte(value: Int)
+    Byte(value: Int)
+    Nullptr()
+    TypeLiteral(value: Type)
+}
+
+type BinaryOp {
+    Addition(lhs: Expression, rhs: Expression)
+    Subtraction(lhs: Expression, rhs: Expression)
+    Division(lhs: Expression, rhs: Expression)
+    Multiplication(lhs: Expression, rhs: Expression)
+    Equality(lhs: Expression, rhs: Expression)
+    Inequality(lhs: Expression, rhs: Expression)
+    Great(lhs: Expression, rhs: Expression)
+    Lesser(lhs: Expression, rhs: Expression)
+    GreaterEqual(lhs: Expression, rhs: Expression)
+    LesserEqual(lhs: Expression, rhs: Expression)
+    And(lhs: Expression, rhs: Expression)
+    Or(lhs: Expression, rhs: Expression)
+}
+
+type UnaryOp {
+    Negation(rhs: Expression)
+    Not(rhs: Expression)
+}
+
+type Expression {
+    // done
+    Identifier(name: QualifiedName, pos: Position)
+    Binary(binOp: BinaryOp, pos: Position)
+    Unary(unOp: UnaryOp, pos: Position)
+    Grouping(inside: Expression, pos: Position)
+    Literal(value: Literal, pos: Position)
+    // Block(inside: List[Statement], scope: ParserContext, pos: Position)
+    Dot(lhs: Expression, member: QualifiedName, pos: Position)
+    Call(fn: Expression, args: List[Expression], pos: Position)
+    Scoping(name: QualifiedName, pos: Position)
+    Initialization(name: Type, initializers: List[Expression], pos: Position)
+    ExpressionList(inside: List[Expression], pos: Position)
+
+    // not done
+    Assignment(lhs: Expression, rhs: Expression, pos: Position)
+}
+
+type Statement {
+    // done
+    FnDefinition(signature: FunctionSignature, body: List[Statement], scope: ParserContext, pos: Position)
+    ReturnStmt(returns: List[Expression], pos: Position)
+    InlineAssembly(assembly: String, pos: Position)
+    VariableDefinition(signature: List[VariableSignature], initializer: Option[Expression], pos: Position)
+    Block(inside: List[Statement], scope: ParserContext, pos: Position)
+    Conditional(condition: Expression, body: Statement, fallback: Option[Statement], pos: Position)
+    WhileStmt(condition: Expression, body: Statement, id: Int, pos: Position)
+    ExpressionStatement(expr: Expression, pos: Position)
+    // DeferStmt(statement: Statement, pos: Position) // it's syntax sugar
+    BreakStmt(loopID: Int, pos: Position)
+    ContinueStmt(loopID: Int, pos: Position)
+    // LayoutDeclaration(signature: LayoutSignature, pos: Position)
+
+    // not done
+}
+
+record LexerContext(name: String, tokens: List[Token])
+record AST(filename: String, moduleName: String, body: List[Statement])
+
+record QualifiedName(mod: Option[String], name: String)
+record ModuleInfo(name: String, variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layouts: Map[String, LayoutSignature])
+
+effect StopCompiler(): Nothing
+
+type TargetType {
+    Executable()
+    Static()
+    Dynamic()
+}
+
+type BuildType {
+    Debug()
+    Release(jitCompatible: Bool)
+}
+
+type PipelineMode {
+    Full()
+    ILOnly()
+    TypeCheckOnly()
+}
+
+interface CompilerSettingsRegister {
+    // setters
+    def typeCheckOnly(): Unit
+    def compileOnly(): Unit
+    def buildStatic(): Unit
+    def buildDynamic(): Unit
+    def releaseBuild(jit: Bool): Unit
+    def setOutputFile(name: String): Unit
+    def setWorkingDir(dir: String): Unit
+
+    // getters
+    def getTargetType(): TargetType
+    def getBuildType(): BuildType
+    def getOutFile(): String
+    def getWorkingDir(): String
+    def getPipelineMode(): PipelineMode
+}
+
+interface CompilerContextRequest {
+    def setWorkingFile(file: String): Unit // sets the current working file to return fi file name request comes.
+    def getWorkingFile(): String // file name request
+    def setWorkingModule(mod: String): Unit // set working module name to mangle function names.
+    def getWorkingModule(): String // module name request.
+    def checkDependency(file: String): Bool // import "file", if it's already processed returns true, if not returns false
+    def addFunction(fn: FunctionSignature): Unit / InternalError
+    def addLayout(layout: LayoutSignature): Unit / InternalError
+    def addVariable(variable: VariableSignature): Unit / InternalError
+    def makeComptime(isFn: Bool, name: QualifiedName): Unit
+    def increaseGlobalStackIndex(amount: Int): Unit
+    def getGlobalStackIndex(): Int
+    def registerLexerOutput(output: List[Token]): Unit
+    def emitLexerOutput(): Unit / emit[(String, LexerContext)]
+    def getLexerOutput(): List[Token]
+    def getLayoutSignature(name: QualifiedName): Option[LayoutSignature]
+    def getVariableSignature(name: QualifiedName): Option[VariableSignature]
+    def getFunctionSignature(name: QualifiedName): Option[FunctionSignature]
+    def checkEntryPoint(): Bool
+__DEBUG_START__
+    def emitModules(): Unit / emit[ModuleInfo]
+__DEBUG_END__
+    def registerAST(ast: AST): Unit
+    def emitAST(): AST / StopCompiler
+}
+
+def makePointer(signature: FunctionSignature): Type = {
+    FunctionPointer(signature.arguments.map{v => v.varType}, signature.returns)
+}
+
+def infixEq(l: Type, r: Type): Bool / CompilerContextRequest = (l, r) match {
+    case (Type::Any(list), other) => list.any{t => t == other}
+    case (other, Type::Any(list)) => list.any{t => t == other}
+    case (_, InternalAny()) => true
+    case (InternalAny(), _) => true
+    case (Type::Pointer(InternalAny()), Type::FunctionPointer(_, _)) => true
+    case (Type::FunctionPointer(_, _), Type::Pointer(InternalAny())) => true
+    case (Type::Bool(), Type::Bool()) => true
+    case (Type::UInt(), Type::UInt()) => true
+    case (Type::Int(), Type::Int()) => true
+    case (Type::Float(), Type::Float()) => true
+    case (Type::UByte(), Type::UByte()) => true
+    case (TypeType(t1), TypeType(t2)) => t1 == t2
+    case (Type::Byte(), Type::Byte()) => true
+    case (Type::Pointer(p1), Type::Pointer(p2)) => (p1 == p2)
+    case (Type::Void(), Type::Void()) => true
+    case (Type::FunctionPointer(a1, r1), Type::FunctionPointer(a2, r2)) => (a1.compare(a2){(a, b) => a == b} && r1.compare(r2){(a, b) => a == b})
+    case (Type::Custom(n1), Type::Custom(n2)) => {
+        val q1 = QualifiedName(n1.mod match {
+            case Some(_) => n1.mod
+            case None() => Some(do getWorkingModule())
+        }, n1.name)
+        val q2 = QualifiedName(n2.mod match {
+            case Some(_) => n2.mod
+            case None() => Some(do getWorkingModule())
+        }, n2.name)
+        q1 == q2
+    }
+    case (_, _) => false
+}
+
+def infixEq(l: QualifiedName, r: QualifiedName): Bool = {
+    val b1: Bool = l.mod match {
+        case Some(m1) => r.mod match {
+            case Some(m2) => m1 == m2
+            case None() => false
+        }
+        case None() => r.mod match {
+            case Some(_) => false
+            case None() => true
+        }
+    }
+    b1 && (l.name == r.name)
+}
+
+def openRead(file: String): String / {InternalError, CompilerSettingsRegister} = {
+    val file = do getWorkingDir()++file
+    try { with filesystem; readFile(file) }
+    with Exception[IOError] {
+        def raise(_, _) = {
+            println("Couldn't open file at path '"++file++"'.")
+            exit(1)
+        }
+    }
+}
+
+def openWrite(file: String, content: String): Unit / {InternalError, CompilerSettingsRegister} = {
+    val file = do getWorkingDir()++file
+    try { with filesystem; writeFile(file, content) }
+    with Exception[IOError] {
+        def raise(_, _) = {
+            println("Couldn't open and write to file at path '"++file++"'.")
+            exit(1)
+        }
+    }
+}
+
+def feed[T] { stream: () => Unit / emit[T] } { prog: (T) => Unit / {CompilerContextRequest, InternalError} }: Unit / {CompilerContextRequest, InternalError} = {
+    try { stream() }
+    with emit[T] { v => {
+        prog(v)
+        resume(())
+    }}
+}
+
+def unimplemented(file: String, line: String): Nothing / InternalError = {
+    do InternalError("This segment of the project is still unimplemented. Please stay tuned.", file, line)
+}
+
+def unimplemented(file: String, line: String, message: String): Nothing / InternalError = {
+    do InternalError("This segment of the project is still unimplemented. Please stay tuned.\n\t\tDetailed Message: "++message, file, line)
+}
+
+def unreachable(file: String, line: String): Nothing / InternalError = {
+    do InternalError("This segment of the project was meant to be unreachable. Please contact the author to inform of this error.", file, line)
+}
+
+def debugPrint(msg: String): Unit = {
+__DEBUG_START__
+    println("[DEBUG] "++msg)
+__DEBUG_END__
+}
+
+def combine[T](l1: List[T], l2: List[T]): List[T] = l1 match {
+    case Cons(head, rest) => combine[T](rest, Cons(head, l2))
+    case Nil() => l2
+}
+
+def show(n: QualifiedName): String = n.mod match {
+    case Some(modname) => modname++"::"++n.name
+    case None() => n.name
+}
+
+def toType(dt: DataType, mod: Option[String]): Type = dt match {
+    case BoolT(_) => Bool()
+    case StringT() => Custom(QualifiedName(Some("string"), "String"))
+    case UIntT() => UInt()
+    case IntT() => Int()
+    case FloatT() => Float()
+    case UByteT() => UByte()
+    case ByteT() => Byte()
+    case PointerT(ptrType) => Pointer(ptrType.toType(mod))
+    case VoidT() => Void()
+    case CustomT(name) => Custom(QualifiedName(mod, name))
+}
+
+def toType(tt: TokenType, mod: Option[String]): Type / InternalError = tt match {
+    case TypeNameT(dt) => dt.toType(mod)
+    case _ => do InternalError("Can't turn a token type other than TypeNameT to Type", __FILE__, __LINE__)
+}
+
+def strEquals(l: String, r: String): Bool =
+    l == r
+
+def strOrder(l: String, r: String): Ordering = {
+    def loop(i: Int): Ordering = {
+        if (i >= l.length && i >= r.length) { Equal() }
+        else if (i >= l.length) { Less() }
+        else if (i >= r.length) { Greater() }
+        else {
+            val lc = l.unsafeCharAt(i)
+            val rc = r.unsafeCharAt(i)
+
+            if (lc < rc) { Less() }
+            else if (lc > rc) { Greater() }
+            else { loop(i + 1) }
+        }
+    }
+
+    loop(0)
+}
+
+// should be sure that option is defined
+def unpack[T](option: Option[T]): T = option match {
+    case Some(t) => t
+    case None() => <> /*do InternalError("Unpack on empty option.", __FILE__, __LINE__)*/
+}
+
+effect DuplicateKey[T](key: T): Nothing
+def combineMapNoDup[T, U](m1: Map[T, U], m2: Map[T, U]): Map[T, U] / DuplicateKey[T] = {
+    var dupKey: Option[T] = None()
+    if (m1.keys.any { k => { dupKey = Some(k); m2.contains(k) } })
+        do DuplicateKey(dupKey.unpack())
+    m1.union(m2)
+}
+
+def emptyModule(name: String): ModuleInfo = ModuleInfo(name, map::empty[String, VariableSignature](box strOrder), map::empty[String, FunctionSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
+
+def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {InternalError, StopCompiler, CompilerSettingsRegister} = {
+    val _builtIns = [
+        FunctionSignature("offset", true, false, None(), [
+            VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny())),
+            VariableSignature("off", false, true, false, false, 4, Type::Any([Type::Int(), Type::UInt()])),
+        ], [ Type::Depends(box { l => {
+            if (l is Cons(head, _))
+                [head]
+            else
+                <>
+        }})]),
+
+        FunctionSignature("sizeof", true, true, None(), [
+            VariableSignature("var", false, true, false, false, 0, Type::InternalAny())
+        ], [ Type::UInt() ]),
+
+        FunctionSignature("ptrcast", true, true, None(), [
+            VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny())),
+            VariableSignature("newType", false, true, false, false, 4, Type::TypeType(Type::InternalAny()))
+        ], [ Type::Depends(box { l => {
+            if (l is Cons(_, Cons(Type::TypeType(newType), _)))
+                [Type::Pointer(newType)]
+            else <>
+        }})]),
+
+        FunctionSignature("intcast", true, false, None(), [
+            VariableSignature("var", false, true, false, false, 0, Type::Any([
+                Type::Int(), Type::UInt(), Type::Byte(), Type::UByte(), Type::Float()
+            ])),
+            VariableSignature("to", false, true, false, false, 4, TypeType(Type::Any([
+                Type::Int(), Type::UInt(), Type::Byte(), Type::UByte(), Type::Float()
+            ])))
+        ], [ Type::Depends( box { l => {
+            if (l is Cons(_, Cons(Type::TypeType(newType), _)))
+                [newType]
+            else <>
+        }})]),
+
+        FunctionSignature("deref", true, false, None(), [
+            VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny()))
+        ], [ Type::Depends(box { l => {
+            if (l is Cons(Type::Pointer(returnType), Nil()))
+                [returnType]
+            else <>
+        }})]),
+
+        FunctionSignature("ref", true, false, None(), [
+            VariableSignature("var", false, true, false, false, 0, Type::InternalAny())
+        ], [ Type::Depends(box { l => {
+            if (l is Cons(t, Nil()))
+                [Type::Pointer(t)]
+            else <>
+        }})]),
+
+        // newValue is not type checked in parser, type check at IL generation
+        FunctionSignature("set", true, false, None(), [
+            VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny())),
+            VariableSignature("newValue", false, true, false, false, 4, Type::InternalAny())
+        ], [ Type::Depends(box { l => {
+            if (l is Cons(t, Nil()))
+                [t]
+            else <>
+        }})]),
+
+        FunctionSignature("static_assert", true, true, None(), [
+            VariableSignature("condition", false, false, true, false, 0, Type::Bool())
+        ], [ Type::InternalAny() ]),
+
+        FunctionSignature("unreachable", true, true, None(), [], [ Type::InternalAny() ])
+    ]
+    var builtIns: Map[String, FunctionSignature] = map::empty(box strOrder)
+
+    _builtIns.foreach{b => builtIns = builtIns.put(b.name, b)}
+
+    var currentFile: String = ""
+    var currentModule: String = ""
+    var processedFiles: Map[String, LexerContext] = map::empty(box strOrder)
+    var modules: Map[String, ModuleInfo] = map::empty(box strOrder)
+    var asts: List[AST] = []
+    var globalStackIndex: Int = 32
+    // first 64 bytes are empty because of potential nullptr reads.
+    // nullptr == 0 on VM RAM
+
+    try { prog() }
+    with CompilerContextRequest {
+        def setWorkingFile(file) = {
+            currentFile = file
+            if (not(processedFiles.contains(file)))
+                processedFiles = processedFiles.put(file, LexerContext(currentModule, []))
+            resume(())
+        }
+        def getWorkingFile() = resume(currentFile)
+        def setWorkingModule(mod) = {
+            currentModule = mod
+            if (not(modules.contains(mod)))
+                modules = modules.put(mod, emptyModule(mod))
+            resume(())
+        }
+        def getWorkingModule() = resume(currentModule)
+        def checkDependency(file) = resume(processedFiles.contains(file))
+        def addFunction(fn) = resume { if (modules.contains(currentModule)) {
+            val oldInf = modules.get(currentModule).unpack()
+
+            if (builtIns.contains(fn.name)) {
+                println("[WARNING] "++currentFile++" at ???: User defined function '"++fn.name++"' will be shadowed by the built-in '"++fn.name++"'. Use a qualified name ('"++currentModule++"::"++fn.name++"') to use the function.")
+            } else if (oldInf.functions.contains(fn.name)) {
+                println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++fn.name++"' in module '"++currentModule++"'.")
+                exit(1)
+            }
+
+            val newInf = ModuleInfo(
+                currentModule,
+                oldInf.variables,
+                oldInf.functions.put(fn.name, fn),
+                oldInf.layouts
+            )
+
+            modules = modules.put(currentModule, newInf)
+        } else {
+            do InternalError("Call 'context::setWorkingModule' before calling 'context::updateModule'", __FILE__, __LINE__)
+        }}
+        def addLayout(layout) = resume { if (modules.contains(currentModule)) {
+            val oldInf = modules.get(currentModule).unpack()
+
+            if (oldInf.layouts.contains(layout.name)) {
+                println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++layout.name++"' in module '"++currentModule++"'.")
+                exit(1)
+            }
+
+            val newInf = ModuleInfo(
+                currentModule,
+                oldInf.variables,
+                oldInf.functions,
+                oldInf.layouts.put(layout.name, layout)
+            )
+
+            modules = modules.put(currentModule, newInf)
+        } else {
+            do InternalError("Call 'context::setWorkingModule' before calling 'context::updateModule'", __FILE__, __LINE__)
+        }}
+        def addVariable(variable) = resume { if (modules.contains(currentModule)) {
+            val oldInf = modules.get(currentModule).unpack()
+
+            if (oldInf.variables.contains(variable.name)) {
+                println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++variable.name++"' in module '"++currentModule++"'.")
+                exit(1)
+            }
+
+            val newInf = ModuleInfo(
+                currentModule,
+                oldInf.variables.put(variable.name, variable),
+                oldInf.functions,
+                oldInf.layouts
+            )
+
+            modules = modules.put(currentModule, newInf)
+        } else {
+            do InternalError("Call 'context::setWorkingModule' before calling 'context::updateModule'", __FILE__, __LINE__)
+        }}
+        def makeComptime(isFn, name) = resume(isFn match {
+            case true => ()
+            case false => ()
+        })
+        def increaseGlobalStackIndex(amount) = {
+            globalStackIndex = globalStackIndex + amount
+            resume(())
+        }
+        def getGlobalStackIndex() = resume(globalStackIndex)
+        def registerLexerOutput(output) = {
+            processedFiles = processedFiles.put(currentFile, LexerContext(currentModule, output)) // overrides the value at name
+            resume(())
+        }
+        def emitLexerOutput() = resume {
+            processedFiles.each()
+        }
+        def getLexerOutput() = resume(processedFiles.get(currentFile) match {
+            case Some(lex) => lex.tokens
+            case None() => unreachable(__FILE__, __LINE__)
+        })
+        def getLayoutSignature(name) = resume(
+            name.mod match {
+                case None() => modules.get(currentModule).unpack().layouts.get(name.name)
+                case Some(moduleinfo) =>
+                    if (modules.contains(moduleinfo)) {
+                        modules.get(moduleinfo).unpack().layouts.get(name.name) match {
+                            case Some(layout) => if (not(layout.public) && (moduleinfo != currentModule)) { None() }
+                                                   else { Some(layout) }
+                            case None() => None()
+                        }
+                    } else { None() }
+            }
+        )
+        def getVariableSignature(name) = resume(
+            name.mod match {
+                case None() => modules.get(currentModule).unpack().variables.get(name.name)
+                case Some(moduleinfo) =>
+                    if (modules.contains(moduleinfo)) {
+                        modules.get(moduleinfo).unpack().variables.get(name.name) match {
+                            case Some(variable) => if (not(variable.public) && (moduleinfo != currentModule)) { None() }
+                                                   else { Some(variable) }
+                            case None() => None()
+                        }
+                    } else { None() }
+            }
+        )
+        def getFunctionSignature(name) = resume(
+            if (name.mod is None() and builtIns.contains(name.name)) builtIns.get(name.name)
+            else name.mod match {
+                case None() => modules.get(currentModule).unpack().functions.get(name.name)
+                case Some(moduleinfo) =>
+                    if (modules.contains(moduleinfo)) {
+                        modules.get(moduleinfo).unpack().functions.get(name.name) match {
+                            case Some(function) => if (not(function.public) && (moduleinfo != currentModule)) { None() }
+                                                   else { Some(function) }
+                            case None() => None()
+                        }
+                    } else { None() }
+            }
+        )
+        def checkEntryPoint() = resume(modules.get("main") match {
+            case None() => false
+            case Some(mod) => mod.functions.get("main") match {
+                case None() => false
+                case Some(fn) => fn.returns match {
+                    case Cons(Type::Void(), Nil()) => not(fn.public) && fn.arguments.isEmpty
+                    case _ => false
+                }
+            }
+        })
+__DEBUG_START__
+        def emitModules() = resume {
+            modules.eachValue()
+        } 
+__DEBUG_END__
+        def registerAST(ast) = {
+            asts = Cons(ast, asts)
+            resume(())
+        }
+        def emitAST() = resume {
+            asts match {
+                case Cons(ast, rest) => {
+                    asts = rest
+                    ast
+                }
+                case Nil() => do StopCompiler()
+            }
+        }
+    }
+}
+
+def settingsHandler[T] { prog: () => T /  CompilerSettingsRegister }: T / StopCompiler = {
+    var buildType = Debug();
+    var targetType = Executable()
+    var pipeline = Full()
+    var workingDir = ""
+    var outputFile = "out"
+
+    def getExtension() = targetType match {
+        case Executable() => ".jef"
+        case Static() => ".stc"
+        case Dynamic() => ".shd"
+    }
+
+    try { prog() }
+    with CompilerSettingsRegister {
+        // setters
+        def typeCheckOnly() = {
+            pipeline = TypeCheckOnly()
+            resume(())
+        }
+        def compileOnly() = {
+            pipeline = ILOnly()
+            resume(())
+        }
+        def buildStatic() = {
+            targetType = Static()
+            resume(())
+        }
+        def buildDynamic() = {
+            targetType  = Dynamic()
+            resume(())
+        }
+        def releaseBuild(jit) = {
+            buildType = Release(jit)
+            resume(())
+        }
+        def setOutputFile(name) = {
+            outputFile = name
+            resume(())
+        }
+        def setWorkingDir(dir) = {
+            if (dir.endsWith("/") || dir.endsWith("\\"))
+                workingDir = dir
+            else workingDir = dir++"/"
+            resume(())
+        }
+
+        // getters
+        def getTargetType() = resume(targetType)
+        def getBuildType() = resume(buildType)
+        def getOutFile() = resume(
+            if (outputFile.endsWith(getExtension()))
+                outputFile
+            else {
+                outputFile = outputFile++getExtension()
+                outputFile
+            }
+        )
+        def getWorkingDir() = resume(workingDir)
+        def getPipelineMode() = resume(pipeline)
+    }
+}
