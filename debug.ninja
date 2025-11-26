@@ -13,6 +13,7 @@ CL = g++
 CFLAGS = -O0 -ggdb
 LFLAGS = -O0 -flto -no-pie
 LLFLAGS = --debugger-tune=gdb -O0 -opaque-pointers
+EFLAGS = -c --backend llvm -o $builddir --includes $builddir --no-optimize
 
 pool cpool
     depth = 4
@@ -29,7 +30,7 @@ rule prp
 
 rule efc
     pool = cpool
-    command = effekt -c --backend llvm $in -o $builddir --includes $builddir
+    command = effekt $in $EFLAGS
 
 rule cc
     pool = cpool

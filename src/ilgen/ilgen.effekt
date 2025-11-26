@@ -3,6 +3,7 @@ module ilgen
 import parser/parser
 import lexer/lexer
 import context/context
+import native/native
 
 import stringbuffer
 import process
@@ -77,14 +78,186 @@ def ignoreStop[T]() { prog: () => T / StopCompiler }: Unit = {
     with StopCompiler { () }
 }
 
-def statementGen(stmt: Statement): Unit / {ILGenerator, CompilerContextRequest} = stmt match {
-    case FnDefinition(sign, _, _, _) => {
-        do spit("\n"++do getWorkingModule()++if(sign.public){"$$pub"}else{"$$priv"}++"$$"++sign.name++":")
+def handleTokens[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {ILGenError, CompilerContextRequest} = {
+    var tokens = _tokens
+    var previousToken: Token = Token(EOF(), "", Position(0, 0, 0))
+
+    def next() = {
+        with on[MissingValue].default{ <> };
+        if (tokens.isEmpty)
+            Token(EOF(), "", previousToken.position)
+        else {
+            previousToken = tokens.head
+            tokens = tokens.tail
+            previousToken
+        }
+    }
+
+    try { prog() }
+    with TokenRequest {
+        def matchNext(tokensToMatch) = resume(compare(tokensToMatch, tokens.take(tokensToMatch.size).map{t => t.tokenType}){ (l, r) => infixEq(l, r) })
+        def matchAny(tokensToMatch) = try {
+            resume(tokensToMatch.any { t => t == tokens.head.tokenType })
+        } with Exception[MissingValue] {
+            def raise(_, _) = resume(false)
+        }
+        def check(token) = resume(try { token.infixEq(tokens.head.tokenType) }
+                            with Exception[MissingValue] {
+                                def raise(_, _) = false
+                            })
+        def checkOrCrash(token) = resume {
+            try {
+                if (token.infixEq(tokens.head.tokenType)) { true }
+                else do ILGenError("Expected '"++token.show++"', got '"++tokens.head.tokenType.show++"'.", tokens.head.position)
+            }
+            with Exception[MissingValue] {
+                def raise(_, _) = do ILGenError("Expected `"++token.show++"', got  EOF.", previousToken.position)
+            }
+        }
+        def checkReturnOrCrash(token) = resume {
+            try {
+                if (token.infixEq(tokens.head.tokenType)) { next() }
+                else do ILGenError("Expected '"++token.show++"', got '"++tokens.head.tokenType.show++"'.", previousToken.position)
+            } with Exception[MissingValue] {
+                def raise(_, _) = do ILGenError("Expected '"++token.show++"', got an unexpected EOF.", previousToken.position)
+            }
+        }
+        def advance() = resume { next() }
+        def rewind() = {
+            tokens = Cons(previousToken, tokens)
+            resume(previousToken)
+        }
+        def peek() = resume(try { tokens.head }
+                            with Exception[MissingValue] {
+                                def raise(_, _) = previousToken
+                            })
+        def previous() = resume(previousToken)
+        def is_eof() = resume(tokens.isEmpty)
+    }
+}
+
+def getModeFromType(t: Type) = t match {
+    case Type::Bool() => Some("%ub")
+    case Type::UInt() => Some("%ui")
+    case Type::Int() => Some("%i")
+    case Type::Float() => Some("%f")
+    case Type::UByte() => Some("%ub")
+    case Type::Byte() => Some("%b")
+    case Type::Pointer(_) => Some("%ui")
+    case Type::FunctionPointer(_, _) => Some("%ui")
+    case _ => None()
+}
+
+def makeSymbol(name: QualifiedName, public: Bool) = name.mod match {
+    case None() => do getWorkingModule()++"$$"++if(public){"pub"}else{"priv"}++"$$"++name.name
+    case Some(mod) => mod++"$$"++if(public){"pub"}else{"priv"}++"$$"++name.name
+}
+
+def expressionGen(expr: Expression): Unit / {ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = expr match {
+    case Identifier(name, _) => {
+        with parser_report;
+        val sign = do getVar(name)
+        sign.varType.getModeFromType match {
+            case Some(modeflag) => do spit("rdl "++modeflag++" "++sign.stackIndex.show)
+            case None() => {
+                // TODO: Create a single instruction to read range from address
+                do spit("mov "++sign.stackIndex.show++" &eax")
+                do spit("add %ui &bp &eax")
+                do spit("mov "++sign.varType.typeSize.show++" &ecx")
+                do spit("mov &sp &ebx")
+                do spit("mcp %s %s")
+            }
+        }
+    }
+    case Call(fn, args, _) => {
+        with parser_report;
+        args.foreach{arg => arg.expressionGen}
+        fn match {
+            case Identifier(name, _) => {
+                val sign = do getFunctionSignature(name).unpack
+                val sym = name.makeSymbol(sign.public)
+                do spit("mov "++args.evalType.map{s => s.typeSize}.sum.show++" &bl")
+                do spit("cal "++sym)
+            }
+            case _ => {
+                // TODO: call function pointer
+            }
+        }
     }
     case _ => ()
 }
 
-def _gen(stmts: List[Statement]): Unit / {ILGenerator, CompilerContextRequest} = stmts match {
+def statementGen(stmt: Statement): Unit / {ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = stmt match {
+    case FnDefinition(sign, body, scope, _) => {
+        do spit("")
+        do spit(do getWorkingModule()++if(sign.public){"$$pub"}else{"$$priv"}++"$$"++sign.name++":")
+        do beginBlock()
+            with parser_report;
+            with contextHandler(scope);
+            body.foreach{stmt => stmt.statementGen}
+        do endBlock()
+    }
+    case ReturnStmt(returns, _) => {
+        with parser_report;
+        returns.foreach{ret => ret.expressionGen}
+        do spit("mov "++returns.evalType.map{t => t.typeSize}.sum.show++" &bl")
+        do spit("ret")
+    }
+    case InlineAssembly(asm, _) => {
+        do spit(asm)
+    }
+    case VariableDefinition(signature, initializer, pos) => {
+        with parser_report;
+        do spit("#"++signature.map{s => s.name}.join(", ")++"#")
+        initializer match {
+            case Some(expr) => expr.expressionGen
+            case None() => do spit("inc %ui &sp "++signature.map{s => s.varType.typeSize}.sum.show)
+        }
+    }
+    case Block(inside, scope, _) => {
+        do beginBlock()
+            with parser_report;
+            with contextHandler(scope);
+            inside.foreach{stmt => stmt.statementGen}
+        do endBlock()
+    }
+    case Conditional(condition, body, fallback, pos) => {
+        condition.expressionGen
+        val conditionID = random_range(0, native::i64Max).show
+        do spit("cnd jasl$$if_"++conditionID)
+        do spit("jmp jasl$$else_"++conditionID)
+        do spit("jasl$$if_"++conditionID++":")
+        body.statementGen
+        do spit("jasl$$else_"++conditionID++":")
+        fallback match {
+            case Some(conditional) => conditional.statementGen
+            case None() => ()
+        }
+    }
+    case WhileStmt(condition, body, id, pos) => {
+        with handleLoop(id);
+        val loopID = id.show
+        do spit("jasl$$while_begin_"++loopID++":")
+        condition.expressionGen
+        do spit("cnd jasl$$while_body_"++loopID)
+        do spit("jmp jals$$while_end_"++loopID)
+        do spit("jasl$$while_body_"++loopID++":")
+        body.statementGen
+        do spit("jmp jasl$$while_begin_"++loopID)
+        do spit("jasl$$while_end_"++loopID++":")
+    }
+    case ExpressionStatement(expr, _) => {
+        with parser_report;
+        val size = expr.evalType.map{t => t.typeSize}.sum
+        expr.expressionGen
+        if (size > 0)
+            do spit("dcr %ui &sp "++size.show)
+    }
+    case BreakStmt(id, _) => do spit("jmp jasl$$while_end_"++id.show)
+    case ContinueStmt(id, _) => do spit("jmp jasl$$while_begin_"++id.show)
+}
+
+def _gen(stmts: List[Statement]): Unit / {ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = stmts match {
     case Cons(stmt, rest) => {
         statementGen(stmt)
         _gen(rest)
@@ -92,23 +265,45 @@ def _gen(stmts: List[Statement]): Unit / {ILGenerator, CompilerContextRequest} =
     case Nil() => ()
 }
 
-def gen(target: String): Unit / {CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
+def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister, InternalError, CompilerSettingsRegister, InternalError, CompilerContextRequest, CompilerSettingsRegister} = {
     with ilgen_report;
     with ilgen(target);
+    with handleTokens(do getLexerOutput());
+    with parser_report;
+    with contextHandler(topLevel)
     compilerStopHandler {
         do spit("This file is generated automatically by the JASL Compiler")
         do spit("\n.prep")
         do beginBlock()
-            do spit("org jasl$$internal$$main")
+            do spit("org jasl$$internal$$globals")
             do spit("sts 256000")
             do spit("sth 64000")
         do endBlock()
         do spit(".body")
         do beginBlock()
+            do spit("jasl$$internal$$nullptrcallsafeguard:")
+            do beginBlock()
+                do spit("#32 byte nop followed by a jump to error message function#")
+                do spit("rom 0 0 0 0 0 0 0 0 ; ")
+                do spit("jmp jasl$$innternal$$nullptrjump")
+            do endBlock()
             do spit("jasl$$internal$$main:")
-            do spit("mov 0 &bl")
-            do spit("cal main$$priv$$main")
-            do spit("jmp jasl$$internal$$end$$here")
+            do beginBlock()
+                do spit("mov 0 &bl")
+                do spit("cal main$$priv$$main")
+                do spit("jmp jasl$$internal$$end$$here")
+            do endBlock()
+            do spit("")
+            do spit("jasl$$internal$$globals:")
+            do beginBlock()
+                do spit("rep %s %b 32 0")
+                do getGlobalVarASTs().foreach{ast => {
+                    do setWorkingFile(ast.filename)
+                    do setWorkingModule(ast.moduleName)
+                    _gen(ast.body)
+                }}
+                do spit("jmp jasl$$internal$$main")
+            do endBlock()
 
         while (true) {
             val AST(filename, modulename, statements) = do emitAST()
@@ -118,8 +313,15 @@ def gen(target: String): Unit / {CompilerSettingsRegister, InternalError, Compil
         }
     }
 
+    do spit("jasl$$innternal$$nullptrjump:")
+    do beginBlock()
+        do spit("mov 0 &sp")
+        do spit("raw 77 \"Jump to null pointer detected, check your code for nullptr function pointers.\" 0 ;")
+        do spit("stf syscall on")
+        do spit("mov 4 &bl cal 0")
     do endBlock()
-    do spit("\tjasl$$internal$$end$$here:")
-    do spit(".end")
+    do spit("jasl$$internal$$end$$here:")
+    do endBlock()
+    do spit(".end\n")
     do spit("End of generated IL")
 }

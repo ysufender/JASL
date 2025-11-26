@@ -237,14 +237,14 @@ __DEBUG_END__
 def isComptime(stmt: Statement): Bool / {InternalError, ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = stmt match {
     case ExpressionStatement(expr, _) => expr.isComptime
     case VariableDefinition(signature, initializer, _) => if (initializer is Some(expr)) { isComptime(expr) } else { true }
-    case Conditional(condition, body, scope, fallback, _) => isComptime(condition) && isComptime(body) && (if (fallback is Some(else_block)) { isComptime(else_block) } else { true })
-    case WhileStmt(condition, body, scope, _, _) => false // No. For now. TODO
+    case Conditional(condition, body, fallback, _) => isComptime(condition) && isComptime(body) && (if (fallback is Some(else_block)) { isComptime(else_block) } else { true })
+    case WhileStmt(condition, body, _, _) => false // No. For now. TODO
     case FnDefinition(signature, body, scope, _) => signature.comptime
     // case LayoutDeclaration(signature, _) => true // Come on.
     case ReturnStmt(returns, _) => returns.all { r => isComptime(r) }
     case InlineAssembly(_, _) => false
     case Block(inside, _, _) => inside.all { st => st.isComptime }
-    case DeferStmt(stmt, _) => stmt.isComptime
+    // case DeferStmt(stmt, _) => stmt.isComptime // it's syntax sugar
     case BreakStmt(_, _) => true
     case ContinueStmt(_, _) => true
 }
@@ -313,7 +313,7 @@ def emptyParserContext(): ParserContext =
     // ParserContext(None(), 0, map::empty[String, FunctionSignature](box strOrder), map::empty[String, VariableSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
     ParserContext(None(), 0, map::empty[String, VariableSignature](box strOrder))
 
-def parser_report[T] { prog: () => T / {ParserError, InternalError} }: T / {CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
+def parser_report[T] { prog: () => T / ParserError }: T / {CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
     try { prog() }
     with ParserError { (msg, pos) => {
         val source = openRead(do getWorkingFile())
@@ -746,7 +746,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
 
         name = (do previous()).text
 
-        if ((do getFunctionSignature(QualifiedName(None(), name))) is Some(_))
+        if ((do getFunctionSignature(QualifiedName(Some(do getWorkingModule()), name))) is Some(_))
             do ParserError("Multiple definition of function '"++name++"'.", (do previous()).position)
 
         do checkReturnOrCrash(Symbol(LParen()))
@@ -840,7 +840,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
                     do ParserError("Expected a file path, got '"++token.text++"' instead.", token.position)
                 }
 
-                if (not (do checkDependency(token.text)))
+                if (not(do checkDependency(token.text++".jasl")))
                 {
                     val currentFile: String = do getWorkingFile()
                     val currentModule: String = do getWorkingModule()
@@ -1069,7 +1069,7 @@ def handleFunctionDef(): Statement / {defer, LoopHandler, GlobalVariableRegister
     
     try {
         body.last match {
-            case Conditional(_, _, _, _, _) => body.last.checkReturns
+            case Conditional(_, _, _, _) => body.last.checkReturns
             case _ => ()
         }
     } with Exception[MissingValue] {
@@ -1098,7 +1098,7 @@ def handleReturnStatement(): Statement / {GlobalVariableRegister, FunctionOwners
         case Symbol(Semicolon()) => {
             do advance()
             do returns([Void()], pos)
-            ReturnStmt([], pos)
+            ReturnStmt([ExpressionList([], pos)], pos)
         }
         case _ => {
             returns = Cons(parseExpression(), returns)
@@ -1264,13 +1264,12 @@ def handleConditional(): Statement / {LoopHandler, GlobalVariableRegister, Funct
         case _ => None()
     }
 
-    Conditional(condition, body, scope, fallback, pos)
+    Conditional(condition, body, fallback, pos)
 }
 
 def handleWhile(): Statement / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     val pos: Position = (do previous()).position
     val condition: Expression = parseExpression()
-    val scope: ParserContext = do createChildContext()
 
     if (not(condition.evalType.compare([Type::Bool()]){(a, b) => a == b}))
         do ParserError("While condition must return type '(bool)'. Got '"++condition.evalType.show++"' instead.", pos)
@@ -1279,11 +1278,11 @@ def handleWhile(): Statement / {GlobalVariableRegister, FunctionOwnership, Retur
     with handleLoop(loopID);
 
     val body: Statement = (do advance()).tokenType match {
-        case Symbol(LBrace()) => handleBlockStatement(scope)
+        case Symbol(LBrace()) => handleBlockStatement(do createChildContext())
         case _ => do ParserError("Expected a block after if statement.", pos)
     }
 
-    WhileStmt(condition, body, scope, loopID, pos)
+    WhileStmt(condition, body, loopID, pos)
 }
 
 def handleDefer(): Statement / {defer, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
@@ -1326,12 +1325,12 @@ def checkReturns(conditional: Statement): Unit / {FunctionOwnership, ReturnTypeR
         with contextHandler(scope);
         inside.foreach{s => s.checkReturns}
     }
-    case Conditional(_, body, scope, fallback, _) => {
+    case Conditional(_, body, fallback, _) => {
         with ignoreDefer;
-        contextHandler(scope) {
+        //contextHandler(scope) {
             do addPath()
             body.checkReturns
-        }
+        //}
 
         fallback match {
             case Some(stmt) => {

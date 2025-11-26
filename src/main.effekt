@@ -167,12 +167,13 @@ __DEBUG_END__
     }
 
     // register global variable ASTs, the AST register is LIFO
-    (do getGlobalVarASTs()).foreach{ ast => {
+    // let the ilgen handle this
+    /*(do getGlobalVarASTs()).foreach{ ast => {
         debugPrint("Registering global variables for module "++ast.moduleName++".")
         do registerAST(ast)
-    }}
+    }}*/
 
-    ilgen::gen(do getOutFile()++".jasm")
+    ilgen::gen(do getOutFile()++".jasm", topLevel)
 
     if (do getPipelineMode() is ILOnly()) {
         println("Finished generating IL.")

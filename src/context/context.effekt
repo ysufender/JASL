@@ -258,10 +258,10 @@ type Statement {
     InlineAssembly(assembly: String, pos: Position)
     VariableDefinition(signature: List[VariableSignature], initializer: Option[Expression], pos: Position)
     Block(inside: List[Statement], scope: ParserContext, pos: Position)
-    Conditional(condition: Expression, body: Statement, scope: ParserContext, fallback: Option[Statement], pos: Position)
-    WhileStmt(condition: Expression, body: Statement, scope: ParserContext, id: Int, pos: Position)
+    Conditional(condition: Expression, body: Statement, fallback: Option[Statement], pos: Position)
+    WhileStmt(condition: Expression, body: Statement, id: Int, pos: Position)
     ExpressionStatement(expr: Expression, pos: Position)
-    DeferStmt(statement: Statement, pos: Position)
+    // DeferStmt(statement: Statement, pos: Position) // it's syntax sugar
     BreakStmt(loopID: Int, pos: Position)
     ContinueStmt(loopID: Int, pos: Position)
     // LayoutDeclaration(signature: LayoutSignature, pos: Position)
@@ -318,16 +318,15 @@ interface CompilerContextRequest {
     def setWorkingModule(mod: String): Unit // set working module name to mangle function names.
     def getWorkingModule(): String // module name request.
     def checkDependency(file: String): Bool // import "file", if it's already processed returns true, if not returns false
-    // def updateModule(variables: Map[String, VariableSignature], functions: Map[String, FunctionSignature], layout: Map[String, LayoutSignature]): Unit / InternalError
     def addFunction(fn: FunctionSignature): Unit / InternalError
     def addLayout(layout: LayoutSignature): Unit / InternalError
     def addVariable(variable: VariableSignature): Unit / InternalError
     def makeComptime(isFn: Bool, name: QualifiedName): Unit
-    // def getWorkingModuleInfo(): ModuleInfo
     def increaseGlobalStackIndex(amount: Int): Unit
     def getGlobalStackIndex(): Int
     def registerLexerOutput(output: List[Token]): Unit
     def emitLexerOutput(): Unit / emit[(String, LexerContext)]
+    def getLexerOutput(): List[Token]
     def getLayoutSignature(name: QualifiedName): Option[LayoutSignature]
     def getVariableSignature(name: QualifiedName): Option[VariableSignature]
     def getFunctionSignature(name: QualifiedName): Option[FunctionSignature]
@@ -676,6 +675,10 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
         def emitLexerOutput() = resume {
             processedFiles.each()
         }
+        def getLexerOutput() = resume(processedFiles.get(currentFile) match {
+            case Some(lex) => lex.tokens
+            case None() => unreachable(__FILE__, __LINE__)
+        })
         def getLayoutSignature(name) = resume(
             name.mod match {
                 case None() => modules.get(currentModule).unpack().layouts.get(name.name)

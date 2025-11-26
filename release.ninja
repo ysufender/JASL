@@ -13,6 +13,7 @@ CL = g++
 CFLAGS = -O3
 LFLAGS = -O3 -flto -no-pie
 LLFLAGS = -O3 -opaque-pointers
+EFLAGS = -c --backed llvm -o $builddir --includes $builddir
 
 pool cpool
     depth = 4
@@ -29,7 +30,7 @@ rule prp
 
 rule efc
     pool = cpool
-    command = effekt -c --backend llvm $in -o $builddir --includes $builddir
+    command = effekt $in $EFLAGS
 
 rule cc
     pool = cpool

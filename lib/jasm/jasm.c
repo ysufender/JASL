@@ -20,7 +20,6 @@ Double string_to_float(String _str)
 }
 
 Int random_range(Int min, Int max) {
-    srand(time(NULL));
     return rand() % (max - min + 1) + min;
 }
 
