@@ -1173,7 +1173,7 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
 
     if (do check(Symbol(Semicolon()))) {
         do advance()
-        if (vars.any{v => v.mutable})
+        if (vars.any{v => not(v.mutable)})
             do ParserError("Uninitialized immutable variable detected.", pos)
         else if (vars.any{v => v.varType match { case Type::InternalAny() => true; case _ => false; }})
             do ParserError("Can't infer the type of an uninitialized variable.", pos)
@@ -1414,7 +1414,7 @@ def parsePrimary(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
                 case BoolT(Some(value)) => Literal(Literal::Bool(value), token.position)
                 case StringT() => {
                     val sign = VariableSignature(
-                        "str_"++random_range(0, native::i64Max).show,
+                        "$tmp_"++random_range(0, native::i64Max).show,
                         true, false, true, true,
                         do getGlobalStackIndex(),
                         Type::Custom(QualifiedName(Some("string"), "String"))
@@ -1448,7 +1448,6 @@ def parsePrimary(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
                     typeOrIdent.tokenType match {
                         case TypeNameT(typename) => typename match {
                             case CustomT(name) => do getLayoutSignature(QualifiedName(Some(token.text), name)) match {
-                                // TODO: Use scoping only for functions. Turn the custom types to TypeLiteral.
                                 case Some(signature) => Literal(TypeLiteral(Custom(QualifiedName(Some(token.text), name))), token.position)
                                 case None() => do ParserError("Couldn't find type '"++name++"' in module '"++token.text++"'.", token.position)
                             }

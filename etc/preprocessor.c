@@ -16,6 +16,8 @@ int main(int argc, char **argv) {
     int debug_enabled = 0;
     if (argc > 3 && (strcmp(argv[3], "true") == 0))
         debug_enabled = 1;
+    else if (argc > 3 && (strcmp(argv[3], "false") == 0))
+        debug_enabled = 0;
 
     FILE* finput = fopen(filename, "r");
     if (!finput) {

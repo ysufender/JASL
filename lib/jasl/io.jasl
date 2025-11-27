@@ -4,13 +4,13 @@ include "lib/jasl/string"
 
 pub fn string::String::println() -> void {
     asm {
-        inc %b &flg 1
+        stf syscall on
         mov 4 &bl
-        cal 0x0
-        dcr %b &flg 1
+        cal 0
+        stf syscall off
     }
 }
 
 pub fn readln() -> string::String {
-    return static_assert(false);
+    return assert(false);
 }

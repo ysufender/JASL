@@ -1,6 +1,5 @@
 # JASL - Just A Scripting Language
 
-> ATTENTION: Migrating to effekt-template CI right now
 > STATUS: Writing the parser [AST Generation]
 > UPCOMING: JASM IL generation from AST
 

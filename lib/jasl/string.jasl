@@ -2,8 +2,9 @@ module string
 
 include "lib/jasl/memory"
 
-// TODO: Improve this.
-
+//
+// Heap String, manual free
+//
 pub wrapper layout String {
     data: void*;
 }
@@ -47,16 +48,15 @@ pub fn String::equals(other: String) -> bool {
         return false;
     }
 
-    let mut condition := true;
     let mut index := 0u32;
-    while condition {
+    while true {
         if this.get(index) != other.get(index) {
             return false;
         }
 
         index = index + 1u32;
         if index == thisSize {
-            condition = false;
+            break;
         }
     }
 
@@ -86,6 +86,6 @@ pub fn String::isNull() -> bool {
 
 pub fn empty() -> String {
     let new := memory::malloc(4u32, nullptr).ptrcast(u32);
-    new.set(0);
+    // new.set(0);
     return String(new.ptrcast(void));
 }

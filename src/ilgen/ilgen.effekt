@@ -51,7 +51,8 @@ def ilgen[T](target: String) { prog: () => T / ILGenerator }: T / {CompilerSetti
         res
     } with ILGenerator {
         def spit(asm) = {
-            each(0, tab){ _ => do write("    ") }
+            do write("    ".repeat(tab))
+            //each(0, tab){ _ => do write("    ") }
             do write(asm)
             resume(do write("\n"))
         }
@@ -153,41 +154,192 @@ def makeSymbol(name: QualifiedName, public: Bool) = name.mod match {
     case Some(mod) => mod++"$$"++if(public){"pub"}else{"priv"}++"$$"++name.name
 }
 
-def expressionGen(expr: Expression): Unit / {ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = expr match {
-    case Identifier(name, _) => {
-        with parser_report;
-        val sign = do getVar(name)
-        sign.varType.getModeFromType match {
-            case Some(modeflag) => do spit("rdl "++modeflag++" "++sign.stackIndex.show)
-            case None() => {
-                // TODO: Create a single instruction to read range from address
-                do spit("mov "++sign.stackIndex.show++" &eax")
-                do spit("add %ui &bp &eax")
-                do spit("mov "++sign.varType.typeSize.show++" &ecx")
-                do spit("mov &sp &ebx")
-                do spit("mcp %s %s")
-            }
-        }
+def pointingType(ptr: Type) = ptr match {
+    case Type::Pointer(to) => to
+    case _ => unreachable(__FILE__, __LINE__)
+}
+
+def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = expr match {
+    case ExpressionList(inside, _) => {
+        inside.foreach{ex => ex.expressionGen}
     }
-    case Call(fn, args, _) => {
+    case Literal(value, _) => value match {
+        case Literal::Bool(value) => value match {
+            case true => do spit("stc %ub 1")
+            case false => do spit("stc %ub 0")
+        }
+        case Literal::UInt(value) => do spit("stc %ui "++value.show)
+        case Literal::Int(value) => do spit("stc %i "++value.show)
+        case Literal::Float(value) => do spit("stc %f "++value.show)
+        case Literal::UByte(value) => do spit("stc %ub "++value.show)
+        case Literal::Byte(value) => do spit("stc %b "++value.show)
+        case Literal::Nullptr() => do spit("stc %ui 0")
+        case Literal::String(value) => do spit("raw "++value.length.show++" \""++value++"\" ;")
+        case _ => unreachable(__FILE__, __LINE__)
+    }
+    case Identifier(name, pos) => {
         with parser_report;
-        args.foreach{arg => arg.expressionGen}
+        if (do hasVar(name)) {
+            val sign = do getVar(name)
+
+            sign.varType.getModeFromType match {
+                case Some(modeflag) => sign.global match {
+                    case false => do spit("rdl "++modeflag++" "++sign.stackIndex.show)
+                    case true => {
+                        do spit("mov "++sign.stackIndex.show++" &ebx")
+                        do spit("rda "++modeflag)
+                    }
+                }
+                case None() =>
+                    if (sign.name.startsWith("$") && sign.varType == Type::Custom(QualifiedName(Some("string"), "String")) && sign.global) {
+                        do spit("stc %ui "++sign.stackIndex.show)
+                    } else {
+                        // TODO: make this into a single instruction, or a couple at least
+                        do spit("mov "++sign.stackIndex.show++" &eax")
+                        if (not(sign.global))
+                            do spit("add %ui &bp &eax")
+                        do spit("mov "++sign.varType.typeSize.show++" &ecx")
+                        do spit("mov &sp &ebx")
+                        do spit("mcp %s %s")
+                    }
+            }
+        } else if (do hasFunction(name)) {
+            do spit("sad "++name.makeSymbol(do getFunctionSignature(name).unpackOrCrash.public))
+        } else unreachable(__FILE__, __LINE__) 
+    }
+    case Call(fn, args, pos) => {
+        with parser_report;
         fn match {
-            case Identifier(name, _) => {
-                val sign = do getFunctionSignature(name).unpack
-                val sym = name.makeSymbol(sign.public)
-                do spit("mov "++args.evalType.map{s => s.typeSize}.sum.show++" &bl")
-                do spit("cal "++sym)
+            case Identifier(name, pos) => name match {
+                case QualifiedName(None(), "offset") => {
+                    // top of the stack is ptr, u32
+                    args.foreach{arg => arg.expressionGen}
+                    do spit("add %ui")
+                }
+                // TODO: Handle this in parser.
+                case QualifiedName(None(), "sizeof") => {
+                    do spit("stc %ui "++args.evalType.map{t => t.typeSize}.sum.show)
+                }
+                // this is just an illusion
+                case QualifiedName(None(), "ptrcast") => ()
+                case QualifiedName(None(), "intcast") => args.evalType match {
+                    case Cons(Type::UInt(), Cons(Type::TypeType(t), Nil())) => t match {
+                        case Type::Byte() => {
+                            do spit("stc %ui 0xFF")
+                            do spit("and %ui")
+                            do spit("swr 2")
+                            do spit("dcr %ui &sp 2")
+                            do spit("swp %ub")
+                            do spit("pop %ui")
+                        }
+                        case Type::UByte() => {
+                            do spit("stc %ui 0xFF")
+                            do spit("and %ui")
+                            do spit("swr 2")
+                            do spit("dcr %ui &sp 2")
+                            do spit("swp %ub")
+                            do spit("pop %ui")
+                        }
+                        case Type::Int() => ()
+                        case Type::UInt() => ()
+                        case _ => do ILGenError("This cast is not yet supported.", pos)
+                    }
+                    case _ => do ILGenError("This cast is not yet supported.", pos)
+                }
+                case QualifiedName(None(), "deref") => {
+                    args.foreach{arg => arg.expressionGen}
+                    args.evalType match {
+                        case Cons(t, Nil()) => {
+                            val mode = t.getModeFromType
+                            mode match {
+                                case Some(modeflag) => {
+                                    do spit("mov &ebx")
+                                    do spit("rda "++modeflag)
+                                }
+                                case None() => {
+                                    do spit("mov &eax")
+                                    do spit("mov &sp &ebx")
+                                    do spit("mov "++t.typeSize.show++" &ecx")
+                                    do spit("mcp %h %s")
+                                }
+                            }
+                        }
+                        case _ => unreachable(__FILE__, __LINE__)
+                    }
+                }
+                case QualifiedName(None(), "ref") => args match {
+                    case Cons(Identifier(name, _), Nil()) =>
+                        if (do hasVar(name)){
+                            val sign = do getVar(name)
+                            do spit("stc %ui "++sign.stackIndex.show)
+                            if (not(sign.global)) {
+                                do spit("rda &bp")
+                                do spit("add %ui")
+                            }
+                        } else if (do hasFunction(name)) {
+                            val sign = do getFunctionSignature(name).unpack
+                            do spit("sad "++name.makeSymbol(sign.public))
+                        } else unreachable(__FILE__, __LINE__)
+                    case _ => do ILGenError("Can't take the address of a temporary value.", pos)
+                }
+                case QualifiedName(None(), "set") => args match {
+                    case Cons(left, Cons(right, Nil())) => {
+                        if (left.evalType.map{t => t.pointingType}.compare(right.evalType){(a, b) => a == b}) {
+                            left.expressionGen
+                            do spit("mov &ebx")
+                            do spit("mov &sp &eax")
+                            right.expressionGen
+                            val size = right.evalType.map{t => t.typeSize}.sum.show
+                            do spit("mov "++size++" &ecx")
+                            do spit("mcp %s %h")
+                            do spit("dcr %ui &sp "++size)
+                        } else do ParserError("Missmatching types in 'set' operation, given value doesn't match the pointer type.", pos)
+                    }
+                    case _ => unreachable(__FILE__, __LINE__)
+                }
+                case QualifiedName(None(), "assert") => args.all{a => a.isComptime} match {
+                    // TODO: handle comptimes, then come here and add static assertion
+                    case _ => {
+                        args.foreach{arg => arg.expressionGen}
+                        do spit("stc %ub 0")
+                        do spit("cnj %ub %equ jasl$$internal$$assert$$fail")
+                    }
+                }
+                case QualifiedName(None(), "unreachable") => do spit("jmp jasl$$internal$$unreachable")
+                case _ => {
+                    args.foreach{arg => arg.expressionGen}
+                    if (do hasFunction(name)) {
+                        val sign = do getFunctionSignature(name).unpack
+                        val sym = name.makeSymbol(sign.public)
+                        do spit("mov "++args.evalType.map{s => s.typeSize}.sum.show++" &bl")
+                        do spit("cal "++sym)
+                    } else {
+                        val fpv = do getVar(name)
+                        val fns = fpv.varType
+                        if (fns is FunctionPointer(args, _)) {
+                            do spit("rdl %ui "++fpv.stackIndex.show)
+                            do spit("mov &ebx")
+                            do spit("pop %ui")
+                            do spit("mov "++args.map{a => a.typeSize}.sum.show++" &bl")
+                            do spit("cal &ebx")
+                        } else unreachable(__FILE__, __LINE__)
+                    }
+                }
             }
-            case _ => {
-                // TODO: call function pointer
-            }
+            case _ => 
+                if (fn.evalType is Cons(FunctionPointer(arguments, _), Nil())){
+                    args.foreach{arg => arg.expressionGen}
+                    fn.expressionGen
+                    do spit("mov &ebx")
+                    do spit("mov "++arguments.map{a => a.typeSize}.sum.show++" &bl")
+                    do spit("cal &ebx")
+                } else unreachable(__FILE__, __LINE__)
         }
     }
     case _ => ()
 }
 
-def statementGen(stmt: Statement): Unit / {ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = stmt match {
+def statementGen(stmt: Statement): Unit / {ILGenError, ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = stmt match {
     case FnDefinition(sign, body, scope, _) => {
         do spit("")
         do spit(do getWorkingModule()++if(sign.public){"$$pub"}else{"$$priv"}++"$$"++sign.name++":")
@@ -224,9 +376,8 @@ def statementGen(stmt: Statement): Unit / {ParserContextRequest, InternalError, 
     case Conditional(condition, body, fallback, pos) => {
         condition.expressionGen
         val conditionID = random_range(0, native::i64Max).show
-        do spit("cnd jasl$$if_"++conditionID)
-        do spit("jmp jasl$$else_"++conditionID)
-        do spit("jasl$$if_"++conditionID++":")
+        do spit("stc %ub 0")
+        do spit("cnj %ub %equ jasl$$else_"++conditionID)
         body.statementGen
         do spit("jasl$$else_"++conditionID++":")
         fallback match {
@@ -239,14 +390,14 @@ def statementGen(stmt: Statement): Unit / {ParserContextRequest, InternalError, 
         val loopID = id.show
         do spit("jasl$$while_begin_"++loopID++":")
         condition.expressionGen
-        do spit("cnd jasl$$while_body_"++loopID)
-        do spit("jmp jals$$while_end_"++loopID)
-        do spit("jasl$$while_body_"++loopID++":")
+        do spit("stc %ub 0")
+        do spit("cnj %ub %equ jasl$$while_end_"++loopID)
         body.statementGen
         do spit("jmp jasl$$while_begin_"++loopID)
         do spit("jasl$$while_end_"++loopID++":")
     }
     case ExpressionStatement(expr, _) => {
+        debugPrint("Expression Stmt")
         with parser_report;
         val size = expr.evalType.map{t => t.typeSize}.sum
         expr.expressionGen
@@ -257,7 +408,7 @@ def statementGen(stmt: Statement): Unit / {ParserContextRequest, InternalError, 
     case ContinueStmt(id, _) => do spit("jmp jasl$$while_begin_"++id.show)
 }
 
-def _gen(stmts: List[Statement]): Unit / {ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = stmts match {
+def _gen(stmts: List[Statement]): Unit / {ILGenError, ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = stmts match {
     case Cons(stmt, rest) => {
         statementGen(stmt)
         _gen(rest)
@@ -287,12 +438,6 @@ def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister
                 do spit("rom 0 0 0 0 0 0 0 0 ; ")
                 do spit("jmp jasl$$innternal$$nullptrjump")
             do endBlock()
-            do spit("jasl$$internal$$main:")
-            do beginBlock()
-                do spit("mov 0 &bl")
-                do spit("cal main$$priv$$main")
-                do spit("jmp jasl$$internal$$end$$here")
-            do endBlock()
             do spit("")
             do spit("jasl$$internal$$globals:")
             do beginBlock()
@@ -300,9 +445,15 @@ def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister
                 do getGlobalVarASTs().foreach{ast => {
                     do setWorkingFile(ast.filename)
                     do setWorkingModule(ast.moduleName)
-                    _gen(ast.body)
+                    _gen(ast.body.reverse)
                 }}
-                do spit("jmp jasl$$internal$$main")
+            do endBlock()
+            do spit("")
+            do spit("jasl$$internal$$main:")
+            do beginBlock()
+                do spit("mov 0 &bl")
+                do spit("cal main$$priv$$main")
+                do spit("jmp jasl$$internal$$end$$here")
             do endBlock()
 
         while (true) {
@@ -312,6 +463,26 @@ def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister
             _gen(statements)
         }
     }
+
+    do spit("jasl$$internal$$assert$$fail:")
+    do beginBlock()
+        do spit("# TODO: rewind callstack, print and exit #")
+        do spit("mov 0 &sp")
+        do spit("raw 53 \"Assertion failed at runtime. Callstack not available.\" 0 ;")
+        do spit("stf syscall on")
+        do spit("mov 4 &bl cal 0")
+        do spit("jmp jasl$$internal$$end$$here")
+    do endBlock()
+
+    do spit("jasl$$internal$$unreachable:")
+    do beginBlock()
+        do spit("# TODO: rewind callstack, print and exit #")
+        do spit("mov 0 &sp")
+        do spit("raw 25 \"Unreachable code path hit\" 0 ;")
+        do spit("stf syscall on")
+        do spit("mov 4 &bl cal 0")
+        do spit("jmp jasl$$internal$$end$$here")
+    do endBlock()
 
     do spit("jasl$$innternal$$nullptrjump:")
     do beginBlock()

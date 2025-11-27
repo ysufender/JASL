@@ -13,7 +13,7 @@ CL = g++
 CFLAGS = -O3
 LFLAGS = -O3 -flto -no-pie
 LLFLAGS = -O3 -opaque-pointers
-EFLAGS = -c --backed llvm -o $builddir --includes $builddir
+EFLAGS = -c --backend llvm -o $builddir --includes $builddir --no-optimize
 
 pool cpool
     depth = 4

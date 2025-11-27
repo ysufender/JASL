@@ -235,14 +235,14 @@ type UnaryOp {
 
 type Expression {
     // done
-    Identifier(name: QualifiedName, pos: Position)
+    Identifier(name: QualifiedName, pos: Position) // ilgen done
     Binary(binOp: BinaryOp, pos: Position)
     Unary(unOp: UnaryOp, pos: Position)
     Grouping(inside: Expression, pos: Position)
-    Literal(value: Literal, pos: Position)
+    Literal(value: Literal, pos: Position) // ilgen done
     // Block(inside: List[Statement], scope: ParserContext, pos: Position)
     Dot(lhs: Expression, member: QualifiedName, pos: Position)
-    Call(fn: Expression, args: List[Expression], pos: Position)
+    Call(fn: Expression, args: List[Expression], pos: Position) // ilgen done, including built-ins
     Scoping(name: QualifiedName, pos: Position)
     Initialization(name: Type, initializers: List[Expression], pos: Position)
     ExpressionList(inside: List[Expression], pos: Position)
@@ -251,6 +251,7 @@ type Expression {
     Assignment(lhs: Expression, rhs: Expression, pos: Position)
 }
 
+// ilgen done for all
 type Statement {
     // done
     FnDefinition(signature: FunctionSignature, body: List[Statement], scope: ParserContext, pos: Position)
@@ -559,12 +560,16 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
             VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny())),
             VariableSignature("newValue", false, true, false, false, 4, Type::InternalAny())
         ], [ Type::Depends(box { l => {
-            if (l is Cons(t, Nil()))
+            if (l is Cons(t, Cons(_, Nil())))
                 [t]
-            else <>
+            else {
+                println("The program has reached a BAD place, report this, kindly.")
+                println("Chances are you called 'set' function wrong somewhere, take a look.")
+                <>
+            }
         }})]),
 
-        FunctionSignature("static_assert", true, true, None(), [
+        FunctionSignature("assert", true, true, None(), [
             VariableSignature("condition", false, false, true, false, 0, Type::Bool())
         ], [ Type::InternalAny() ]),
 
