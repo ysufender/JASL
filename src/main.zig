@@ -1,25 +1,16 @@
 const std = @import("std");
-const JASL = @import("JASL");
+const builtin = std.builtin;
+const compilation = @import("builtin");
 
-pub fn main() !void {
-    std.debug.print("All your {s} are belong to us.\n", .{"codebase"});
-    try JASL.bufferedPrint();
-}
+const cli = @import("cli/cli.zig");
 
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa);
-    try list.append(gpa, 42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
+var allocator_t = std.heap.DebugAllocator(.{}){};
+const allocator = allocator_t.allocator();
 
-test "fuzz example" {
-    const Context = struct {
-        fn testOne(context: @This(), input: []const u8) anyerror!void {
-            _ = context;
-            try std.testing.expect(!std.mem.eql(u8, "canyoufindme", input));
-        }
-    };
-    try std.testing.fuzz(Context{}, Context.testOne, .{});
+pub fn main() void {
+    const settings = cli.parseCLI(allocator) catch return;
+
+    if (compilation.mode == builtin.OptimizeMode.Debug) {
+        settings.print();
+    }
 }
