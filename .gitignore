@@ -10,3 +10,5 @@ test/
 
 #zig
 .zig-cache
+zig-out
+.vscode
