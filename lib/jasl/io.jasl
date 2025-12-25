@@ -3,14 +3,16 @@ module io
 include "lib/jasl/string"
 
 pub fn string::String::println() -> void {
+/*
     asm {
         stf syscall on
         mov 4 &bl
         cal 0
         stf syscall off
     }
-}
-
-pub fn readln() -> string::String {
-    return assert(false);
+*/
+    asm {
+        mov 4 &bl
+        sys "void CSR_Println uint"
+    }
 }

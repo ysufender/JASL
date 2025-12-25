@@ -234,26 +234,24 @@ type UnaryOp {
 }
 
 type Expression {
-    // done
-    Identifier(name: QualifiedName, pos: Position) // ilgen done
-    Binary(binOp: BinaryOp, pos: Position)
-    Unary(unOp: UnaryOp, pos: Position)
-    Grouping(inside: Expression, pos: Position)
-    Literal(value: Literal, pos: Position) // ilgen done
     // Block(inside: List[Statement], scope: ParserContext, pos: Position)
     Dot(lhs: Expression, member: QualifiedName, pos: Position)
-    Call(fn: Expression, args: List[Expression], pos: Position) // ilgen done, including built-ins
-    Scoping(name: QualifiedName, pos: Position)
-    Initialization(name: Type, initializers: List[Expression], pos: Position)
-    ExpressionList(inside: List[Expression], pos: Position)
-
-    // not done
     Assignment(lhs: Expression, rhs: Expression, pos: Position)
+
+    Binary(binOp: BinaryOp, pos: Position)
+    Unary(unOp: UnaryOp, pos: Position) // ilgen done
+    Grouping(inside: Expression, pos: Position) // ilgen done
+    Literal(value: Literal, pos: Position) // ilgen done
+    Identifier(name: QualifiedName, pos: Position) // ilgen done
+    Call(fn: Expression, args: List[Expression], pos: Position) // ilgen done, including built-ins
+    Scoping(name: QualifiedName, pos: Position) // not used
+    Initialization(name: Type, initializers: List[Expression], pos: Position) // ilgen done
+    ExpressionList(inside: List[Expression], pos: Position) // ilgen done
+
 }
 
 // ilgen done for all
 type Statement {
-    // done
     FnDefinition(signature: FunctionSignature, body: List[Statement], scope: ParserContext, pos: Position)
     ReturnStmt(returns: List[Expression], pos: Position)
     InlineAssembly(assembly: String, pos: Position)
@@ -266,8 +264,6 @@ type Statement {
     BreakStmt(loopID: Int, pos: Position)
     ContinueStmt(loopID: Int, pos: Position)
     // LayoutDeclaration(signature: LayoutSignature, pos: Position)
-
-    // not done
 }
 
 record LexerContext(name: String, tokens: List[Token])

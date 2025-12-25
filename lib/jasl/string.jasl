@@ -3,7 +3,8 @@ module string
 include "lib/jasl/memory"
 
 //
-// Heap String, manual free
+// Stack String, Static, No Free.
+// Just a pointer to the constant string.
 //
 pub wrapper layout String {
     data: void*;
@@ -19,17 +20,9 @@ pub fn String::data() -> i8* {
     return this.data.offset(4).ptrcast(i8);
 }
 
-pub fn String::free() -> bool {
-    if this.data == nullptr { return false; }
-    return this.data.memory::free(this.size()+4u32);
-}
-
 pub fn String::clone() -> String {
     if this.data == nullptr { return empty(); }
-    let size := this.size();
-    let new := memory::malloc(size+4u32, nullptr);
-    this.data.memory::memcpy(new, size);
-    return String(new);
+    return String(this.data);
 }
 
 // returns false if index is out of bounds
@@ -63,18 +56,6 @@ pub fn String::equals(other: String) -> bool {
     return false;
 }
 
-// returns false if out of bounds occurs
-pub fn String::substring(start: u32, n: u32) -> (bool, String) {
-    if this.data == nullptr { return {false, empty()}; }
-    if start + n > this.size() {
-        return {false, empty()};
-    }
-
-    let substr := memory::malloc(n+4u32, nullptr);
-    this.data.offset(start).memory::memcpy(substr, n);
-    return {true, String(substr)};
-}
-
 pub fn String::isEmpty() -> bool {
     if this.data == nullptr { return false; }
     return this.size() == 0u32;
@@ -85,7 +66,5 @@ pub fn String::isNull() -> bool {
 }
 
 pub fn empty() -> String {
-    let new := memory::malloc(4u32, nullptr).ptrcast(u32);
-    // new.set(0);
-    return String(new.ptrcast(void));
+    return "";
 }

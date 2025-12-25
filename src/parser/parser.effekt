@@ -629,6 +629,11 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
         val token = do peek()
         do ParserError("Expected a module name, got '"++token.text++"' instead.", token.position)
     }
+    
+    if (do peek().text == "jasl") {
+        do ParserError("Module name 'jasl' is reserved, use something else please.", do peek().position)
+    }
+
     do setWorkingModule((do advance()).text)
     do registerLexerOutput([])
 

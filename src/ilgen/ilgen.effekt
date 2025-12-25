@@ -193,14 +193,24 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                 case None() =>
                     if (sign.name.startsWith("$") && sign.varType == Type::Custom(QualifiedName(Some("string"), "String")) && sign.global) {
                         do spit("stc %ui "++sign.stackIndex.show)
-                    } else {
-                        // TODO: make this into a single instruction, or a couple at least
-                        do spit("mov "++sign.stackIndex.show++" &eax")
-                        if (not(sign.global))
-                            do spit("add %ui &bp &eax")
-                        do spit("mov "++sign.varType.typeSize.show++" &ecx")
-                        do spit("mov &sp &ebx")
-                        do spit("mcp %s %s")
+                    } else sign.varType match {
+                        case Type::Custom(_) => {
+                            // TODO: make this into a single instruction, or a couple at least based on layout size
+                            do spit("mov "++sign.stackIndex.show++" &eax")
+                            if (not(sign.global))
+                                do spit("add %ui &bp &eax")
+                            do spit("mov "++sign.varType.typeSize.show++" &ecx")
+                            do spit("mov &sp &ebx")
+                            do spit("mcp %s %s")
+                        }
+                        case _ => {
+                            if (not(sign.global)) {
+                                do spit("rdl "++sign.varType.getModeFromType.unpack++" "++sign.stackIndex.show)
+                            } else {
+                                do spit("mov "++sign.stackIndex.show++" &ebx")
+                                do spit("rda "++sign.varType.getModeFromType.unpack)
+                            }
+                        }
                     }
             }
         } else if (do hasFunction(name)) {
@@ -224,27 +234,9 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                 case QualifiedName(None(), "ptrcast") => ()
                 case QualifiedName(None(), "intcast") => args.evalType match {
                     case Cons(Type::UInt(), Cons(Type::TypeType(t), Nil())) => t match {
-                        case Type::Byte() => {
-                            do spit("stc %ui 0xFF")
-                            do spit("and %ui")
-                            do spit("swr 2")
-                            do spit("dcr %ui &sp 2")
-                            do spit("swp %ub")
-                            do spit("pop %ui")
-                        }
-                        case Type::UByte() => {
-                            do spit("stc %ui 0xFF")
-                            do spit("and %ui")
-                            do spit("swr 2")
-                            do spit("dcr %ui &sp 2")
-                            do spit("swp %ub")
-                            do spit("pop %ui")
-                        }
-                        case Type::Int() => ()
-                        case Type::UInt() => ()
-                        case _ => do ILGenError("This cast is not yet supported.", pos)
+                        case _ => unimplemented(__FILE__, __LINE__)
                     }
-                    case _ => do ILGenError("This cast is not yet supported.", pos)
+                    case _ => unimplemented(__FILE__, __LINE__)
                 }
                 case QualifiedName(None(), "deref") => {
                     args.foreach{arg => arg.expressionGen}
@@ -334,6 +326,104 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                     do spit("mov "++arguments.map{a => a.typeSize}.sum.show++" &bl")
                     do spit("cal &ebx")
                 } else unreachable(__FILE__, __LINE__)
+        }
+    }
+    case Initialization(name, initializers, _) => initializers.foreach{init => init.expressionGen}
+    case Grouping(inside, _) => inside.expressionGen
+    case Unary(unop, pos) => unop match {
+        case Negation(rhs) => {
+            with on[MissingValue].ignore;
+            with parser_report;
+
+            val t = rhs.evalType.head
+            val ts = t.getModeFromType.unpack
+
+            do spit("stc "++ts++" 0")
+            rhs.expressionGen
+            do spit("sub "++ts)
+        }
+        case Not(rhs) => {
+            rhs.expressionGen
+            do spit("inv %ub")
+        }
+    }
+    case Binary(binop, pos) => {
+        with on[MissingValue].ignore;
+        with parser_report;
+
+        binop match {
+            case Addition(lhs, rhs) => { 
+                lhs.expressionGen
+                rhs.expressionGen
+                val t = lhs.evalType.head.getModeFromType.unpack
+                do spit("add "++t)
+            }
+            case Subtraction(lhs, rhs) => { 
+                lhs.expressionGen
+                rhs.expressionGen
+                val t = lhs.evalType.head.getModeFromType.unpack
+                do spit("sub "++t)
+            }
+            case Division(lhs, rhs) => { 
+                lhs.expressionGen
+                rhs.expressionGen
+                val t = lhs.evalType.head.getModeFromType.unpack
+                do spit("div "++t)
+            }
+            case Multiplication(lhs, rhs) => { 
+                lhs.expressionGen
+                rhs.expressionGen
+                val t = lhs.evalType.head.getModeFromType.unpack
+                do spit("mul "++t)
+            }
+            case Equality(lhs, rhs) => { 
+                lhs.expressionGen
+                rhs.expressionGen
+                val t = lhs.evalType.head.getModeFromType.unpack
+                do spit("cmp "++t++" %equ")
+            }
+            case Inequality(lhs, rhs) => { 
+                lhs.expressionGen
+                rhs.expressionGen
+                val t = lhs.evalType.head.getModeFromType.unpack
+                do spit("cmp "++t++" %neq")
+            }
+            case Great(lhs, rhs) => { 
+                lhs.expressionGen
+                rhs.expressionGen
+                val t = lhs.evalType.head.getModeFromType.unpack
+                do spit("cmp "++t++" %gre")
+            }
+            case Lesser(lhs, rhs) => { 
+                lhs.expressionGen
+                rhs.expressionGen
+                val t = lhs.evalType.head.getModeFromType.unpack
+                do spit("cmp "++t++" %les")
+            }
+            case GreaterEqual(lhs, rhs) => { 
+                lhs.expressionGen
+                rhs.expressionGen
+                val t = lhs.evalType.head.getModeFromType.unpack
+                do spit("cmp "++t++" %geq")
+            }
+            case LesserEqual(lhs, rhs) => { 
+                lhs.expressionGen
+                rhs.expressionGen
+                val t = lhs.evalType.head.getModeFromType.unpack
+                do spit("cmp "++t++" %leq")
+            }
+            case And(lhs, rhs) => { 
+                lhs.expressionGen
+                rhs.expressionGen
+                val t = lhs.evalType.head.getModeFromType.unpack
+                do spit("and")
+            }
+            case Or(lhs, rhs) => { 
+                lhs.expressionGen
+                rhs.expressionGen
+                val t = lhs.evalType.head.getModeFromType.unpack
+                do spit("or")
+            }
         }
     }
     case _ => ()
@@ -436,7 +526,7 @@ def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister
             do beginBlock()
                 do spit("#32 byte nop followed by a jump to error message function#")
                 do spit("rom 0 0 0 0 0 0 0 0 ; ")
-                do spit("jmp jasl$$innternal$$nullptrjump")
+                do spit("jmp jasl$$internal$$nullptrjump")
             do endBlock()
             do spit("")
             do spit("jasl$$internal$$globals:")
@@ -469,9 +559,8 @@ def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister
         do spit("# TODO: rewind callstack, print and exit #")
         do spit("mov 0 &sp")
         do spit("raw 53 \"Assertion failed at runtime. Callstack not available.\" 0 ;")
-        do spit("stf syscall on")
-        do spit("mov 4 &bl cal 0")
-        do spit("jmp jasl$$internal$$end$$here")
+        do spit("mov 4 &bl sys \"void CSR_Println char*\"")
+        do spit("jmp jasl$$internal$$end$$here\n")
     do endBlock()
 
     do spit("jasl$$internal$$unreachable:")
@@ -479,17 +568,15 @@ def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister
         do spit("# TODO: rewind callstack, print and exit #")
         do spit("mov 0 &sp")
         do spit("raw 25 \"Unreachable code path hit\" 0 ;")
-        do spit("stf syscall on")
-        do spit("mov 4 &bl cal 0")
-        do spit("jmp jasl$$internal$$end$$here")
+        do spit("mov 4 &bl sys \"void CSR_Println char*\"")
+        do spit("jmp jasl$$internal$$end$$here\n")
     do endBlock()
 
-    do spit("jasl$$innternal$$nullptrjump:")
+    do spit("jasl$$internal$$nullptrjump:")
     do beginBlock()
         do spit("mov 0 &sp")
         do spit("raw 77 \"Jump to null pointer detected, check your code for nullptr function pointers.\" 0 ;")
-        do spit("stf syscall on")
-        do spit("mov 4 &bl cal 0")
+        do spit("mov 4 &bl sys \"void CSR_Println char*\"\n")
     do endBlock()
     do spit("jasl$$internal$$end$$here:")
     do endBlock()
