@@ -10,23 +10,23 @@ pub wrapper layout String {
     data: void*;
 }
 
-pub fn String::size() -> u32 {
+pub fn String::size(this: String) -> u32 {
     if this.data == nullptr { return 0u32; }
     return this.data.ptrcast(u32).deref();
 }
 
-pub fn String::data() -> i8* {
+pub fn String::data(this: String) -> i8* {
     if this.data == nullptr { return nullptr; }
     return this.data.offset(4).ptrcast(i8);
 }
 
-pub fn String::clone() -> String {
+pub fn String::clone(this: String) -> String {
     if this.data == nullptr { return empty(); }
     return String(this.data);
 }
 
 // returns false if index is out of bounds
-pub fn String::get(index: u32) -> (bool, u8) {
+pub fn String::get(this: String, index: u32) -> (bool, u8) {
     if this.data == nullptr { return {false, 0u8}; }
     if this.size() <= index {
         return {false, 0u8};
@@ -35,7 +35,7 @@ pub fn String::get(index: u32) -> (bool, u8) {
     return {true, this.data.offset(index).ptrcast(u8).deref()};
 }
 
-pub fn String::equals(other: String) -> bool {
+pub fn String::equals(this: String, other: String) -> bool {
     let thisSize := this.size();
     if thisSize != other.size() {
         return false;
@@ -56,12 +56,12 @@ pub fn String::equals(other: String) -> bool {
     return false;
 }
 
-pub fn String::isEmpty() -> bool {
+pub fn String::isEmpty(this: String) -> bool {
     if this.data == nullptr { return false; }
     return this.size() == 0u32;
 }
 
-pub fn String::isNull() -> bool {
+pub fn String::isNull(this: String) -> bool {
     return this.data == nullptr;
 }
 

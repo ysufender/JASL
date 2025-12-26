@@ -2,15 +2,7 @@ module io
 
 include "lib/jasl/string"
 
-pub fn string::String::println() -> void {
-/*
-    asm {
-        stf syscall on
-        mov 4 &bl
-        cal 0
-        stf syscall off
-    }
-*/
+pub fn println(str: string::String) -> void {
     asm {
         mov 4 &bl
         sys "void CSR_Println uint"

@@ -4,6 +4,7 @@ pub layout U32Limits { pub min: u32; pub max: u32; }
 pub layout I32Limits { pub min: i32; pub max: i32; }
 pub layout U8Limits { pub min: u8; pub max: u8; }
 pub layout I8Limits { pub min: i8; pub max: i8; }
+
 pub layout FloatLimits {
     pub absoluteMin: float;
     pub absoluteMax: float;

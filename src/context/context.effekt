@@ -236,8 +236,8 @@ type UnaryOp {
 type Expression {
     // Block(inside: List[Statement], scope: ParserContext, pos: Position)
     Dot(lhs: Expression, member: QualifiedName, pos: Position)
-    Assignment(lhs: Expression, rhs: Expression, pos: Position)
 
+    Assignment(lhs: Expression, rhs: Expression, pos: Position)
     Binary(binOp: BinaryOp, pos: Position)
     Unary(unOp: UnaryOp, pos: Position) // ilgen done
     Grouping(inside: Expression, pos: Position) // ilgen done
@@ -625,10 +625,10 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
         def addLayout(layout) = resume { if (modules.contains(currentModule)) {
             val oldInf = modules.get(currentModule).unpack()
 
-            if (oldInf.layouts.contains(layout.name)) {
+            /*if (oldInf.layouts.contains(layout.name)) {
                 println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++layout.name++"' in module '"++currentModule++"'.")
                 exit(1)
-            }
+            }*/
 
             val newInf = ModuleInfo(
                 currentModule,

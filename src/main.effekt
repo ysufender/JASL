@@ -119,12 +119,12 @@ def main() = {
 
     // check for main module and entry point.
     // every project must include a main module that has a main function
-    // with a signature fn () -> i32
+    // with a signature fn () -> void
     // entry point must be private.
     if (not(do checkEntryPoint())) {
         println("[ERROR] Couldn't find entry point accross the project.")
         println("        The entry point must reside in module 'main', must not be public,")
-        println("        and must have the signature fn () -> i32")
+        println("        and must have the signature fn () -> void")
         println("\n        Example:")
         println("                module main")
         println("                fn main() -> void {")

@@ -175,7 +175,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
         case Literal::Byte(value) => do spit("stc %b "++value.show)
         case Literal::Nullptr() => do spit("stc %ui 0")
         case Literal::String(value) => do spit("raw "++value.length.show++" \""++value++"\" ;")
-        case _ => unreachable(__FILE__, __LINE__)
+        case Literal::TypeLiteral(_) => ()
     }
     case Identifier(name, pos) => {
         with parser_report;
@@ -219,110 +219,113 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
     }
     case Call(fn, args, pos) => {
         with parser_report;
-        fn match {
-            case Identifier(name, pos) => name match {
-                case QualifiedName(None(), "offset") => {
-                    // top of the stack is ptr, u32
-                    args.foreach{arg => arg.expressionGen}
-                    do spit("add %ui")
-                }
-                // TODO: Handle this in parser.
-                case QualifiedName(None(), "sizeof") => {
-                    do spit("stc %ui "++args.evalType.map{t => t.typeSize}.sum.show)
-                }
-                // this is just an illusion
-                case QualifiedName(None(), "ptrcast") => ()
-                case QualifiedName(None(), "intcast") => args.evalType match {
-                    case Cons(Type::UInt(), Cons(Type::TypeType(t), Nil())) => t match {
-                        case _ => unimplemented(__FILE__, __LINE__)
-                    }
+        def _fncall(name: QualifiedName, pos: Position): Unit = name match {
+            case QualifiedName(None(), "offset") => {
+                // top of the stack is ptr, u32
+                args.foreach{arg => arg.expressionGen}
+                do spit("add %ui")
+            }
+            // TODO: Handle this in parser.
+            case QualifiedName(None(), "sizeof") => {
+                do spit("stc %ui "++args.evalType.map{t => t.typeSize}.sum.show)
+            }
+            // this is just an illusion
+            case QualifiedName(None(), "ptrcast") => args.foreach{arg => arg.expressionGen}
+            case QualifiedName(None(), "intcast") => args.evalType match {
+                case Cons(Type::UInt(), Cons(Type::TypeType(t), Nil())) => t match {
                     case _ => unimplemented(__FILE__, __LINE__)
                 }
-                case QualifiedName(None(), "deref") => {
-                    args.foreach{arg => arg.expressionGen}
-                    args.evalType match {
-                        case Cons(t, Nil()) => {
-                            val mode = t.getModeFromType
-                            mode match {
-                                case Some(modeflag) => {
-                                    do spit("mov &ebx")
-                                    do spit("rda "++modeflag)
-                                }
-                                case None() => {
-                                    do spit("mov &eax")
-                                    do spit("mov &sp &ebx")
-                                    do spit("mov "++t.typeSize.show++" &ecx")
-                                    do spit("mcp %h %s")
-                                }
+                case _ => unimplemented(__FILE__, __LINE__)
+            }
+            case QualifiedName(None(), "deref") => {
+                args.foreach{arg => arg.expressionGen}
+                args.evalType match {
+                    case Cons(t, Nil()) => {
+                        val mode = t.getModeFromType
+                        mode match {
+                            case Some(modeflag) => {
+                                do spit("mov &ebx")
+                                do spit("rda "++modeflag)
+                            }
+                            case None() => {
+                                do spit("mov &eax")
+                                do spit("mov &sp &ebx")
+                                do spit("mov "++t.typeSize.show++" &ecx")
+                                do spit("mcp %h %s")
                             }
                         }
-                        case _ => unreachable(__FILE__, __LINE__)
-                    }
-                }
-                case QualifiedName(None(), "ref") => args match {
-                    case Cons(Identifier(name, _), Nil()) =>
-                        if (do hasVar(name)){
-                            val sign = do getVar(name)
-                            do spit("stc %ui "++sign.stackIndex.show)
-                            if (not(sign.global)) {
-                                do spit("rda &bp")
-                                do spit("add %ui")
-                            }
-                        } else if (do hasFunction(name)) {
-                            val sign = do getFunctionSignature(name).unpack
-                            do spit("sad "++name.makeSymbol(sign.public))
-                        } else unreachable(__FILE__, __LINE__)
-                    case _ => do ILGenError("Can't take the address of a temporary value.", pos)
-                }
-                case QualifiedName(None(), "set") => args match {
-                    case Cons(left, Cons(right, Nil())) => {
-                        if (left.evalType.map{t => t.pointingType}.compare(right.evalType){(a, b) => a == b}) {
-                            left.expressionGen
-                            do spit("mov &ebx")
-                            do spit("mov &sp &eax")
-                            right.expressionGen
-                            val size = right.evalType.map{t => t.typeSize}.sum.show
-                            do spit("mov "++size++" &ecx")
-                            do spit("mcp %s %h")
-                            do spit("dcr %ui &sp "++size)
-                        } else do ParserError("Missmatching types in 'set' operation, given value doesn't match the pointer type.", pos)
                     }
                     case _ => unreachable(__FILE__, __LINE__)
                 }
-                case QualifiedName(None(), "assert") => args.all{a => a.isComptime} match {
-                    // TODO: handle comptimes, then come here and add static assertion
-                    case _ => {
-                        args.foreach{arg => arg.expressionGen}
-                        do spit("stc %ub 0")
-                        do spit("cnj %ub %equ jasl$$internal$$assert$$fail")
-                    }
+            }
+            case QualifiedName(None(), "ref") => args match {
+                case Cons(Identifier(name, _), Nil()) =>
+                    if (do hasVar(name)){
+                        val sign = do getVar(name)
+                        do spit("stc %ui "++sign.stackIndex.show)
+                        if (not(sign.global)) {
+                            do spit("rda &bp")
+                            do spit("add %ui")
+                        }
+                    } else if (do hasFunction(name)) {
+                        val sign = do getFunctionSignature(name).unpack
+                        do spit("sad "++name.makeSymbol(sign.public))
+                    } else unreachable(__FILE__, __LINE__)
+                case _ => do ILGenError("Can't take the address of a temporary value.", pos)
+            }
+            case QualifiedName(None(), "set") => args match {
+                case Cons(left, Cons(right, Nil())) => {
+                    if (left.evalType.map{t => t.pointingType}.compare(right.evalType){(a, b) => a == b}) {
+                        left.expressionGen
+                        do spit("mov &ebx")
+                        do spit("mov &sp &eax")
+                        right.expressionGen
+                        val size = right.evalType.map{t => t.typeSize}.sum.show
+                        do spit("mov "++size++" &ecx")
+                        do spit("mcp %s %h")
+                        do spit("dcr %ui &sp "++size)
+                    } else do ParserError("Missmatching types in 'set' operation, given value doesn't match the pointer type.", pos)
                 }
-                case QualifiedName(None(), "unreachable") => do spit("jmp jasl$$internal$$unreachable")
+                case _ => unreachable(__FILE__, __LINE__)
+            }
+            case QualifiedName(None(), "assert") => args.all{a => a.isComptime} match {
+                // TODO: handle comptimes, then come here and add static assertion
                 case _ => {
                     args.foreach{arg => arg.expressionGen}
-                    if (do hasFunction(name)) {
-                        val sign = do getFunctionSignature(name).unpack
-                        val sym = name.makeSymbol(sign.public)
-                        do spit("mov "++args.evalType.map{s => s.typeSize}.sum.show++" &bl")
-                        do spit("cal "++sym)
-                    } else {
-                        val fpv = do getVar(name)
-                        val fns = fpv.varType
-                        if (fns is FunctionPointer(args, _)) {
-                            do spit("rdl %ui "++fpv.stackIndex.show)
-                            do spit("mov &ebx")
-                            do spit("pop %ui")
-                            do spit("mov "++args.map{a => a.typeSize}.sum.show++" &bl")
-                            do spit("cal &ebx")
-                        } else unreachable(__FILE__, __LINE__)
-                    }
+                    do spit("stc %ub 0")
+                    do spit("cnj %ub %equ jasl$$internal$$assert$$fail")
                 }
             }
+            case QualifiedName(None(), "unreachable") => do spit("jmp jasl$$internal$$unreachable")
+            case _ => {
+                args.foreach{arg => arg.expressionGen}
+                if (do hasFunction(name)) {
+                    val sign = do getFunctionSignature(name).unpack
+                    val sym = name.makeSymbol(sign.public)
+                    do spit("mov "++args.evalType.map{s => s.typeSize}.sum.show++" &bl")
+                    do spit("cal "++sym)
+                } else {
+                    val fpv = do getVar(name)
+                    val fns = fpv.varType
+                    if (fns is FunctionPointer(args, _)) {
+                        do spit("rdl %ui "++fpv.stackIndex.show)
+                        do spit("mov &ebx")
+                        do spit("pop %ui")
+                        do spit("mov "++args.map{a => a.typeSize}.sum.show++" &bl")
+                        do spit("cal &ebx")
+                    } else unreachable(__FILE__, __LINE__)
+                }
+            }
+        }
+        fn match {
+            case Identifier(name, pos) => _fncall(name, pos)
+            case Grouping(Identifier(name, pos), _) => _fncall(name, pos)
             case _ => 
                 if (fn.evalType is Cons(FunctionPointer(arguments, _), Nil())){
                     args.foreach{arg => arg.expressionGen}
                     fn.expressionGen
                     do spit("mov &ebx")
+                    do spit("pop %ui")
                     do spit("mov "++arguments.map{a => a.typeSize}.sum.show++" &bl")
                     do spit("cal &ebx")
                 } else unreachable(__FILE__, __LINE__)
@@ -415,14 +418,69 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
             case And(lhs, rhs) => { 
                 lhs.expressionGen
                 rhs.expressionGen
-                val t = lhs.evalType.head.getModeFromType.unpack
-                do spit("and")
+                do spit("and %ub &bl")
+                do spit("dcr %ui &sp 2")
             }
             case Or(lhs, rhs) => { 
                 lhs.expressionGen
                 rhs.expressionGen
-                val t = lhs.evalType.head.getModeFromType.unpack
-                do spit("or")
+                do spit("or %ub &bl")
+                do spit("dcr %ui &sp 2")
+            }
+        }
+    }
+    case Assignment(expr, rhs, pos) => {
+        with parser_report;
+
+        var addr = 0;
+        var glob = false;
+        var t: Type = Type::Void()
+
+        def _setUpLeft(expr: Expression): Unit = expr match {
+            case Identifier(name, _) => {
+                val varsign = do getVar(name)
+                addr = varsign.stackIndex
+                glob = varsign.global
+                t = varsign.varType
+            }
+            case Grouping(inside, _) => _setUpLeft(inside)
+            case Dot(lhs, member, pos) => {
+                with on[MissingValue].ignore;
+
+                _setUpLeft(lhs)
+                val layout = lhs.evalType.head match {
+                    case Type::Custom(name) => do getLayoutSignature(name).unpack
+                    case _ => unreachable(__FILE__, __LINE__)
+                }
+                val field = layout.fields.filter{f => f.name == member.name}.head
+                addr = addr + field.stackIndex
+                t = field.varType
+            }
+            case _ => ()
+        }
+
+        _setUpLeft(expr)
+        rhs.expressionGen
+        t match {
+            case Type::Custom(name) => {
+                do spit("mov "++addr.show++" &ebx")
+                if (not(glob))
+                    do spit("add %ui &bp &ebx")
+                do spit("mov "++t.typeSize.show++" &ecx")
+                do spit("dcr %ui &sp "++t.typeSize.show)
+                do spit("mov &sp &eax")
+                do spit("mcp %s %s")
+                do spit("inc %ui &sp "++t.typeSize.show)
+            }
+            case _ => glob match {
+                // there is no stl instruction yet
+                // case false => do spit("stl "++t.getModeFromType.unpack++" "++addr.show) 
+                /*case true*/ case _ => {
+                    do spit("mov "++addr.show++" &ebx")
+                    if (not(glob))
+                        do spit("add &bp &ebx")
+                    do spit("ldc "++t.getModeFromType.unpack)
+                }
             }
         }
     }

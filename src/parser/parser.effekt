@@ -396,7 +396,10 @@ def functionOwnershipHandler[T](ownerType: Option[Type]) { prog: () => T / Funct
     try { prog() }
     with FunctionOwnership {
         def canAccess(t) = ownerType match {
-            case Some(owner) => resume(owner == t)
+            case Some(owner) => Some(t).getBaseType match {
+                case Some(base) => resume(owner == base)
+                case None() => resume(false)
+            }
             case None() => resume(false)
         }
     }
@@ -639,7 +642,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
 
     debugPrint("Prepassing Module: "++do getWorkingModule())
 
-    def handleVariable(public: Bool, index: Int) = {
+    def handleVariable(glob: Bool, public: Bool, index: Int) = {
         val mutable = if (do check(Keyword(Mut()))) { do advance(); true } else { false }
         val identifier: Token = do checkReturnOrCrash(IdentifierT())
         val colon: Token = do checkReturnOrCrash(Symbol(Colon()))
@@ -654,7 +657,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
             }
         }
 
-        VariableSignature(identifier.text, public, mutable, false, true, index, typename)
+        VariableSignature(identifier.text, public, mutable, false, glob, index, typename)
     }
     def handleLet(public: Bool): Unit = {
         // do ParserError("Top-level global variables are not (yet) supported.", (do previous()).position)
@@ -666,7 +669,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
             case Symbol(LParen()) => {
                 do advance()
                 while (not(do is_eof()) && (do peek()).tokenType != Symbol(RParen())) {
-                    val v: VariableSignature = handleVariable(public, do getGlobalStackIndex()).enforceStaticType(pos)
+                    val v: VariableSignature = handleVariable(true, public, do getGlobalStackIndex()).enforceStaticType(pos)
 
                     if (do hasVar(QualifiedName(None(), v.name)))
                         do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
@@ -682,7 +685,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
                 val _ = do advance()
             }
             case _ => {
-                val v: VariableSignature = handleVariable(public, do getGlobalStackIndex()).enforceStaticType(pos)
+                val v: VariableSignature = handleVariable(true, public, do getGlobalStackIndex()).enforceStaticType(pos)
                 if (do hasVar(QualifiedName(None(), v.name)) && not(v.global && do isTopLevel()))
                     do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
                 do increaseGlobalStackIndex(v.varType.typeSize)
@@ -705,21 +708,23 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
         if ((do getLayoutSignature(QualifiedName(None(), name))) is Some(_))
             do ParserError("Multiple definition of layout '"++name++"'.", (do previous()).position)
 
+        // to allow self-pointers
+        do addLayout(LayoutSignature(name, public, wrapper, []))
+
         val pos: Position = (do previous()).position
         
         do checkReturnOrCrash(Symbol(LBrace()))
         var innerIndex: Int = 0
         var layout: List[VariableSignature] = []
         while ((do peek()).tokenType != Symbol(RBrace())) {
-            var pos: Position = Position(0, 0, 0)
             val signature = ((do peek()).tokenType match {
                 case Keyword(Pub()) => {
                     if (wrapper)
                         do ParserError("Public fields in wrapper layouts are not allowed.", (do peek()).position)
                     do advance()
-                    handleVariable(true, innerIndex)
+                    handleVariable(false, true, innerIndex)
                 }
-                case _ => handleVariable(false, innerIndex)
+                case _ => handleVariable(false, false, innerIndex)
             }).enforceStaticType(pos)
             if (signature.varType == Custom(QualifiedName(Some(do getWorkingModule()), name)))
                 do ParserError("Recursive layouts are not allowed.", pos)
@@ -758,18 +763,20 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
 
         var stackIndexArgs: Int = 0 
         var arguments: List[VariableSignature] = typename match {
-            case Some(t) => {
+            // No implicit "this" argument
+            /*case Some(t) => {
                 stackIndexArgs = 4
                 [ VariableSignature("this", false, true, false, false, 0, t) ]
             }
-            case None() => []
+            case None() => []*/
+            case _ => []
         }
         var bodyOn: Bool = true
         while (bodyOn) {
             if ((do peek()).tokenType != Symbol(RParen()))
             {
                 val pos: Position = (do peek()).position
-                val signature = handleVariable(false, stackIndexArgs)
+                val signature = handleVariable(false, false, stackIndexArgs)
                 if (arguments.any { v => v.name == signature.name })
                     do ParserError("Multiple definitions of argument '"++signature.name++"' in function '"++name.show++"'.", pos)
                 arguments = Cons(signature, arguments)
@@ -1137,7 +1144,7 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
             }
         }
 
-        VariableSignature(identifier.text, false, mutable, false, true, do stackIndex(), typename)
+        VariableSignature(identifier.text, false, mutable, false, false, do stackIndex(), typename)
     }
 
     def inferType(vars: List[VariableSignature], expressions: List[Type]): List[VariableSignature] = {
@@ -1784,7 +1791,10 @@ def parseOrExpression(): Expression / {GlobalVariableRegister, FunctionOwnership
 
 def parseAssignmentExpression(): Expression / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     def isSuitable(expr: Expression): Bool = expr match {
-        case Identifier(_, _) => true
+        case Identifier(name, pos) => do getVar(name).mutable match {
+            case true => true
+            case false => do ParserError("Can't modify an immutable variable. Consider marking it 'mut'.", pos)
+        }
         case Grouping(inside, _) => inside.isSuitable
         case Dot(lhs, member, pos) => lhs.evalType match {
             case Cons(Type::Custom(name), Nil()) => do getLayoutSignature(name) match {
@@ -1798,12 +1808,14 @@ def parseAssignmentExpression(): Expression / {GlobalVariableRegister, FunctionO
                 }
                 case None() => unreachable(__FILE__, __LINE__)
             }
-            case _ => lhs.isSuitable
-        }
-        case ExpressionList(inside, _) => inside match {
-            case Cons(head, Nil()) => head.isSuitable
+            // case _ => lhs.isSuitable // I don't know what this means
             case _ => false
         }
+        // TODO: Add support for multi-variable assignments
+        /*case ExpressionList(inside, _) => inside match {
+            case Cons(head, Nil()) => head.isSuitable
+            case _ => false
+        }*/
         case _ => false
     }
 
