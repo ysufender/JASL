@@ -1,7 +1,7 @@
 # JASL - Just A Scripting Language
 
-> STATUS: Writing the parser [AST Generation]
-> UPCOMING: JASM IL generation from AST
+> STATUS: IL generation finished  
+> UPCOMING: Quality-of-life tweaks, perhaps "extern" functions  
 
 JASL is a statically typed, low-level(!) and byte-compiled scripting language backed by JASM and CSR. JASL is
 written in the [Effekt research language](https://effekt-lang.org/) and is compiled into JASM IL. The rest is done
@@ -21,8 +21,9 @@ define "methods" for them. See below:
 // every file is a module and must start with a module directive
 module main
 
+include "string"
 include "math" // includes 'math.jasl' from the search path
-// Circular dependencies are allowed, the linker handles them.
+// Circular dependencies are allowed, the compiler handles them.
 
 // Wrapper layout means everything inside this layout is
 // hidden from outside. It is, in fact, a wrapper for what's inside.
@@ -33,11 +34,15 @@ wrapper layout String {
 };
 
 // Oh yeah, multiple returns. This is not a tuple mind you.
-pub fn String::unpack() -> (u32, i8*) {
+pub fn String::unpack(this: String) -> (u32, i8*) {
     // all variables are immutable by default. Use 'mut' after 'let' to make them mutable.
     let size: u32 = this.data.ptrcast(u32).deref();
-    let data: i8* = this.data.ptrcast(i8).offset(sizeof(u32))); // no overloaded arithmetic operators
+    let data: i8* = this.data.ptrcast(i8).offset(sizeof(u32)); // no overloaded arithmetic operators
     return { size, data }; // braces are expression lists, used to return multiple values
+}
+
+pub fn string::String::toMainString(this: string::String) -> String {
+    return String(this.data);
 }
 
 fn main() -> void {
@@ -45,14 +50,20 @@ fn main() -> void {
         Block comment
         /* And nested comments are allowed. */
     */
-    let someStr: String = "Hello World";
+    let someStr: string::String = "Hello World";
 
-    let (size: u32, data: i8*) = someStr.unpack(); // this is just syntax sugar
-                              // String::unpack(someStr);
+    // string::String and main::String are different.
+
+    let mainStr := someStr.toMainString();
+    let (size: u32, data: i8*) = mainStr.unpack(); // this is just syntax sugar
+                              // unpack(mainStr);
 
     // ':=' is not a token, it's just ':' and '='
     let inferredFromRhs := math::abs(-12);
     let (multiple:, infer:) = { 5u32, 6i8 };
+    //      u32      i8
+
+    // ':' that is not followed by a type name means 'inferred type'.
 }
 ```
 
@@ -99,4 +110,6 @@ The JASL Compiler
 
                 --output <file_name>    : set output file name
                 --working <file_name>   : set working directory
+                
+                --check-nullptr         : enable nullptr check on every pointer operation
 ```

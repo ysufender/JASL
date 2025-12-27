@@ -223,6 +223,11 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
             case QualifiedName(None(), "offset") => {
                 // top of the stack is ptr, u32
                 args.foreach{arg => arg.expressionGen}
+                if (do getFlag("nullptr-check")) {
+                    do spit("dup %ui")
+                    do spit("stc %ui 0")
+                    do spit("cnj %ui %equ jasl$$internal$$nullptrjump")
+                }
                 do spit("add %ui")
             }
             // TODO: Handle this in parser.
@@ -239,7 +244,8 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
             }
             case QualifiedName(None(), "deref") => {
                 args.foreach{arg => arg.expressionGen}
-                if (do getFlag("check-derefs")) {
+                if (do getFlag("nullptr-check")) {
+                    do spit("dup %ui")
                     do spit("stc %ui 0")
                     do spit("cnj %ui %equ jasl$$internal$$nullptrjump")
                 }
@@ -281,6 +287,11 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                 case Cons(left, Cons(right, Nil())) => {
                     if (left.evalType.map{t => t.pointingType}.compare(right.evalType){(a, b) => a == b}) {
                         left.expressionGen
+                        if (do getFlag("nullptr-check")) {
+                            do spit("dup %ui")
+                            do spit("stc %ui 0")
+                            do spit("cnj %ui %equ jasl$$internal$$nullptrjump")
+                        }
                         do spit("mov &ebx")
                         do spit("mov &sp &eax")
                         right.expressionGen
@@ -288,7 +299,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                         do spit("mov "++size++" &ecx")
                         do spit("mcp %s %h")
                         do spit("dcr %ui &sp "++size)
-                    } else do ParserError("Missmatching types in 'set' operation, given value doesn't match the pointer type.", pos)
+                    } else do ParserError("Missmatching types in 'set' operation, given value doesn't match the pointer type. "++left.evalType.map{t => t.pointingType}.show++" vs "++right.evalType.show, pos)
                 }
                 case _ => unreachable(__FILE__, __LINE__)
             }
@@ -637,7 +648,7 @@ def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister
         do beginBlock()
             do spit("jasl$$internal$$nullptrcallsafeguard:")
             do beginBlock()
-                if (not(do getFlag("check-derefs"))) {
+                if (not(do getFlag("nullptr-check"))) {
                     do spit("#32 byte nop followed by a jump to error message function#")
                 }
                 do spit("rom 0 0 0 0 0 0 0 0 ; ")
@@ -690,7 +701,7 @@ def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister
     do spit("jasl$$internal$$nullptrjump:")
     do beginBlock()
         do spit("mov 0 &sp")
-        if (do getFlag("check-derefs")) {
+        if (do getFlag("nullptr-check")) {
             do spit("raw 60 \"Jump to nullptr or nullptr dereferencing detected. Aborting.\" 0")
         } else {
             do spit("raw 77 \"Jump to null pointer detected, check your code for nullptr function pointers.\" 0 ;")

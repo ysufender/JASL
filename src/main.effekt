@@ -30,7 +30,8 @@ def printHelp(): Unit = {
     println("\t\t--dynamic               : build a dynamic library\n")
     println("\t\t--release [jit = false] : build in release mode, with optional jit support. defaults to false.\n")
     println("\t\t--output <file_name>    : set output file name")
-    println("\t\t--working <file_name>   : set working directory")
+    println("\t\t--working <file_name>   : set working directory\n")
+    println("\t\t--check-nullptr         : enable nullptr check on every pointer operation")
 }
 
 def parseCommandLine(): String / CompilerSettingsRegister = {
@@ -76,7 +77,7 @@ def parseCommandLine(): String / CompilerSettingsRegister = {
         }
         case "--output" => do setOutputFile(shift())
         case "--working" => do setWorkingDir(shift())
-        case "--check-derefs" => do setFlag("check-derefs")
+        case "--nullptr-check" => do setFlag("nullptr-check")
         case someOther => 
             if (file.length == 0)
                 file = someOther
