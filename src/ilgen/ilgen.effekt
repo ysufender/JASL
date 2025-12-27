@@ -239,6 +239,10 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
             }
             case QualifiedName(None(), "deref") => {
                 args.foreach{arg => arg.expressionGen}
+                if (do getFlag("check-derefs")) {
+                    do spit("stc %ui 0")
+                    do spit("cnj %ui %equ jasl$$internal$$nullptrjump")
+                }
                 args.evalType match {
                     case Cons(t, Nil()) => {
                         val mode = t.getModeFromType
@@ -484,6 +488,57 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
             }
         }
     }
+    case Dot(lhs, member, pos) => {
+        with parser_report;
+        
+        var addr = 0;
+        var glob = false;
+        var t: Type = Type::Void()
+
+        def _setUpLeft(expr: Expression): Unit = expr match {
+            case Identifier(name, _) => {
+                val varsign = do getVar(name)
+                addr = varsign.stackIndex
+                glob = varsign.global
+                t = varsign.varType
+            }
+            case Grouping(inside, _) => _setUpLeft(inside)
+            case Dot(lhs, member, pos) => {
+                with on[MissingValue].ignore;
+
+                _setUpLeft(lhs)
+                val layout = lhs.evalType.head match {
+                    case Type::Custom(name) => do getLayoutSignature(name).unpack
+                    case _ => unreachable(__FILE__, __LINE__)
+                }
+                val field = layout.fields.filter{f => f.name == member.name}.head
+                addr = addr + field.stackIndex
+                t = field.varType
+            }
+            case _ => ()
+        }
+        _setUpLeft(expr)
+        t match {
+            case Type::Custom(name) => {
+                do spit("mov "++addr.show++" &eax")
+                if (not(glob))
+                    do spit("add %ui &bp &eax")
+                do spit("mov "++t.typeSize.show++" &ecx")
+                do spit("mov &sp &ebx")
+                do spit("mcp %s %s")
+                do spit("inc %ui &sp "++t.typeSize.show)
+            }
+            case _ => 
+                if (t.getModeFromType is Some(ts)) glob match {
+                    case false => do spit("rdl "++ts++" "++addr.show)
+                    case true => {
+                        do spit("mov "++addr.show++" &ebx")
+                        do spit("ldc "++ts)
+                    }
+                }
+                else { }
+        }
+    }
     case _ => ()
 }
 
@@ -582,7 +637,9 @@ def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister
         do beginBlock()
             do spit("jasl$$internal$$nullptrcallsafeguard:")
             do beginBlock()
-                do spit("#32 byte nop followed by a jump to error message function#")
+                if (not(do getFlag("check-derefs"))) {
+                    do spit("#32 byte nop followed by a jump to error message function#")
+                }
                 do spit("rom 0 0 0 0 0 0 0 0 ; ")
                 do spit("jmp jasl$$internal$$nullptrjump")
             do endBlock()
@@ -633,7 +690,11 @@ def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister
     do spit("jasl$$internal$$nullptrjump:")
     do beginBlock()
         do spit("mov 0 &sp")
-        do spit("raw 77 \"Jump to null pointer detected, check your code for nullptr function pointers.\" 0 ;")
+        if (do getFlag("check-derefs")) {
+            do spit("raw 60 \"Jump to nullptr or nullptr dereferencing detected. Aborting.\" 0")
+        } else {
+            do spit("raw 77 \"Jump to null pointer detected, check your code for nullptr function pointers.\" 0 ;")
+        }
         do spit("mov 4 &bl sys \"void CSR_Println char*\"\n")
     do endBlock()
     do spit("jasl$$internal$$end$$here:")

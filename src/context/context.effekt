@@ -236,7 +236,6 @@ type UnaryOp {
 type Expression {
     // Block(inside: List[Statement], scope: ParserContext, pos: Position)
     Dot(lhs: Expression, member: QualifiedName, pos: Position)
-
     Assignment(lhs: Expression, rhs: Expression, pos: Position)
     Binary(binOp: BinaryOp, pos: Position)
     Unary(unOp: UnaryOp, pos: Position) // ilgen done
@@ -247,7 +246,6 @@ type Expression {
     Scoping(name: QualifiedName, pos: Position) // not used
     Initialization(name: Type, initializers: List[Expression], pos: Position) // ilgen done
     ExpressionList(inside: List[Expression], pos: Position) // ilgen done
-
 }
 
 // ilgen done for all
@@ -300,6 +298,7 @@ interface CompilerSettingsRegister {
     def releaseBuild(jit: Bool): Unit
     def setOutputFile(name: String): Unit
     def setWorkingDir(dir: String): Unit
+    def setFlag(name: String): Unit
 
     // getters
     def getTargetType(): TargetType
@@ -307,6 +306,7 @@ interface CompilerSettingsRegister {
     def getOutFile(): String
     def getWorkingDir(): String
     def getPipelineMode(): PipelineMode
+    def getFlag(name: String): Bool
 }
 
 interface CompilerContextRequest {
@@ -593,6 +593,7 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
             resume(())
         }
         def getWorkingFile() = resume(currentFile)
+
         def setWorkingModule(mod) = {
             currentModule = mod
             if (not(modules.contains(mod)))
@@ -600,6 +601,7 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
             resume(())
         }
         def getWorkingModule() = resume(currentModule)
+
         def checkDependency(file) = resume(processedFiles.contains(file))
         def addFunction(fn) = resume { if (modules.contains(currentModule)) {
             val oldInf = modules.get(currentModule).unpack()
@@ -757,6 +759,7 @@ def settingsHandler[T] { prog: () => T /  CompilerSettingsRegister }: T / StopCo
     var pipeline = Full()
     var workingDir = ""
     var outputFile = "out"
+    var flags: List[String] = []
 
     def getExtension() = targetType match {
         case Executable() => ".jef"
@@ -797,6 +800,13 @@ def settingsHandler[T] { prog: () => T /  CompilerSettingsRegister }: T / StopCo
             else workingDir = dir++"/"
             resume(())
         }
+        def setFlag(name) = flags.contains(name){(a,b) => a == b} match {
+            case true => resume(())
+            case false => {
+                flags = Cons(name, flags)
+                resume(())
+            }
+        }
 
         // getters
         def getTargetType() = resume(targetType)
@@ -811,5 +821,6 @@ def settingsHandler[T] { prog: () => T /  CompilerSettingsRegister }: T / StopCo
         )
         def getWorkingDir() = resume(workingDir)
         def getPipelineMode() = resume(pipeline)
+        def getFlag(name) = resume(flags.contains(name){(a,b) => a==b})
     }
 }

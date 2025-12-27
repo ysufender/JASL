@@ -76,6 +76,7 @@ def parseCommandLine(): String / CompilerSettingsRegister = {
         }
         case "--output" => do setOutputFile(shift())
         case "--working" => do setWorkingDir(shift())
+        case "--check-derefs" => do setFlag("check-derefs")
         case someOther => 
             if (file.length == 0)
                 file = someOther

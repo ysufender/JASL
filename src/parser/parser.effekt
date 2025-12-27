@@ -1026,7 +1026,7 @@ def evalType(expr: Expression): List[Type] / {InternalError, TokenRequest, Parse
                     case Depends(decide) => __inner(rest, decide(args.evalType).append(acc))
                     case _ => __inner(rest, Cons(head, acc))
                 }
-                case Nil() => acc
+                case Nil() => acc.reverse
             }
 
             __inner(returns, [])
@@ -1549,7 +1549,8 @@ def parsePostfix(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
                         }
                         case None() => unreachable(__FILE__, __LINE__)
                     }
-                    case _ => do ParserError("I don't quite understand what you're trying to do here.", pos)
+                    // case _ => do ParserError("I don't quite understand what you're trying to do here.", pos)
+                    case _ => do ParserError("Invalid syntax, dot expressions are not permitted on the left-hand side in this context.", pos)
                 }
             }
 
