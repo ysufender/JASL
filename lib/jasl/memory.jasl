@@ -1,19 +1,29 @@
 module memory
 
-// frees the given address, must be on heap. Only use with memory::malloc.
+// frees the given address, must be on heap. Only use with mem::malloc.
 // returns true if success, false otherwise
-pub fn free(pointer: void*, size: u32) -> bool {
+pub fn free(pointer: void*, size: u32, deallocator: fn (void*, u32) -> bool) -> bool {
     if size == 0u32 || pointer == nullptr {
         return false;
+    } else if deallocator != nullptr {
+        return deallocator(pointer, size);
     }
 
     asm {
+        pop %ui
         mov &ecx
         pop %ui
         mov &ebx
         del
     }
     return true;
+}
+
+pub fn printPointer(p: void*) -> void {
+    asm {
+        mov 4 &bl
+        sys "CSR_PrintU32"
+    }
 }
 
 // allocates 'size' bytes from heap and returns the address. nullptr if some error occurs.
@@ -33,6 +43,7 @@ pub fn malloc(size: u32, allocator: fn (u32) -> void*) -> void* {
         alc
         rda &ebx
     }
+
     return allocator.ptrcast(void);
 }
 
@@ -45,9 +56,9 @@ pub fn memcpy(src: void*, dest: void*, size: u32) -> bool {
 
     asm {
         mov &ecx
-        swp %ui
+        pop %ui
         mov &ebx
-        dcr %ui &sp 8
+        pop %ui
         mov &eax
         mcp %s %s
     }

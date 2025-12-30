@@ -3,6 +3,10 @@
 > STATUS: IL generation finished  
 > UPCOMING: Quality-of-life tweaks, perhaps "extern" functions  
 
+> BUGS:  
+>     1- Defer statements are not executed at returns and breaks, must fix it  
+>     2- Top-level variables are mistaken for duplicates due to prepass  
+
 JASL is a statically typed, low-level(!) and byte-compiled scripting language backed by JASM and CSR. JASL is
 written in the [Effekt research language](https://effekt-lang.org/) and is compiled into JASM IL. The rest is done
 by the [JASM Assembler and Linker](https://github.com/ysufender/JASM) and [CSR](https://github.com/ysufender/CSR).

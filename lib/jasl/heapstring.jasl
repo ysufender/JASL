@@ -1,0 +1,57 @@
+module hstring
+
+include "lib/jasl/string"
+include "lib/jasl/memory"
+
+pub wrapper layout HeapString {
+    mut data: void*;
+    mut totalSize: u32;
+}
+
+
+pub fn HeapString::new(str: string::String) -> HeapString {
+    let strSize := str.string::size();
+    let totalSize := strSize+36u32; // extra 4 for 4 byte size
+    let memory := memory::malloc(totalSize, nullptr);
+
+    if memory == nullptr {
+        return HeapString(nullptr, 0u32);
+    }
+
+    let mut cdata: void*;
+    asm {
+        pop %ui
+        rdl %ui 0
+    }
+
+    if memory::memcpy(cdata, memory, strSize+4u32) {
+        return HeapString(memory, totalSize);
+    }
+
+    memory::free(memory, totalSize, nullptr);
+    return HeapString(nullptr, 0u32);
+}
+
+pub fn HeapString::capacity(this: HeapString) -> u32 {
+    return this.totalSize;
+}
+
+pub fn HeapString::size(this: HeapString) -> u32 {
+    if this.data == nullptr { return 0u32; }
+    return this.data.ptrcast(u32).deref();
+}
+
+pub fn HeapString::data(this: HeapString) -> i8* {
+    if this.data == nullptr { return nullptr; }
+    return this.data.offset(4).ptrcast(i8);
+}
+
+pub fn HeapString::free(this: HeapString) -> bool {
+    if this.data == nullptr { return false; }
+    return memory::free(this.data, this.totalSize, nullptr);
+}
+
+pub fn HeapString::view(this: HeapString) -> string::String {
+    if this.data == nullptr { return string::empty(); }
+    return string::String(this.data);
+}

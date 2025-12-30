@@ -182,7 +182,10 @@ __DEBUG_END__
         exit(0)
     }
 
-    // AssembleIL()
-    println("Finished compiling.")
+    if (AssembleIL(do getOutFile()++".jasm")) {
+        println("Finished compiling.")
+    } else {
+        println("Compilation terminated.")
+    }
 }
 

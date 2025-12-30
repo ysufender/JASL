@@ -1,7 +1,5 @@
 module string
 
-include "lib/jasl/memory"
-
 //
 // Stack String, Static, No Free.
 // Just a pointer to the constant string.

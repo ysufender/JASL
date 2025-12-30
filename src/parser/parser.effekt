@@ -183,7 +183,6 @@ def show(t: Type): String / {TokenRequest, ParserError, ParserContextRequest, Co
 def typeString(t: Type): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = t.show()
 // def typeString(dt: DataType): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = dt.toType().typeString()
 
-__DEBUG_START__
 def show(v: VariableSignature): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     var str: String = "["++v.varType.typeSize().show()++"]["++v.stackIndex.show()++"] "
     if (v.comptime) str = "comptime "
@@ -224,15 +223,9 @@ def show(l: LayoutSignature): String / {TokenRequest, ParserError, ParserContext
     str = str++l.name++" { "
     l.fields.foreach { v => {
         str = str++v.show
-        /*
-            if (v.public) str = str++"pub "
-            if (v.mutable) str = str++"mut "
-            str = str++v.name++": "++v.varType.typeString()++"; "
-        */
     }}
     str++" }"
 }
-__DEBUG_END__
 
 def isComptime(stmt: Statement): Bool / {InternalError, ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = stmt match {
     case ExpressionStatement(expr, _) => expr.isComptime
@@ -372,7 +365,7 @@ def returnHandler[T](expected: List[Type]) { prog: () => T / ReturnTypeRegister 
 
     try {
         val res: T = prog()
-        if (returns < codePaths)
+        if (returns < codePaths && not(expected.all{e => e == Type::Void()}))
             do ParserError("All code paths doesn't return in this context. Paths: "++codePaths.show++", Returns: "++returns.show++". Check again please.", pos)
         res
     }
@@ -407,7 +400,7 @@ def functionOwnershipHandler[T](ownerType: Option[Type]) { prog: () => T / Funct
 
 def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRequest }: T / {TokenRequest, CompilerContextRequest, ParserError} = {
     var context = _context
-    var stackIndex: Int = 0
+    var stackIndex: Int = _context.stackIndex
 
     def _getVar(name: QualifiedName, ctx: ParserContext): VariableSignature / {ParserError, CompilerContextRequest} = ctx.variables.get(name.name) match {
         case Some(sign) => sign
@@ -452,7 +445,9 @@ def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRe
                 context = ParserContext(context.parent, context.stackIndex, context.variables.put(name, sign))
                 with ignoreDefer;
                 with contextHandler(context);
-                stackIndex = stackIndex + sign.varType.typeSize
+                val size = sign.varType.typeSize
+                stackIndex = stackIndex + size
+                context = ParserContext(context.parent, context.stackIndex + size, context.variables)
             }
         }
         def stackIndex() = resume(stackIndex)
@@ -1070,7 +1065,11 @@ def handleFunctionDef(): Statement / {defer, LoopHandler, GlobalVariableRegister
         args = args.put(arg.name, arg)
     }}
     var functionScope = do createChildContext()
-    functionScope = ParserContext(functionScope.parent, functionScope.stackIndex, args)
+    functionScope = ParserContext(
+        functionScope.parent,
+        functionScope.stackIndex + signature.arguments.map{arg => arg.varType.typeSize}.sum,
+        args
+    )
 
     val bbody = handleBlockStatement(functionScope) match {
         case Block(i, s, pos) => (i, s)
@@ -1122,12 +1121,13 @@ def handleReturnStatement(): Statement / {GlobalVariableRegister, FunctionOwners
 }
 
 def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
-    //    do ParserError("Global variable definitions at top-level are not (yet) allowed.", (do previous()).position)
+    // do ParserError("Global variable definitions at top-level are not (yet) allowed.", (do previous()).position)
 
     // let mut name: Type = expression;
     // let name: Type = expression;
     val pos: Position = (do previous()).position
     var vars: List[VariableSignature] = []
+    var stackIndex = do stackIndex()
 
     def handleVariable() = {
         val mutable = if (do check(Keyword(Mut()))) { do advance(); true } else { false }
@@ -1144,7 +1144,7 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
             }
         }
 
-        VariableSignature(identifier.text, false, mutable, false, false, do stackIndex(), typename)
+        VariableSignature(identifier.text, false, mutable, false, false, stackIndex, typename)
     }
 
     def inferType(vars: List[VariableSignature], expressions: List[Type]): List[VariableSignature] = {
@@ -1190,6 +1190,11 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
         else if (vars.any{v => v.varType match { case Type::InternalAny() => true; case _ => false; }})
             do ParserError("Can't infer the type of an uninitialized variable.", pos)
         else {
+            vars = vars.map{v => 
+                val vt = VariableSignature(v.name, v.public, v.mutable, v.comptime, v.global, stackIndex, v.varType)
+                stackIndex = stackIndex + vt.varType.typeSize
+                vt
+            }
             val vd = VariableDefinition(vars, None(), pos)
             if (do isTopLevel() && vars.all{v => v.global})
                 do registerGlobalVar(vd)
@@ -1209,7 +1214,11 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
 
         if (expr.evalType.compare(vars.map{v => v.varType}){(a, b) => a == b})
         {
-            vars = vars.inferType(expr.evalType);
+            vars = vars.inferType(expr.evalType).map{v => 
+                val vt = VariableSignature(v.name, v.public, v.mutable, v.comptime, v.global, stackIndex, v.varType)
+                stackIndex = stackIndex + vt.varType.typeSize
+                vt
+            }
 
             val vd = VariableDefinition(vars, Some(expr), pos)
             if (do isTopLevel() && vars.all{v => v.global})
@@ -1301,6 +1310,9 @@ def handleDefer(): Statement / {defer, GlobalVariableRegister, FunctionOwnership
     with noLoop;
 
     val pos = do previous().position
+
+    // do ParserError("Defer statements are not supported yet due to my skill issue.", pos)
+
     val stmt: Statement = parseStatement()
     do defer(stmt)
     InlineAssembly("", pos)
@@ -1435,6 +1447,7 @@ def parsePrimary(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
                     val stmt = VariableDefinition([sign], Some(value), token.position)
                     do addVariable(sign)
                     do registerGlobalVar(stmt)
+                    do increaseGlobalStackIndex(token.text.length+4)
                     Identifier(QualifiedName(Some(do getWorkingModule()), sign.name), token.position)
                     // Literal(Literal::String(token.text), token.position)
                 }

@@ -24,6 +24,7 @@ struct Pos c_get_arg(uint64_t idx) {
         return c_bytearray_new(0);
     }
 }
+
 uint64_t c_get_argc() {
     return program_argc;
 }
