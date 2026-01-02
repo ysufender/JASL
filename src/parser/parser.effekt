@@ -53,8 +53,14 @@ interface LoopHandler {
     def getLoopID(): Int
 }
 
+interface Defer {
+    def defer(stmt: Statement): Unit
+    def getDeferIDs(): List[String]
+    def isDeferring(): Bool
+}
+
 effect ParserError(msg: String, pos: Position): Nothing / CompilerContextRequest
-effect defer(stmt: Statement): Unit
+// effect defer(stmt: Statement): Unit
 
 def enforceStaticType(s: VariableSignature, pos: Position): VariableSignature / {ParserError, CompilerContextRequest, InternalError} = s.varType match {
     case Type::InternalAny() => do ParserError("Type inferrence is not possible here.", pos)
@@ -329,11 +335,13 @@ def parser_report[T] { prog: () => T / ParserError }: T / {CompilerSettingsRegis
     }}
 }
 
-def ignoreDefer[T]() { prog: () => T / defer }: T / {ParserError, TokenRequest, CompilerContextRequest} = {
+def ignoreDefer[T]() { prog: () => T / Defer }: T / {ParserError, TokenRequest, CompilerContextRequest} = {
     try { prog() }
-    with defer { _ => {
-        resume(())
-    }}
+    with Defer { 
+        def defer(_) = resume(())
+        def getDeferIDs() = resume([])
+        def isDeferring() = resume(false)
+    }
 }
 
 def ignoreReturns[T]() { prog: () => T / ReturnTypeRegister }: T / {ParserError, TokenRequest, CompilerContextRequest, ParserContextRequest} = {
@@ -1051,7 +1059,7 @@ def evalType(tl: List[Expression]): List[Type] / {InternalError, TokenRequest, P
     case Nil() => Nil()
 }
 
-def handleFunctionDef(): Statement / {defer, LoopHandler, GlobalVariableRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleFunctionDef(): Statement / {Defer, LoopHandler, GlobalVariableRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     // non-top level checks are already done by prepass
     if (not(do isTopLevel()))
         do ParserError("Function definitions in non top-level contexts are not permitted.", (do previous()).position)
@@ -1260,10 +1268,11 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
     }
 }
 
-def handleBlockStatement(context: ParserContext): Statement / {LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleBlockStatement(context: ParserContext): Statement / {Defer, LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     var body: List[Statement] = []
     var deferred: List[Statement] = []
     val pos: Position = (do previous()).position
+    val deferID = "defer$$"++random_range(0, native::i64Max).show
 
     try {
         with contextHandler(context);
@@ -1273,15 +1282,26 @@ def handleBlockStatement(context: ParserContext): Statement / {LoopHandler, Glob
         }
         do advance()
 
+        deferred = Cons(InlineAssembly(deferID++":", pos), deferred)
         Block(body.reverse.append(deferred), do getCurrentContext(), pos)
-    } with defer { stmt => {
-        deferred = Cons(stmt, deferred)
-        debugPrint("Defer statement at this block, handling it. "++pos.show)
-        resume(())
-    }}
+    } with Defer {
+        def defer(stmt) = {
+            deferred = Cons(stmt, deferred)
+            debugPrint("Defer statement at this block, handling it. "++pos.show)
+            resume(())
+        }
+        def getDeferIDs() = {
+            val list = do getDeferIDs()
+            resume(Cons(deferID, list))
+        }
+        def isDeferring() = deferred match {
+            case Cons(_, _) => resume(true)
+            case _ => resume(false)
+        }
+    }
 }
 
-def handleConditional(): Statement / {LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleConditional(): Statement / {Defer, LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     with ignoreReturns;
 
     val pos: Position = (do previous()).position
@@ -1311,7 +1331,7 @@ def handleConditional(): Statement / {LoopHandler, GlobalVariableRegister, Funct
     Conditional(condition, body, fallback, pos)
 }
 
-def handleWhile(): Statement / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleWhile(): Statement / {Defer, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     val pos: Position = (do previous()).position
     val condition: Expression = parseExpression()
 
@@ -1329,12 +1349,12 @@ def handleWhile(): Statement / {GlobalVariableRegister, FunctionOwnership, Retur
     WhileStmt(condition, body, loopID, pos)
 }
 
-def handleDefer(): Statement / {defer, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleDefer(): Statement / {Defer, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     with noLoop;
 
     val pos = do previous().position
 
-    // do ParserError("Defer statements are not supported yet due to my skill issue.", pos)
+    do ParserError("Defer statements are not supported yet due to my skill issue.", pos)
 
     val stmt: Statement = parseStatement()
     do defer(stmt)
@@ -1389,7 +1409,7 @@ def checkReturns(conditional: Statement): Unit / {FunctionOwnership, ReturnTypeR
     case _ => ()
 }
 
-def parseStatement(): Statement / {defer, LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = (do advance()).tokenType match {
+def parseStatement(): Statement / {Defer, LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = (do advance()).tokenType match {
     // skip these
     case Keyword(Preprocessor(_)) => {
         do advance()
@@ -1587,7 +1607,7 @@ def parsePostfix(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
                         case None() => unreachable(__FILE__, __LINE__)
                     }
                     // case _ => do ParserError("I don't quite understand what you're trying to do here.", pos)
-                    case _ => do ParserError("Invalid syntax, dot expressions are not permitted on the left-hand side in this context.", pos)
+                    case _ => do ParserError("Invalid syntax, dot expressions are not permitted on the left-hand side "++lType.show++".", pos)
                 }
             }
 
@@ -1617,6 +1637,7 @@ def parsePostfix(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
 
             def _inner(expr: Expression, pos: Position, member: String): Expression = expr match {
                 case Dot(lhs, name, _) => {
+                    debugPrint(member)
                     if (do hasFunction(QualifiedName(None(), member)) || do peek().tokenType == Symbol(DoubleColon()))
                         _fnCall(expr, member)
                     else

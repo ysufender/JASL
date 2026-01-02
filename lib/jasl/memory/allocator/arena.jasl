@@ -22,16 +22,16 @@ pub fn Arena::new(capacity: u32) -> Arena {
 pub fn Arena::allocate(this: Arena*, size: u32) -> void* {
     let mut mem: void* = nullptr;
 
-    if this.offset.deref() + size <= this.capacity.deref() {
-        mem = this.base.deref().offset(this.offset.deref());
-        this.offset.set(this.offset.deref() + size);
+    if this.offset.* + size <= this.capacity.* {
+        mem = this.base.*.offset(this.offset.*);
+        this.offset.set(this.offset.* + size);
     }
 
     return mem;
 }
 
 pub fn Arena::free(this: Arena*) -> bool {
-    let status := memory::free(this.base.deref(), this.capacity.deref(), allocator::default());
+    let status := memory::free(this.base.*, this.capacity.*, allocator::default());
 
     if status {
         this.set(Arena(nullptr, 0u32, 0u32));

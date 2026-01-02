@@ -182,6 +182,7 @@ def infixNeq(l: TokenType, r: TokenType): Bool = not(infixEq(l, r))
 interface TokenListHandler {
     def remove_last(): Unit
     def add_token(t: Token): Token
+    def previous_token(): Token
 }
 
 interface Lexer {
@@ -307,13 +308,25 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
                 case ';'  => do add_token(Token(Symbol(Semicolon()), c.show, pos(1)))
                 case '.'  => do add_token(Token(Symbol(DotSym()), c.show, pos(1)))
                 case '='  => do add_token(Token(Symbol(Assign()), c.show, pos(1)))
-                case '*'  => do add_token(Token(Symbol(Asterix()), c.show, pos(1)))
+                case '*'  => do previous_token().tokenType match {
+                    case Symbol(DotSym()) => {
+                        do add_token(Token(IdentifierT(), "deref", pos(1)))
+                        do add_token(Token(Symbol(LParen()), "(", pos(1)))
+                        do add_token(Token(Symbol(RParen()), ")", pos(1)))
+                    }
+                    case _ => do add_token(Token(Symbol(Asterix()), c.show, pos(1)))
+                }
                 case '<'  => do add_token(Token(Symbol(LessSym()), c.show, pos(1)))
                 case '>'  => do add_token(Token(Symbol(GreatSym()), c.show, pos(1)))
                 case '!'  => do add_token(Token(Symbol(NotSym()), c.show, pos(1)))
                 case '-'  => do add_token(Token(Symbol(Minus()), c.show, pos(1)))
                 case '+'  => do add_token(Token(Symbol(Plus()), c.show, pos(1)))
                 case '/'  => do add_token(Token(Symbol(Divide()), c.show, pos(1)))
+                case '&'  => {
+                    do add_token(Token(IdentifierT(), "ref", pos(1)))
+                    do add_token(Token(Symbol(LParen()), "(", pos(1)))
+                    do add_token(Token(Symbol(RParen()), ")", pos(1)))
+                }
                 case _ => do LexerError("Unexpected character '"++c.show++"'.", pos(1))
             }
             val curPos: Position = Position(line, col, index)
@@ -562,6 +575,10 @@ def handleTokenList() { prog: () => Unit / TokenListHandler }: List[Token] = {
                 resume(())
             }
             case Nil() => resume(())
+        }
+        def previous_token() = tokenList match {
+            case Cons(head, _) => resume(head)
+            case Nil() => resume(Token(EOF(), "", Position(0, 0, 0)))
         }
     }
 }

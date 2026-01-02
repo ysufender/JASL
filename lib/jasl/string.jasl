@@ -10,7 +10,7 @@ pub wrapper layout String {
 
 pub fn String::size(this: String) -> u32 {
     if this.data == nullptr { return 0u32; }
-    return this.data.ptrcast(u32).deref();
+    return this.data.ptrcast(u32).*;
 }
 
 pub fn String::data(this: String) -> i8* {
@@ -30,7 +30,7 @@ pub fn String::get(this: String, index: u32) -> (bool, u8) {
         return {false, 0u8};
     }
 
-    return {true, this.data.offset(index).ptrcast(u8).deref()};
+    return {true, this.data.offset(index).ptrcast(u8).*};
 }
 
 pub fn String::equals(this: String, other: String) -> bool {
