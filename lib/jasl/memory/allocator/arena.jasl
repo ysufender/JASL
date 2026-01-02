@@ -1,0 +1,56 @@
+module arena
+
+include "lib/jasl/memory"
+include "lib/jasl/io"
+
+pub layout Arena {
+    base: void*;
+    pub capacity: u32;
+    mut offset: u32;
+}
+
+//
+// Public API
+//
+pub fn Arena::new(capacity: u32) -> Arena {
+    let mem := memory::malloc(capacity, allocator::default());
+
+    if mem == nullptr { return Arena(mem, 0u32, 0u32); }
+    return Arena(mem, capacity, 0u32);
+}
+
+pub fn Arena::allocate(this: Arena*, size: u32) -> void* {
+    let mut mem: void* = nullptr;
+
+    if this.offset.deref() + size <= this.capacity.deref() {
+        mem = this.base.deref().offset(this.offset.deref());
+        this.offset.set(this.offset.deref() + size);
+    }
+
+    return mem;
+}
+
+pub fn Arena::free(this: Arena*) -> bool {
+    let status := memory::free(this.base.deref(), this.capacity.deref(), allocator::default());
+
+    if status {
+        this.set(Arena(nullptr, 0u32, 0u32));
+    }
+
+    return status;
+}
+
+pub fn Arena::allocator(this: Arena*) -> allocator::Allocator {
+    return allocator::Allocator(
+        this.ptrcast(void),
+        allocate.ptrcast(fn (void*,u32) -> void*),
+        _deallocate
+    );
+}
+
+//
+// Private Implementation
+//
+fn Arena::_deallocate(ctx: void*, ptr: void*, size: u32) -> bool {
+    return false;
+}

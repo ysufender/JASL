@@ -1,0 +1,40 @@
+module allocator
+
+// Allocator is sort of like an interface
+// context is the real allocator
+pub wrapper layout Allocator {
+    context: void*;
+    allocator: fn (void*, u32) -> void*;
+    deallocator: fn (void*, void*, u32) -> bool;
+}
+
+//
+// Public API
+//
+pub fn Allocator::default() -> Allocator {
+    return Allocator(nullptr, nullptr, nullptr);
+}
+
+pub fn Allocator::allocate(this: Allocator, size: u32) -> void* {
+    if this.context == nullptr {
+        return nullptr;
+    }
+
+    return (this.allocator)(this.context, size);
+}
+
+pub fn Allocator::deallocate(this: Allocator, ptr: void*, size: u32) -> bool {
+    if this.context == nullptr {
+        return false;
+    }
+
+    return (this.deallocator)(this.context, ptr, size);
+}
+
+pub fn Allocator::allocDefined(this: Allocator) -> bool {
+    return this.allocator != nullptr;
+}
+
+pub fn Allocator::deallocDefined(this: Allocator) -> bool {
+    return this.deallocator != nullptr;
+}

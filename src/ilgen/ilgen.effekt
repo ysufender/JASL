@@ -179,7 +179,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
     }
     case Identifier(name, pos) => {
         with parser_report;
-        if (do hasVar(name)) {
+        if (do hasVar(name, true)) {
             val sign = do getVar(name)
 
             sign.varType.getModeFromType match {
@@ -256,6 +256,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                         mode match {
                             case Some(modeflag) => {
                                 do spit("mov &ebx")
+                                do spit("pop %ui")
                                 do spit("rda "++modeflag)
                             }
                             case None() => {
@@ -272,7 +273,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
             }
             case QualifiedName(None(), "ref") => args match {
                 case Cons(Identifier(name, _), Nil()) =>
-                    if (do hasVar(name)){
+                    if (do hasVar(name, true)){
                         val sign = do getVar(name)
                         do spit("stc %ui "++sign.stackIndex.show)
                         if (not(sign.global)) {

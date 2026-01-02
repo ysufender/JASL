@@ -2,21 +2,20 @@ module hstring
 
 include "lib/jasl/string"
 include "lib/jasl/memory"
+include "lib/jasl/io"
 
-pub wrapper layout HeapString {
+pub layout HeapString {
     mut data: void*;
     mut totalSize: u32;
+    pub allocator: allocator::Allocator;
 }
 
-
-pub fn HeapString::new(str: string::String) -> HeapString {
+pub fn HeapString::new(str: string::String, alloc: allocator::Allocator) -> HeapString {
     let strSize := str.string::size();
-    let totalSize := strSize+36u32; // extra 4 for 4 byte size
-    let memory := memory::malloc(totalSize, nullptr);
+    let totalSize := strSize+36u32;
+    let memory := memory::malloc(totalSize, alloc);
 
-    if memory == nullptr {
-        return HeapString(nullptr, 0u32);
-    }
+    if memory == nullptr { return HeapString(nullptr, 0u32, alloc); }
 
     let mut cdata: void*;
     asm {
@@ -25,15 +24,15 @@ pub fn HeapString::new(str: string::String) -> HeapString {
     }
 
     if memory::memcpy(cdata, memory, strSize+4u32) {
-        return HeapString(memory, totalSize);
+        return HeapString(memory, totalSize, alloc);
     }
 
-    memory::free(memory, totalSize, nullptr);
-    return HeapString(nullptr, 0u32);
+    memory::free(memory, totalSize, alloc);
+    return HeapString(nullptr, 0u32, alloc);
 }
 
 pub fn HeapString::capacity(this: HeapString) -> u32 {
-    return this.totalSize;
+    return this.totalSize - 4u32;
 }
 
 pub fn HeapString::size(this: HeapString) -> u32 {
@@ -48,10 +47,15 @@ pub fn HeapString::data(this: HeapString) -> i8* {
 
 pub fn HeapString::free(this: HeapString) -> bool {
     if this.data == nullptr { return false; }
-    return memory::free(this.data, this.totalSize, nullptr);
+    return memory::free(this.data, this.totalSize, this.allocator);
 }
 
 pub fn HeapString::view(this: HeapString) -> string::String {
     if this.data == nullptr { return string::empty(); }
     return string::String(this.data);
 }
+
+pub fn HeapString::clone(this: HeapString, alloc: allocator::Allocator) -> HeapString {
+    return new(this.view(), alloc);
+}
+

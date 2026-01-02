@@ -517,8 +517,12 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
             VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny())),
             VariableSignature("newType", false, true, false, false, 4, Type::TypeType(Type::InternalAny()))
         ], [ Type::Depends(box { l => {
-            if (l is Cons(_, Cons(Type::TypeType(newType), _)))
-                [Type::Pointer(newType)]
+            if (l is Cons(_, Cons(Type::TypeType(newType), _))) {
+                newType match {
+                    case FunctionPointer(_, _) => [newType]
+                    case _ => [Type::Pointer(newType)]
+                }
+            }
             else <>
         }})]),
 
@@ -540,6 +544,8 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
         ], [ Type::Depends(box { l => {
             if (l is Cons(Type::Pointer(returnType), Nil()))
                 [returnType]
+            else if (l is Cons(a, Nil()) and a is Type::FunctionPointer(_, _))
+                [a]
             else <>
         }})]),
 

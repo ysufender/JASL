@@ -10,7 +10,7 @@ import native/native
 
 interface ParserContextRequest {
     def getVar(name: QualifiedName): VariableSignature / {ParserError, CompilerContextRequest}
-    def hasVar(name: QualifiedName): Bool / {ParserError, CompilerContextRequest}
+    def hasVar(name: QualifiedName, countParent: Bool): Bool / {ParserError, CompilerContextRequest}
     def hasFunction(name: QualifiedName): Bool / {ParserError, CompilerContextRequest}
     def hasLayout(name: QualifiedName): Bool / {ParserError, CompilerContextRequest}
     def addVar(name: String, sign: VariableSignature): Unit / {ParserError, CompilerContextRequest}
@@ -272,7 +272,7 @@ def isComptime(expr: Expression): Bool / {InternalError, ParserContextRequest, P
         case _ => unreachable(__FILE__, __LINE__)
     }
     case Identifier(name, pos) =>
-        if (do hasVar(name)) { (do getVar(name)).comptime }
+        if (do hasVar(name, true)) { (do getVar(name)).comptime }
         else if (do hasFunction(name)) {
             (do getFunctionSignature(name)) match {
                 case Some(signature) => signature.comptime
@@ -426,9 +426,14 @@ def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRe
     try { prog() }
     with ParserContextRequest {
         def getVar(name) = resume { _getVar(name, context) }
-        def hasVar(name) = resume {
-            try { _getVar(name, context); true }
-            with ParserError { (_, _) => false }
+        def hasVar(name, countParent) = resume {
+            if (countParent) {
+                try { _getVar(name, context); true }
+                with ParserError { (_, _) => false }
+            }
+            else {
+                context.variables.get(name.name).isDefined
+            }
         } 
         def hasFunction(name) = resume {
             try { _getFunction(name); true }
@@ -452,7 +457,7 @@ def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRe
         }
         def stackIndex() = resume(stackIndex)
         def isTopLevel() = resume(context.parent.isEmpty)
-        def createChildContext() = resume(ParserContext(Some(context), context.stackIndex + stackIndex, map::empty[String, VariableSignature](box strOrder)))
+        def createChildContext() = resume(ParserContext(Some(context), context.stackIndex, map::empty[String, VariableSignature](box strOrder)))
         def getCurrentContext() = resume(context)
     }
 }
@@ -666,7 +671,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
                 while (not(do is_eof()) && (do peek()).tokenType != Symbol(RParen())) {
                     val v: VariableSignature = handleVariable(true, public, do getGlobalStackIndex()).enforceStaticType(pos)
 
-                    if (do hasVar(QualifiedName(None(), v.name)))
+                    if (do hasVar(QualifiedName(None(), v.name), true))
                         do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
                     
                     if ((do peek()).tokenType != Symbol(RParen()))
@@ -681,7 +686,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
             }
             case _ => {
                 val v: VariableSignature = handleVariable(true, public, do getGlobalStackIndex()).enforceStaticType(pos)
-                if (do hasVar(QualifiedName(None(), v.name)) && not(v.global && do isTopLevel()))
+                if (do hasVar(QualifiedName(None(), v.name), true))
                     do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
                 do increaseGlobalStackIndex(v.varType.typeSize)
                 do addVariable(v)
@@ -949,7 +954,7 @@ def evalType(expr: Expression): List[Type] / {InternalError, TokenRequest, Parse
     case Assignment(lhs, rhs, _) => lhs.evalType
     case Initialization(name, _, pos) => [name]
     case Identifier(name, pos) => 
-        if (do hasVar(name)) {
+        if (do hasVar(name, true)) {
             [(do getVar(name)).varType]
         } else do getFunctionSignature(name) match {
             case Some(signature) => [signature.makePointer]
@@ -1014,7 +1019,7 @@ def evalType(expr: Expression): List[Type] / {InternalError, TokenRequest, Parse
         case Some(signature) => [signature.makePointer]
         case None() => do ParserError("Type scopings are compile-time and return no types.", pos)
     }
-    case Call(fn, args, _) => fn.evalType match {
+    case Call(fn, args, pos) => fn.evalType match {
         case Cons(FunctionPointer(_, returns), Nil()) => {
             def __inner(input: List[Type], acc: List[Type]): List[Type] = input match {
                 case Cons(head, rest) => head match {
@@ -1026,7 +1031,10 @@ def evalType(expr: Expression): List[Type] / {InternalError, TokenRequest, Parse
 
             __inner(returns, [])
         }
-        case _ => unreachable(__FILE__, __LINE__)
+        case _ => {
+            do ParserError("Attempt to call non-function value of type "++fn.evalType.show++".", pos)
+            unreachable(__FILE__, __LINE__)
+        }
     }
     //case Block(inside, scope, _) => unimplemented(__FILE__, __LINE__)
     case ExpressionList(inside, pos) => {
@@ -1121,8 +1129,6 @@ def handleReturnStatement(): Statement / {GlobalVariableRegister, FunctionOwners
 }
 
 def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
-    // do ParserError("Global variable definitions at top-level are not (yet) allowed.", (do previous()).position)
-
     // let mut name: Type = expression;
     // let name: Type = expression;
     val pos: Position = (do previous()).position
@@ -1158,10 +1164,14 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
         case Symbol(LParen()) => {
             do advance()
             while (not(do is_eof()) && (do peek()).tokenType != Symbol(RParen())) {
-                val v: VariableSignature = handleVariable()
+                var v: VariableSignature = handleVariable()
 
-                if (do hasVar(QualifiedName(None(), v.name)) && not(v.global && do isTopLevel()))
-                    do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                if (do hasVar(QualifiedName(None(), v.name), false)) {
+                    v = do getVar(QualifiedName(None(), v.name))
+                    if (not(v.global && do isTopLevel())) {
+                        do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                    }
+                }
                 
                 vars = Cons(v, vars)
 
@@ -1174,9 +1184,14 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
             val _ = do advance()
         }
         case _ => {
-            val v: VariableSignature = handleVariable()
-            if (do hasVar(QualifiedName(None(), v.name)) && not(v.global && do isTopLevel()))
-                do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+            var v: VariableSignature = handleVariable()
+
+            if (do hasVar(QualifiedName(None(), v.name), false)) {
+                v = do getVar(QualifiedName(None(), v.name))
+                if (not(v.global && do isTopLevel())) {
+                    do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                }
+            }
             vars = Cons(v, vars)
         }
     }
@@ -1200,8 +1215,12 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
                 do registerGlobalVar(vd)
             else { 
                 vars.foreach{v => {
-                    if (do hasVar(QualifiedName(None(), v.name)))
-                        do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                    if (do hasVar(QualifiedName(None(), v.name), false)) {
+                        val v = do getVar(QualifiedName(None(), v.name))
+                        if (not(v.global && do isTopLevel())) {
+                            do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                        }
+                    }
                     do addVar(v.name, v)
                 }}
                 vd
@@ -1225,8 +1244,12 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
                 do registerGlobalVar(vd)
             else { 
                 vars.foreach{v => {
-                    if (do hasVar(QualifiedName(None(), v.name)))
-                        do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                    if (do hasVar(QualifiedName(None(), v.name), false)) {
+                        val v = do getVar(QualifiedName(None(), v.name))
+                        if (not(v.global && do isTopLevel())) {
+                            do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                        }
+                    }
                     do addVar(v.name, v)
                 }}
                 vd
@@ -1502,6 +1525,7 @@ def parsePrimary(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
             }
             //case TypeNameT(CustomT(name)) => Scoping(QualifiedName(Some(do getWorkingModule()), name), token.position)
             case TypeNameT(t) => Literal(TypeLiteral(t.toType(Some(do getWorkingModule()))), token.position)
+            case Keyword(Fn()) => Literal(TypeLiteral(makeFunctionType()), token.position)
             case _ => do ParserError("Expected expression, got unexpected token '"++token.text++"'", token.position)
         }
     } with Exception[WrongFormat] {
@@ -1697,11 +1721,21 @@ def parseUnary(): Expression / {GlobalVariableRegister, FunctionOwnership, Retur
     token.tokenType match {
         case Symbol(NotSym()) => {
             do advance()
-            Unary(Not(parseUnary()), token.position)
+            val expr = parseUnary()
+            if (expr.evalType is Cons(Custom(_), _)) {
+                do ParserError("Logic operations on custom types is not supported.", do previous().position)
+                <>
+            }
+            Unary(Not(expr), token.position)
         }
         case Symbol(Minus()) => {
             do advance()
-            Unary(Negation(parseUnary()), token.position)
+            val expr = parseUnary()
+            if (expr.evalType is Cons(Custom(_), _)) {
+                do ParserError("Logic operations on custom types is not supported.", do previous().position)
+                <>
+            }
+            Unary(Negation(expr), token.position)
         }
         case _ => parsePostfix()
     }
@@ -1710,10 +1744,18 @@ def parseUnary(): Expression / {GlobalVariableRegister, FunctionOwnership, Retur
 def parseFactor(): Expression / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     def recurse(expr: Expression): Expression = (do peek()).tokenType match {
         case Symbol(Divide()) => {
+            if (expr.evalType is Cons(Custom(_), _)) {
+                do ParserError("Arithmetic operations on custom types is not supported.", do previous().position)
+                <>
+            }
             do advance()
             recurse(Binary(Division(expr, parseUnary()), (do previous()).position))
         }
         case Symbol(Asterix()) => {
+            if (expr.evalType is Cons(Custom(_), _)) {
+                do ParserError("Arithmetic operations on custom types is not supported.", do previous().position)
+                <>
+            }
             do advance()
             recurse(Binary(Multiplication(expr, parseUnary()), (do previous()).position))
         }
@@ -1726,10 +1768,18 @@ def parseFactor(): Expression / {GlobalVariableRegister, FunctionOwnership, Retu
 def parseTerm(): Expression / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     def recurse(expr: Expression): Expression = (do peek()).tokenType match {
         case Symbol(Minus()) => {
+            if (expr.evalType is Cons(Custom(_), _)) {
+                do ParserError("Arithmetic operations on custom types is not supported.", do previous().position)
+                <>
+            }
             do advance()
             recurse(Binary(Subtraction(expr, parseFactor()), (do previous()).position))
         }
         case Symbol(Plus()) => {
+            if (expr.evalType is Cons(Custom(_), _)) {
+                do ParserError("Arithmetic operations on custom types is not supported.", do previous().position)
+                <>
+            }
             do advance()
             recurse(Binary(Addition(expr, parseFactor()), (do previous()).position))
         }
@@ -1742,18 +1792,34 @@ def parseTerm(): Expression / {GlobalVariableRegister, FunctionOwnership, Return
 def parseComparison(): Expression / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     def recurse(expr: Expression): Expression = (do peek()).tokenType match {
         case Symbol(GreatSym()) => {
+            if (expr.evalType is Cons(Custom(_), _)) {
+                do ParserError("Comparison between custom types is not supported.", do previous().position)
+                <>
+            }
             do advance()
             recurse(Binary(Great(expr, parseTerm()), (do previous()).position))
         }
         case Symbol(GreatEq()) => {
+            if (expr.evalType is Cons(Custom(_), _)) {
+                do ParserError("Comparison between custom types is not supported.", do previous().position)
+                <>
+            }
             do advance()
             recurse(Binary(GreaterEqual(expr, parseTerm()), (do previous()).position))
         }
         case Symbol(LessSym()) => {
+            if (expr.evalType is Cons(Custom(_), _)) {
+                do ParserError("Comparison between custom types is not supported.", do previous().position)
+                <>
+            }
             do advance()
             recurse(Binary(Lesser(expr, parseTerm()), (do previous()).position))
         }
         case Symbol(LessEq()) => {
+            if (expr.evalType is Cons(Custom(_), _)) {
+                do ParserError("Comparison between custom types is not supported.", do previous().position)
+                <>
+            }
             do advance()
             recurse(Binary(LesserEqual(expr, parseTerm()), (do previous()).position))
         }
@@ -1766,10 +1832,18 @@ def parseComparison(): Expression / {GlobalVariableRegister, FunctionOwnership, 
 def parseEquality(): Expression / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     def recurse(expr: Expression): Expression =  (do peek()).tokenType match {
         case Symbol(Equals()) => {
+            if (expr.evalType is Cons(Custom(_), _)) {
+                do ParserError("Comparison between custom types is not supported.", do previous().position)
+                <>
+            }
             do advance()
             recurse(Binary(Equality(expr, parseComparison()), (do previous()).position))
         }
         case Symbol(NotEq()) => {
+            if (expr.evalType is Cons(Custom(_), _)) {
+                do ParserError("Comparison between custom types is not supported.", do previous().position)
+                <>
+            }
             do advance()
             recurse(Binary(Inequality(expr, parseComparison()), (do previous()).position))
         }

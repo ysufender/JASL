@@ -1,50 +1,47 @@
 module memory
 
+include "lib/jasl/memory/allocator"
+
 // frees the given address, must be on heap. Only use with mem::malloc.
 // returns true if success, false otherwise
-pub fn free(pointer: void*, size: u32, deallocator: fn (void*, u32) -> bool) -> bool {
+pub fn free(pointer: void*, size: u32, alloc: allocator::Allocator) -> bool {
     if size == 0u32 || pointer == nullptr {
         return false;
-    } else if deallocator != nullptr {
-        return deallocator(pointer, size);
+    } else if alloc.allocator::deallocDefined() {
+        return alloc.allocator::deallocate(pointer, size);
     }
 
     asm {
-        pop %ui
+        rdl %ui 4
         mov &ecx
-        pop %ui
+        rdl %ui 0
         mov &ebx
         del
     }
     return true;
 }
 
-pub fn printPointer(p: void*) -> void {
-    asm {
-        mov 4 &bl
-        sys "CSR_PrintU32"
-    }
-}
-
 // allocates 'size' bytes from heap and returns the address. nullptr if some error occurs.
 // to use default allocator, pass 'nullptr' as the second parameter.
 // in case of a custom allocator refer to the allocators standards for the returned value
-pub fn malloc(size: u32, allocator: fn (u32) -> void*) -> void* {
+pub fn allocator::Allocator::malloc(size: u32, alloc: allocator::Allocator) -> void* {
     if size == 0u32 {
         return nullptr;
     }
-    else if allocator != nullptr {
-        return allocator(size);
+    else if alloc.allocator::allocDefined() {
+        return alloc.allocator::allocate(size);
     }
 
     asm {
         pop %ui
+        rdl %ui 0
         mov &ecx
+        pop %ui
         alc
         rda &ebx
     }
 
-    return allocator.ptrcast(void);
+    return alloc.deallocator.ptrcast(void);
 }
 
 // copy 'size' bytes from 'src' to 'dest'
