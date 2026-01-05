@@ -55,7 +55,8 @@ interface LoopHandler {
 
 interface Defer {
     def defer(stmt: Statement): Unit
-    def getDeferIDs(t: DeferType): List[String]
+    // def getDeferIDs(t: DeferType): List[String]
+    def getDefers(t: DeferType): List[Statement]
     def isDeferring(): Bool
 }
 
@@ -349,7 +350,8 @@ def ignoreDefer[T]() { prog: () => T / Defer }: T / {ParserError, TokenRequest, 
     try { prog() }
     with Defer { 
         def defer(_) = resume(())
-        def getDeferIDs(t) = resume([])
+        // def getDeferIDs(t) = resume([])
+        def getDefers(_) = resume([])
         def isDeferring() = resume(false)
     }
 }
@@ -358,7 +360,8 @@ def banDefer[T]() { prog: () => T / Defer }: T / {ParserError, TokenRequest, Com
     try { prog() }
     with Defer { 
         def defer(_) = do ParserError("Defer statements are unsupported here.", do previous().position)
-        def getDeferIDs(t) = do ParserError("Defer statements are unsupported here.", do previous().position)
+        // def getDeferIDs(t) = do ParserError("Defer statements are unsupported here.", do previous().position)
+        def getDefers(_) = do ParserError("Defer statements are unsupported here.", do previous().position)
         def isDeferring() = do ParserError("Defer statements are unsupported here.", do previous().position)
     }
 }
@@ -1187,8 +1190,7 @@ def handleReturnStatement(): Statement / {Defer, GlobalVariableRegister, Functio
     do isDeferring() match {
         case true => {
             debugPrint("Early exit from function, setting up defers.");
-            var tmps: List[String] = []
-            val defers = do getDeferIDs(ReturnDefer()).reverse
+            var tmps: List[Expression] = []
             val returnID = "jasl$$return_"++random_range(0, native::i64Max).show
             var generated: List[Statement] = []
 
@@ -1204,7 +1206,7 @@ def handleReturnStatement(): Statement / {Defer, GlobalVariableRegister, Functio
                         val sign = VariableSignature(tmpName, false, false, false, false, do stackIndex(), typ)
                         do addVar(tmpName, sign)
                         generated = Cons(VariableDefinition([sign], Some(head), pos), generated)
-                        tmps = Cons(tmpName, tmps)
+                        tmps = Cons(Identifier(QualifiedName(None(), tmpName), pos), tmps)
                         setUpReturns(rest)
                     }
                 }
@@ -1212,18 +1214,11 @@ def handleReturnStatement(): Statement / {Defer, GlobalVariableRegister, Functio
             }
 
             setUpReturns(returns)
-            generated = Cons(InlineAssembly("sad "++returnID, pos), generated)
-            defers.foreach{defer => {
-                generated = Cons(InlineAssembly("sad "++defer, pos), generated)
-            }}
 
-            generated = Cons(
-                InlineAssembly(returnID++":", pos),
-                Cons(InlineAssembly("mov &edi pop %ui jmp &edi", pos), generated)
-            )
-
-            if (tmps is Nil()) Block(generated.reverse.append([ReturnStmt(returns, pos)]), do createChildContext(), pos)
-            else Block(generated.reverse.append([ReturnStmt(tmps.reverse.map{tmp => Identifier(QualifiedName(None(), tmp), pos)}, pos)]), do createChildContext(), pos)
+            if (tmps is Nil())
+                Block(generated.reverse.append(do getDefers(ReturnDefer())).append([ReturnStmt(returns, pos)]), do createChildContext(), pos)
+            else
+                Block(generated.reverse.append(do getDefers(ReturnDefer())).append([ReturnStmt(tmps, pos)]), do createChildContext(), pos)
         }
         case false => ReturnStmt(returns, pos)
     }
@@ -1362,64 +1357,67 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
 }
 
 def handleBlockStatement(context: ParserContext, isLoop: Bool): Statement / {Defer, LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    with contextHandler(context);
+
     var body: List[Statement] = []
     var deferred: List[Statement] = []
     val pos: Position = (do previous()).position
-    val id = random_range(0, native::i64Max)
-    val deferID = "jasl$$defer_"++id.show
-    var chained = false
 
     try {
-        with contextHandler(context);
 
         while ((do peek()).tokenType != Symbol(RBrace())) {
             body = Cons(parseStatement(), body)
         }
         do advance()
 
-        if (deferred is Nil())
-            Block(body.reverse, do getCurrentContext(), pos)
-        else {
-            if (chained) {
-                deferred = Cons(
-                    InlineAssembly("jmp jasl$$defer_end"++id.show, pos),
-                    Cons(InlineAssembly(deferID++":", pos),
-                    Cons(InlineAssembly("mov &edi pop %ui", pos), deferred))
-                )
-                deferred = deferred.append([InlineAssembly("jmp &edi", pos), InlineAssembly("jasl$$defer_end"++id.show++":", pos)])
-            } else ()
-
-            Block(body.reverse.append(deferred), do getCurrentContext(), pos)
-        }
+        if (deferred is Nil()) Block(body.reverse, do getCurrentContext(), pos)
+        else Block(body.reverse.append(deferred), do getCurrentContext(), pos)
     } with Defer {
         def defer(stmt) = stmt match {
-            case ExpressionStatement(Call(_, _, pos), _) => {
-                if (chained)
-                    do ParserError("Defer statements after early exits are problematic due to my poor engineering skills. Please rewrite all your defers to be placed before the early exit, if possible.", pos)
+            case ExpressionStatement(Call(fn, args, pos), outerPos) => {
+                // TODO: Evaluate parameters in place
+                var tmps: List[Expression] = []
 
-                deferred = Cons(stmt, deferred)
-                debugPrint("Defer statement at this block, handling it. "++pos.show)
+                def setUpReturns(rets: List[Expression]): Unit = rets match {
+                    case Cons(head, rest) => head match {
+                        case ExpressionList(exprs, _) => setUpReturns(exprs)
+                        case _ => {
+                            val tmpName = "tmp_defer_"++random_range(0, native::i64Max).show
+                            val typ = head.evalType match {
+                                case Cons(t, _) => t
+                                case _ => unreachable(__FILE__, __LINE__)
+                            }
+                            val sign = VariableSignature(tmpName, false, false, false, false, do stackIndex(), typ)
+                            do addVar(tmpName, sign)
+                            body = Cons(VariableDefinition([sign], Some(head), pos), body)
+                            tmps = Cons(Identifier(QualifiedName(None(), tmpName), pos), tmps)
+                            setUpReturns(rest)
+                        }
+                    }
+                    case Nil() => ()
+                }
+
+                setUpReturns(args)
+                deferred = Cons(ExpressionStatement(Call(fn, tmps, pos), outerPos), deferred)
+                // deferred = Cons(stmt, deferred)
                 resume(())
             }
             case _ => unreachable(__FILE__, __LINE__)
         }
-        def getDeferIDs(t) = {
-            chained = true
-            t match {
-                case ReturnDefer() => {
-                    val list = do getDeferIDs(t)
-                    if (deferred is Cons(_, _)) resume(Cons(deferID, list))
-                    else resume(list)
+        def getDefers(t) = t match {
+            case ReturnDefer() => {
+                val list = do getDefers(t)
+                if (deferred is Cons(_, _)) resume(deferred.append(list))
+                else resume(list)
+            }
+            case LoopDefer() => deferred match {
+                case Cons(_, _) => {
+                    if (isLoop) resume(deferred)
+                    else resume(deferred.append(do getDefers(t)))
                 }
-                case LoopDefer() => deferred match {
-                    case Cons(_, _) => {
-                        if (isLoop) resume([deferID])
-                        else resume(Cons(deferID, do getDeferIDs(t)))
-                    }
-                    case _ => {
-                        if (isLoop) resume([])
-                        else resume(do getDeferIDs(t))
-                    }
+                case _ => {
+                    if (isLoop) resume([])
+                    else resume(do getDefers(t))
                 }
             }
         }
@@ -1488,10 +1486,7 @@ def handleDefer(): Statement / {Defer, GlobalVariableRegister, FunctionOwnership
     val stmt: Statement = parseStatement()
 
     stmt match {
-        case ExpressionStatement(expr, pos) => expr match {
-            case Call(_, _, _) => ()
-            case _ => do ParserError("Statements of this type are not allowed in defer statements.", pos)
-        }
+        case ExpressionStatement(Call(_, _, _), pos) => ()
         case _ => do ParserError("Statements of this type are not allowed in defer statements.", pos)
     }
 
@@ -1508,21 +1503,10 @@ def handleBreak(): Statement / {Defer, LoopHandler, GlobalVariableRegister, Func
 
         if (do isDeferring()) {
             debugPrint("Early exit from loop, setting up defers.");
-            val defers = do getDeferIDs(LoopDefer()).reverse
             val breakID = "jasl$$break_"++random_range(0, native::i64Max).show
             var generated: List[Statement] = []
 
-            generated = Cons(InlineAssembly("sad "++breakID, pos), generated)
-            defers.foreach{defer => {
-                generated = Cons(InlineAssembly("sad "++defer, pos), generated)
-            }}
-
-            generated = Cons(
-                InlineAssembly(breakID++":", pos),
-                Cons(InlineAssembly("mov &edi pop %ui jmp &edi", pos), generated)
-            )
-
-            Block(generated.reverse.append([BreakStmt(do getLoopID(), pos)]), do createChildContext(), pos)
+            Block(generated.reverse.append(do getDefers(LoopDefer())).append([BreakStmt(do getLoopID(), pos)]), do createChildContext(), pos)
         }
         else BreakStmt(do getLoopID(), pos)
     } else {
@@ -1539,21 +1523,10 @@ def handleContinue(): Statement / {Defer, LoopHandler, GlobalVariableRegister, F
 
         if (do isDeferring()) {
             debugPrint("Early exit from loop, setting up defers.");
-            val defers = do getDeferIDs(LoopDefer()).reverse
             val continueID = "jasl$$continue_"++random_range(0, native::i64Max).show
             var generated: List[Statement] = []
 
-            generated = Cons(InlineAssembly("sad "++continueID, pos), generated)
-            defers.foreach{defer => {
-                generated = Cons(InlineAssembly("sad "++defer, pos), generated)
-            }}
-
-            generated = Cons(
-                InlineAssembly(continueID++":", pos),
-                Cons(InlineAssembly("mov &edi pop %ui jmp &edi", pos), generated)
-            )
-
-            Block(generated.reverse.append([ContinueStmt(do getLoopID(), pos)]), do createChildContext(), pos)
+            Block(generated.reverse.append(do getDefers(LoopDefer())).append([ContinueStmt(do getLoopID(), pos)]), do createChildContext(), pos)
         }
         else ContinueStmt(do getLoopID(), pos)
     } else {
