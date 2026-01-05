@@ -298,6 +298,7 @@ interface CompilerSettingsRegister {
     def releaseBuild(jit: Bool): Unit
     def setOutputFile(name: String): Unit
     def setWorkingDir(dir: String): Unit
+    def addIncludePath(path: String): Unit
     def setFlag(name: String): Unit
 
     // getters
@@ -306,6 +307,7 @@ interface CompilerSettingsRegister {
     def getOutFile(): String
     def getWorkingDir(): String
     def getPipelineMode(): PipelineMode
+    def getIncludePaths(): List[String]
     def getFlag(name: String): Bool
 }
 
@@ -384,9 +386,35 @@ def infixEq(l: QualifiedName, r: QualifiedName): Bool = {
     b1 && (l.name == r.name)
 }
 
+// TODO: Proper caching
+def getFile(_file: String): String / {InternalError, CompilerSettingsRegister} = {
+    var file = do getWorkingDir()++_file
+    var includes = do getIncludePaths()
+
+    var cnd = true
+    var found = false // For future caching
+    while (cnd) {
+        val exists = file_exists(file)
+        exists match {
+            case true => {
+                cnd = false
+                found = true
+            }
+            case false => includes match {
+                case Cons(head, rest) => {
+                    file = head++_file
+                    includes = rest
+                }
+                case Nil() => { cnd = false }
+            }
+        }
+    }
+    file
+}
+
+// fileName, content
 def openRead(file: String): String / {InternalError, CompilerSettingsRegister} = {
-    val file = do getWorkingDir()++file
-    try { with filesystem; readFile(file) }
+    try { with filesystem; do readFile(file) }
     with Exception[IOError] {
         def raise(_, _) = {
             println("Couldn't open file at path '"++file++"'.")
@@ -400,7 +428,7 @@ def openWrite(file: String, content: String): Unit / {InternalError, CompilerSet
     try { with filesystem; writeFile(file, content) }
     with Exception[IOError] {
         def raise(_, _) = {
-            println("Couldn't open and write to file at path '"++file++"'.")
+            println("Couldn't open file at path '"++file++"'.")
             exit(1)
         }
     }
@@ -766,6 +794,7 @@ def settingsHandler[T] { prog: () => T /  CompilerSettingsRegister }: T / StopCo
     var workingDir = ""
     var outputFile = "out"
     var flags: List[String] = []
+    var includePaths: List[String] = []
 
     def getExtension() = targetType match {
         case Executable() => ".jef"
@@ -806,6 +835,12 @@ def settingsHandler[T] { prog: () => T /  CompilerSettingsRegister }: T / StopCo
             else workingDir = dir++"/"
             resume(())
         }
+        def addIncludePath(path) = {
+            if (path.endsWith("/") || path.endsWith("\\"))
+                includePaths = Cons(path, includePaths)
+            else includePaths = Cons(path++"/", includePaths)
+            resume(())
+        }
         def setFlag(name) = flags.contains(name){(a,b) => a == b} match {
             case true => resume(())
             case false => {
@@ -827,6 +862,7 @@ def settingsHandler[T] { prog: () => T /  CompilerSettingsRegister }: T / StopCo
         )
         def getWorkingDir() = resume(workingDir)
         def getPipelineMode() = resume(pipeline)
+        def getIncludePaths() = resume(includePaths)
         def getFlag(name) = resume(flags.contains(name){(a,b) => a==b})
     }
 }

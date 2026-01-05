@@ -31,7 +31,9 @@ def printHelp(): Unit = {
     println("\t\t--release [jit = false] : build in release mode, with optional jit support. defaults to false.\n")
     println("\t\t--output <file_name>    : set output file name")
     println("\t\t--working <file_name>   : set working directory\n")
-    println("\t\t--check-nullptr         : enable nullptr check on every pointer operation")
+    println("\t\t--check-nullptr         : enable nullptr check on every pointer operation\n")
+    println("\t\t--include               : include the given directory as a search path\n")
+    // println("\t\t--run                   : run the given file after compiling")
 }
 
 def parseCommandLine(): String / CompilerSettingsRegister = {
@@ -78,6 +80,8 @@ def parseCommandLine(): String / CompilerSettingsRegister = {
         case "--output" => do setOutputFile(shift())
         case "--working" => do setWorkingDir(shift())
         case "--nullptr-check" => do setFlag("nullptr-check")
+        case "--include" => do addIncludePath(shift())
+        // case "--run" => do setFlag("run")
         case someOther => 
             if (file.length == 0)
                 file = someOther
@@ -113,7 +117,7 @@ def main() = {
     with handleGlobals;
     with on[OutOfBounds].panic;
 
-    do setWorkingFile(parseCommandLine())
+    do setWorkingFile(getFile(parseCommandLine()))
 
     val tokenized: List[Token] = lexer::lex()
     val topLevel: ParserContext = emptyParserContext()
@@ -158,7 +162,7 @@ __DEBUG_END__
     feed[(String, LexerContext)]{ () => do emitLexerOutput() } { case (filename, context) => {
         do setWorkingFile(filename)
         do setWorkingModule(context.name)
-        debugPrint("Parse called for "++do getWorkingFile()++" module "++do getWorkingModule())
+        debugPrint("Parse called for "++filename++" module "++do getWorkingModule())
         do registerAST(parser::parse(context.tokens, topLevel))
     }}
 
@@ -184,6 +188,13 @@ __DEBUG_END__
 
     if (AssembleIL(do getOutFile()++".jasm")) {
         println("Finished compiling.")
+/*        if (do getFlag("run")) {
+            val exitCode = RunByteCode(do getOutFile())
+            if (exitCode != 0) {
+                println("An error occured during runtime. Exit Code: "++exitCode.show)
+            }
+        }
+*/
     } else {
         println("Compilation terminated.")
     }

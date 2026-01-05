@@ -219,6 +219,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
         } else unreachable(__FILE__, __LINE__) 
     }
     case Call(fn, args, pos) => {
+        with on[MissingValue].ignore;
         with parser_report;
         def _fncall(name: QualifiedName, pos: Position): Unit = name match {
             case QualifiedName(None(), "offset") => {
@@ -237,11 +238,136 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
             }
             // this is just an illusion
             case QualifiedName(None(), "ptrcast") => args.foreach{arg => arg.expressionGen}
-            case QualifiedName(None(), "intcast") => args.evalType match {
-                case Cons(Type::UInt(), Cons(Type::TypeType(t), Nil())) => t match {
-                    case _ => unimplemented(__FILE__, __LINE__)
+            case QualifiedName(None(), "intcast") => args match {
+                case Cons(expr, Cons(Literal(TypeLiteral(t), _), Nil())) => (expr.evalType.head, t) match {
+                    // u32 to T
+                    case (Type::UInt(), Type::Int()) => { expr.expressionGen }
+                    case (Type::UInt(), Type::UInt()) => { expr.expressionGen }
+                    case (Type::UInt(), Type::Byte()) => {
+                        expr.expressionGen
+                        do spit("mov &eax")
+                        do spit("pop %ui")
+                        do spit("mov &eax &al")
+                        do spit("rda &al")
+                    }
+                    case (Type::UInt(), Type::UByte()) => {
+                        expr.expressionGen
+                        do spit("mov &eax")
+                        do spit("pop %ui")
+                        do spit("mov &eax &al")
+                        do spit("rda &al")
+                    }
+                    case (Type::UInt(), Type::Float()) => {
+                        expr.expressionGen
+                        do spit("mov 4 &bl")
+                        do spit("sys \"CSR_U32ToFloat\"")
+                    }
+
+                    // i32 to T
+                    case (Type::Int(), Type::Int()) => { expr.expressionGen }
+                    case (Type::Int(), Type::UInt()) => { expr.expressionGen }
+                    case (Type::Int(), Type::Byte()) => {
+                        expr.expressionGen
+                        do spit("mov &eax")
+                        do spit("pop %i")
+                        do spit("mov &eax &al")
+                        do spit("rda &al")
+                    }
+                    case (Type::Int(), Type::UByte()) => {
+                        expr.expressionGen
+                        do spit("mov &eax")
+                        do spit("pop %i")
+                        do spit("mov &eax &al")
+                        do spit("rda &al")
+                    }
+                    case (Type::Int(), Type::Float()) => {
+                        expr.expressionGen
+                        do spit("mov 4 &bl")
+                        do spit("sys \"CSR_I32ToFloat\"")
+                    }
+
+                    // f to T
+                    case (Type::Float(), Type::Int()) => {
+                        expr.expressionGen
+                        do spit("mov 4 &bl")
+                        do spit("sys \"CSR_FloatToI32\"")
+                    }
+                    case (Type::Float(), Type::UInt()) => {
+                        expr.expressionGen
+                        do spit("mov 4 &bl")
+                        do spit("sys \"CSR_FloatToU32\"")
+                    }
+                    case (Type::Float(), Type::Byte()) => {
+                        expr.expressionGen
+                        do spit("mov 4 &bl")
+                        do spit("sys \"CSR_FloatToI32\"")
+                        do spit("mov &eax")
+                        do spit("pop %i")
+                        do spit("mov &eax &al")
+                        do spit("rda &al")
+                    }
+                    case (Type::Float(), Type::UByte()) => {
+                        expr.expressionGen
+                        do spit("mov 4 &bl")
+                        do spit("sys \"CSR_FloatToU32\"")
+                        do spit("mov &eax")
+                        do spit("pop %ui")
+                        do spit("mov &eax &al")
+                        do spit("rda &al")
+                    }
+
+                    // i8 to T
+                    case (Type::Byte(), Type::UByte()) => { }
+                    case (Type::Byte(), Type::Byte()) => { }
+                    case (Type::Byte(), Type::Int()) => {
+                        do spit("mov &al")
+                        do spit("pop %b")
+                        do spit("mov &al &eax")
+                        do spit("rda &eax")
+                    }
+                    case (Type::Byte(), Type::UInt()) => {
+                        do spit("mov &al")
+                        do spit("pop %b")
+                        do spit("mov &al &eax")
+                        do spit("rda &eax")
+                    }
+                    case (Type::Byte(), Type::Float()) => {
+                        do spit("mov &al")
+                        do spit("pop %b")
+                        do spit("mov &al &eax")
+                        do spit("rda &eax")
+                        do spit("mov 4 &bl")
+                        do spit("sys CSR_I32ToFloat")
+                    }
+
+                    // u8 to T
+                    case (Type::UByte(), Type::UByte()) => { }
+                    case (Type::UByte(), Type::Byte()) => { }
+                    case (Type::UByte(), Type::Int()) => {
+                        do spit("mov &al")
+                        do spit("pop %ub")
+                        do spit("mov &al &eax")
+                        do spit("rda &eax")
+                    }
+                    case (Type::UByte(), Type::UInt()) => {
+                        do spit("mov &al")
+                        do spit("pop %ub")
+                        do spit("mov &al &eax")
+                        do spit("rda &eax")
+                    }
+                    case (Type::UByte(), Type::Float()) => {
+                        do spit("mov &al")
+                        do spit("pop %b")
+                        do spit("mov &al &eax")
+                        do spit("rda &eax")
+                        do spit("mov 4 &bl")
+                        do spit("sys CSR_U32ToFloat")
+                    }
+
+                    case (_, _) => unimplemented(__FILE__, __LINE__)
                 }
-                case _ => unimplemented(__FILE__, __LINE__)
+
+                case _ => unreachable(__FILE__, __LINE__)
             }
             case QualifiedName(None(), "deref") => {
                 args.foreach{arg => arg.expressionGen}

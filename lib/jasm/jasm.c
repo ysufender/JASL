@@ -7,6 +7,14 @@
 #define JASM_EMBED
 #include "jasm.h"
 
+struct Pos file_exists(String _str)
+{
+    Str str = (Str)c_bytearray_data(_str);
+    FILE* handle = fopen(str, "r");
+    if (handle == NULL)
+        return BooleanFalse;
+    return BooleanTrue;
+}
 
 Double string_to_float(String _str)
 {
@@ -29,7 +37,7 @@ struct Pos assemble_il_call(struct Pos filePath)
     StrVector libs = StrVectorCreate(0);
     StrVectorPush(ins, fileName);
 
-    JASMAssemblyContext context = CreateAssemblyContext(0, 0, 0, "build/out.jef", Executable, "", ins, libs, 0, 0);
+    JASMAssemblyContext context = CreateAssemblyContext(1, 0, 0, "build/out.jef", Executable, "", ins, libs, 0, 0);
     JASMByteAssembler assembler = CreateByteAssembler(context);
     JASMAssemblyInfoCollection objects = ByteAssemble(assembler);
     JASMByteLinker linker = CreateByteLinker();

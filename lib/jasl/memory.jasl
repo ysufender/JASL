@@ -1,6 +1,6 @@
 module memory
 
-include "lib/jasl/memory/allocator"
+include "memory/allocator"
 
 // frees the given address, must be on heap. Only use with mem::malloc.
 // returns true if success, false otherwise

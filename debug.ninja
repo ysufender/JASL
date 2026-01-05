@@ -79,6 +79,8 @@ build $builddir/jasl.bs: las $builddir/main.ll
 build $builddir/jasl.o: lc $builddir/jasl.bs
 
 build $builddir/jasm_wrapper.o: cc $libdir/jasm/jasm.c | $libdir/jasm/jasm.h
+#build $builddir/csr_wrapper.o: cc $libdir/csr/csr.c | $libdir/csr/csr.h
 
-build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o  $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a
+build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a
+#build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a $builddir/csr_wrapper.o $libdir/csr/libcsr.a
 # build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o  $builddir/jasm_wrapper.o

@@ -1,8 +1,7 @@
 module hstring
 
-include "lib/jasl/string"
-include "lib/jasl/memory"
-include "lib/jasl/io"
+include "string"
+include "memory"
 
 pub layout HeapString {
     mut data: void*;
@@ -17,11 +16,7 @@ pub fn HeapString::new(str: string::String, alloc: allocator::Allocator) -> Heap
 
     if memory == nullptr { return HeapString(nullptr, 0u32, alloc); }
 
-    let mut cdata: void*;
-    asm {
-        pop %ui
-        rdl %ui 0
-    }
+    let cdata := str.&.ptrcast(void**).*.ptrcast(void);
 
     if memory::memcpy(cdata, memory, strSize+4u32) {
         return HeapString(memory, totalSize, alloc);
@@ -37,7 +32,7 @@ pub fn HeapString::capacity(this: HeapString) -> u32 {
 
 pub fn HeapString::size(this: HeapString) -> u32 {
     if this.data == nullptr { return 0u32; }
-    return this.data.ptrcast(u32).deref();
+    return this.data.ptrcast(u32).*;
 }
 
 pub fn HeapString::data(this: HeapString) -> i8* {
@@ -58,4 +53,3 @@ pub fn HeapString::view(this: HeapString) -> string::String {
 pub fn HeapString::clone(this: HeapString, alloc: allocator::Allocator) -> HeapString {
     return new(this.view(), alloc);
 }
-

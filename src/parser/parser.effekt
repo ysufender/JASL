@@ -55,12 +55,123 @@ interface LoopHandler {
 
 interface Defer {
     def defer(stmt: Statement): Unit
-    def getDeferIDs(): List[String]
+    def getDeferIDs(t: DeferType): List[String]
     def isDeferring(): Bool
 }
 
 effect ParserError(msg: String, pos: Position): Nothing / CompilerContextRequest
 // effect defer(stmt: Statement): Unit
+
+type DeferType {
+    ReturnDefer()
+    LoopDefer()
+}
+
+def typeString(tl: List[Type]): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    var str: String = "("
+    var i: Int = 0
+    val l: Int = tl.size
+    tl.foreachTypeList { t => {
+        str = str++t.typeString()
+        if (i != (l - 1))
+            str = str++", "
+        i = i + 1
+    }}
+    str++")"
+}
+
+def show(tl: List[Type]): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = tl.typeString()
+
+def show(t: Type): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = t match {
+    case Type::Bool() => "bool"
+    case Type::UInt() => "u32"
+    case Type::Int() => "i32"
+    case Type::Float() => "float"
+    case Type::UByte() => "u8"
+    case Type::Byte() => "i8"
+    case Type::Pointer(ptrType) => show(ptrType)++"*"
+    case Type::Void() => "void"
+    case Type::Custom(QualifiedName(Some(mod), name)) => mod++"::"++name
+    case Type::Custom(QualifiedName(None(), name)) => name
+    case Type::FunctionPointer(args, returns) => {
+        var str: String = "fn ("
+        var l: Int = args.size
+        var i: Int = 0
+        args.foreachTypeList { t => {
+            str = str++t.show
+            if (i != (l - 1))
+                str = str++", "
+            i = i + 1
+        }}
+        str = str++") -> ("
+        l = returns.size
+        i = 0
+        returns.foreachTypeList  { t => {
+            str = str++t.show
+            if (i != (l - 1))
+                str = str++", "
+            i = i + 1
+        }}
+        str = str++")"
+        str
+    }
+    case TypeType(inner) => "type "++inner.show
+    case InternalAny() => "any"
+    case Depends(_) => "depends"
+    case Any(list) => "any of "++list.show
+}
+
+def typeString(t: Type): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = t.show()
+// def typeString(dt: DataType): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = dt.toType().typeString()
+
+
+
+def show(v: VariableSignature): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    var str: String = "["++v.varType.typeSize().show()++"]["++v.stackIndex.show()++"] "
+    if (v.global) str = "global "
+    if (v.comptime) str = str++"comptime "
+    if (v.public) str = str++"pub "
+    // str = str++"let "
+    if (v.mutable) str = str++"mut "
+    str++v.name++": "++v.varType.typeString().show()
+}
+
+def show(f: FunctionSignature): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    var str: String = ""
+    if (f.comptime) str = "comptime "
+    if (f.public) str = str++"pub "
+    str = str++"fn "++f.name++"("
+    var l: Int = f.arguments.size
+    f.arguments.foreachIndex { (i, v) => {
+        //str = str++v.name++": "++v.varType.typeString()
+        str = str++v.show
+        if (i != (l - 1))
+            str = str++", "
+    }}
+    str = str++") -> ("
+    l = f.returns.size
+    f.returns.foreachIndex { (i, t) => {
+        str = str++t.typeString()
+        if (i != (l - 1))
+            str = str++", "
+    }}
+    str = str++")"
+    if (f.ofType is Some(t)) str = str++" of type "++t.typeString()
+    str
+}
+
+def show(l: LayoutSignature): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    var str: String = "["++l.typeSize().show()++"]"
+    if (l.public) str = "pub "
+    if (l.wrapper) str = str++"wrapper "
+    str = str++l.name++" { "
+    l.fields.foreach { v => {
+        str = str++v.show
+    }}
+    str++" }"
+}
+
+
 
 def enforceStaticType(s: VariableSignature, pos: Position): VariableSignature / {ParserError, CompilerContextRequest, InternalError} = s.varType match {
     case Type::InternalAny() => do ParserError("Type inferrence is not possible here.", pos)
@@ -130,107 +241,6 @@ def foreachTypeList(list: List[Type]) { act: Type => Unit / {TokenRequest, Parse
         foreachTypeList(xs){act}
     }
     case Nil() => ()
-}
-
-def typeString(tl: List[Type]): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
-    var str: String = "("
-    var i: Int = 0
-    val l: Int = tl.size
-    tl.foreachTypeList { t => {
-        str = str++t.typeString()
-        if (i != (l - 1))
-            str = str++", "
-        i = i + 1
-    }}
-    str++")"
-}
-
-def show(tl: List[Type]): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = tl.typeString()
-
-def show(t: Type): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = t match {
-    case Type::Bool() => "bool"
-    case Type::UInt() => "u32"
-    case Type::Int() => "i32"
-    case Type::Float() => "float"
-    case Type::UByte() => "u8"
-    case Type::Byte() => "i8"
-    case Type::Pointer(ptrType) => show(ptrType)++"*"
-    case Type::Void() => "void"
-    case Type::Custom(QualifiedName(Some(mod), name)) => mod++"::"++name
-    case Type::Custom(QualifiedName(None(), name)) => name
-    case Type::FunctionPointer(args, returns) => {
-        var str: String = "fn ("
-        var l: Int = args.size
-        var i: Int = 0
-        args.foreachTypeList { t => {
-            str = str++t.show
-            if (i != (l - 1))
-                str = str++", "
-            i = i + 1
-        }}
-        str = str++") -> ("
-        l = returns.size
-        i = 0
-        returns.foreachTypeList  { t => {
-            str = str++t.show
-            if (i != (l - 1))
-                str = str++", "
-            i = i + 1
-        }}
-        str = str++")"
-        str
-    }
-    case TypeType(inner) => "type "++inner.show
-    case InternalAny() => "any"
-    case Depends(_) => "depends"
-    case Any(list) => "any of "++list.show
-}
-
-def typeString(t: Type): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = t.show()
-// def typeString(dt: DataType): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = dt.toType().typeString()
-
-def show(v: VariableSignature): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
-    var str: String = "["++v.varType.typeSize().show()++"]["++v.stackIndex.show()++"] "
-    if (v.comptime) str = "comptime "
-    if (v.public) str = str++"pub "
-    // str = str++"let "
-    if (v.mutable) str = str++"mut "
-    str++v.name++": "++v.varType.typeString().show()
-}
-
-def show(f: FunctionSignature): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
-    var str: String = ""
-    if (f.comptime) str = "comptime "
-    if (f.public) str = str++"pub "
-    str = str++"fn "++f.name++"("
-    var l: Int = f.arguments.size
-    f.arguments.foreachIndex { (i, v) => {
-        //str = str++v.name++": "++v.varType.typeString()
-        str = str++v.show
-        if (i != (l - 1))
-            str = str++", "
-    }}
-    str = str++") -> ("
-    l = f.returns.size
-    f.returns.foreachIndex { (i, t) => {
-        str = str++t.typeString()
-        if (i != (l - 1))
-            str = str++", "
-    }}
-    str = str++")"
-    if (f.ofType is Some(t)) str = str++" of type "++t.typeString()
-    str
-}
-
-def show(l: LayoutSignature): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
-    var str: String = "["++l.typeSize().show()++"]"
-    if (l.public) str = "pub "
-    if (l.wrapper) str = str++"wrapper "
-    str = str++l.name++" { "
-    l.fields.foreach { v => {
-        str = str++v.show
-    }}
-    str++" }"
 }
 
 def isComptime(stmt: Statement): Bool / {InternalError, ParserContextRequest, ParserError, TokenRequest, CompilerContextRequest} = stmt match {
@@ -339,8 +349,17 @@ def ignoreDefer[T]() { prog: () => T / Defer }: T / {ParserError, TokenRequest, 
     try { prog() }
     with Defer { 
         def defer(_) = resume(())
-        def getDeferIDs() = resume([])
+        def getDeferIDs(t) = resume([])
         def isDeferring() = resume(false)
+    }
+}
+
+def banDefer[T]() { prog: () => T / Defer }: T / {ParserError, TokenRequest, CompilerContextRequest} = {
+    try { prog() }
+    with Defer { 
+        def defer(_) = do ParserError("Defer statements are unsupported here.", do previous().position)
+        def getDeferIDs(t) = do ParserError("Defer statements are unsupported here.", do previous().position)
+        def isDeferring() = do ParserError("Defer statements are unsupported here.", do previous().position)
     }
 }
 
@@ -587,13 +606,28 @@ def makeFunctionType(): Type / {TokenRequest, ParserError, ParserContextRequest,
 
 def handleTypeName(): Type / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest, InternalError} = {
     val t: Type = (do advance()).tokenType match {
-        case IdentifierT() => {
-            val mod = Some((do previous()).text)
-            do checkReturnOrCrash(Symbol(DoubleColon()))
-            (do advance()).tokenType match {
-                // case TypeNameT(CustomT(name)) => Custom(QualifiedName(Some(mod), name))
-                case TypeNameT(t) => t.toType(mod)
+        // TODO: Type aliasing by assigning to variables.
+        case IdentifierT() => do hasVar(QualifiedName(None(), do previous().text), true) match {
+            case true => do getVar(QualifiedName(None(), do previous().text)).varType match {
+                case Type::TypeType(t) => t
                 case _ => do ParserError("Expected typename.", (do previous()).position)
+            }
+            case false => {
+                val mod = Some((do previous()).text)
+                do checkReturnOrCrash(Symbol(DoubleColon()))
+                val ret = (do advance()).tokenType match {
+                    // case TypeNameT(CustomT(name)) => Custom(QualifiedName(Some(mod), name))
+                    case TypeNameT(t) => t.toType(mod)
+                    case IdentifierT() => do hasVar(QualifiedName(mod, do previous().text), true) match {
+                        case true => do getVar(QualifiedName(None(), do previous().text)).varType match {
+                            case Type::TypeType(t) => t
+                            case _ => do ParserError("Expected typename.", (do previous()).position)
+                        }
+                        case false => do ParserError("Expected typename.", (do previous()).position)
+                    }
+                    case _ => do ParserError("Expected typename.", (do previous()).position)
+                }
+                ret
             }
         }
         // case TypeNameT(CustomT(name)) => Custom(QualifiedName(Some(do getWorkingModule()), name))
@@ -646,7 +680,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
     }
 
     do setWorkingModule((do advance()).text)
-    do registerLexerOutput([])
+    // do registerLexerOutput([])
 
     debugPrint("Prepassing Module: "++do getWorkingModule())
 
@@ -860,11 +894,12 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
                     do ParserError("Expected a file path, got '"++token.text++"' instead.", token.position)
                 }
 
-                if (not(do checkDependency(token.text++".jasl")))
+                val fileToPass = getFile(token.text++".jasl")
+                if (not(do checkDependency(fileToPass)))
                 {
                     val currentFile: String = do getWorkingFile()
                     val currentModule: String = do getWorkingModule()
-                    do setWorkingFile(token.text++".jasl")
+                    do setWorkingFile(fileToPass)
                     val tokenized: List[Token] = lexer::lex()
 
                     with parser_report;
@@ -876,7 +911,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
                         _prepass()
                     }
 
-                    debugPrint("Registering Lexer Output: "++do getWorkingFile())
+                    debugPrint("Registering Lexer Output: "++fileToPass)
                     do registerLexerOutput(tokenized)
                     
                     do setWorkingFile(currentFile)
@@ -939,9 +974,13 @@ def __evalBin(lhs: Expression, rhs: Expression, pos: Position): List[Type] / {In
     val t2: List[Type] = rhs.evalType
     if (t1.size != 1 || t2.size != 1)
         do ParserError("Binary expressions on multiple types are not allowed.", pos)
-    if (not(t1.head.isNumeric && t2.head.isNumeric))
+    else if (not(t1.head.isNumeric && t2.head.isNumeric))
         do ParserError("Arithmetic expressions are only allowed on numeric types.", pos)
-    if (t1.compare(t2){(a, b) => a == b})
+    else if (t1.head is Custom(_))
+        do ParserError("Binary expressions on custom types are not allowed.", pos)
+    else if (t2.head is Custom(_))
+        do ParserError("Binary expressions on custom types are not allowed.", pos)
+    else if (t1.compare(t2){(a, b) => a == b})
         t1
     else
         do ParserError("Type missmatch between the sides of binary expression. Expected '"++t1.typeString++"' on both, got '"++t2.typeString++"' instead on one side.", pos)
@@ -949,13 +988,21 @@ def __evalBin(lhs: Expression, rhs: Expression, pos: Position): List[Type] / {In
     def raise(_, _) = unreachable(__FILE__, __LINE__)
 }
 
-def __evalLogic(lhs: Expression, rhs: Expression, pos: Position): List[Type] / {InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def __evalLogic(lhs: Expression, rhs: Expression, pos: Position): List[Type] / {InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = try {
     val t1: List[Type] = lhs.evalType
     val t2: List[Type] = rhs.evalType
-    if (t1.compare(t2){(a, b) => a == b})
+    if (t1.size != 1 || t2.size != 1)
+        do ParserError("Logic expressions on multiple types are not allowed.", pos)
+    else if (t1.head is Custom(_))
+        do ParserError("Logic expressions on custom types are not allowed.", pos)
+    else if (t2.head is Custom(_))
+        do ParserError("Logic expressions on custom types are not allowed.", pos)
+    else if (t1.compare(t2){(a, b) => a == b})
         [Type::Bool()]
     else
         do ParserError("Type missmatch between the sides of binary expression. Expected '"++t1.typeString++"' on both, got '"++t2.typeString++"' instead on one side.", pos)
+} with Exception[MissingValue] {
+    def raise(_, _) = unreachable(__FILE__, __LINE__)
 }
 
 def evalType(expr: Expression): List[Type] / {InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = expr match {
@@ -1076,6 +1123,7 @@ def handleFunctionDef(): Statement / {Defer, LoopHandler, GlobalVariableRegister
 
     with returnHandler(signature.returns);
     with functionOwnershipHandler(signature.ofType)
+
     var args: Map[String, VariableSignature] = map::empty(box strOrder)
     signature.arguments.foreach { arg => {
         args = args.put(arg.name, arg)
@@ -1087,7 +1135,7 @@ def handleFunctionDef(): Statement / {Defer, LoopHandler, GlobalVariableRegister
         args
     )
 
-    val bbody = handleBlockStatement(functionScope) match {
+    val bbody = handleBlockStatement(functionScope, false) match {
         case Block(i, s, pos) => (i, s)
         case _ => unreachable(__FILE__, __LINE__)
     }
@@ -1105,8 +1153,10 @@ def handleFunctionDef(): Statement / {Defer, LoopHandler, GlobalVariableRegister
 
     if (signature.returns.compare([Type::Void()]){(a, b) => a == b})
     {
-        if (not(do isCovered()))
+        // TODO: Do a defer check here
+        if (not(do isCovered())) {
             body = body.append([ReturnStmt(Nil(), (do previous()).position)])
+        }
 
         do returns([Type::Void()], pos)
     }
@@ -1114,9 +1164,9 @@ def handleFunctionDef(): Statement / {Defer, LoopHandler, GlobalVariableRegister
     FnDefinition(signature, body, scope, pos)
 }
 
-def handleReturnStatement(): Statement / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleReturnStatement(): Statement / {Defer, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     if (do isTopLevel())
-        do ParserError("Returns in top-level are not allowed.", (do previous()).position)
+        do ParserError("Returns at top-level are not allowed.", (do previous()).position)
 
     val pos: Position = (do previous()).position
     var returns: List[Expression] = []
@@ -1125,14 +1175,57 @@ def handleReturnStatement(): Statement / {GlobalVariableRegister, FunctionOwners
         case Symbol(Semicolon()) => {
             do advance()
             do returns([Void()], pos)
-            ReturnStmt([ExpressionList([], pos)], pos)
+            returns = [ExpressionList([], pos)]
         }
         case _ => {
             returns = Cons(parseExpression(), returns)
             do checkReturnOrCrash(Symbol(Semicolon()))
             do returns(returns.evalType, pos)
-            ReturnStmt(returns, pos)
         }
+    }
+    
+    do isDeferring() match {
+        case true => {
+            debugPrint("Early exit from function, setting up defers.");
+            var tmps: List[String] = []
+            val defers = do getDeferIDs(ReturnDefer()).reverse
+            val returnID = "jasl$$return_"++random_range(0, native::i64Max).show
+            var generated: List[Statement] = []
+
+            def setUpReturns(rets: List[Expression]): Unit = rets match {
+                case Cons(head, rest) => head match {
+                    case ExpressionList(exprs, _) => setUpReturns(exprs)
+                    case _ => {
+                        val tmpName = "tmp_return_"++random_range(0, native::i64Max).show
+                        val typ = head.evalType match {
+                            case Cons(t, _) => t
+                            case _ => unreachable(__FILE__, __LINE__)
+                        }
+                        val sign = VariableSignature(tmpName, false, false, false, false, do stackIndex(), typ)
+                        do addVar(tmpName, sign)
+                        generated = Cons(VariableDefinition([sign], Some(head), pos), generated)
+                        tmps = Cons(tmpName, tmps)
+                        setUpReturns(rest)
+                    }
+                }
+                case Nil() => ()
+            }
+
+            setUpReturns(returns)
+            generated = Cons(InlineAssembly("sad "++returnID, pos), generated)
+            defers.foreach{defer => {
+                generated = Cons(InlineAssembly("sad "++defer, pos), generated)
+            }}
+
+            generated = Cons(
+                InlineAssembly(returnID++":", pos),
+                Cons(InlineAssembly("mov &edi pop %ui jmp &edi", pos), generated)
+            )
+
+            if (tmps is Nil()) Block(generated.reverse.append([ReturnStmt(returns, pos)]), do createChildContext(), pos)
+            else Block(generated.reverse.append([ReturnStmt(tmps.reverse.map{tmp => Identifier(QualifiedName(None(), tmp), pos)}, pos)]), do createChildContext(), pos)
+        }
+        case false => ReturnStmt(returns, pos)
     }
 }
 
@@ -1268,11 +1361,13 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
     }
 }
 
-def handleBlockStatement(context: ParserContext): Statement / {Defer, LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleBlockStatement(context: ParserContext, isLoop: Bool): Statement / {Defer, LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     var body: List[Statement] = []
     var deferred: List[Statement] = []
     val pos: Position = (do previous()).position
-    val deferID = "defer$$"++random_range(0, native::i64Max).show
+    val id = random_range(0, native::i64Max)
+    val deferID = "jasl$$defer_"++id.show
+    var chained = false
 
     try {
         with contextHandler(context);
@@ -1282,21 +1377,55 @@ def handleBlockStatement(context: ParserContext): Statement / {Defer, LoopHandle
         }
         do advance()
 
-        deferred = Cons(InlineAssembly(deferID++":", pos), deferred)
-        Block(body.reverse.append(deferred), do getCurrentContext(), pos)
-    } with Defer {
-        def defer(stmt) = {
-            deferred = Cons(stmt, deferred)
-            debugPrint("Defer statement at this block, handling it. "++pos.show)
-            resume(())
+        if (deferred is Nil())
+            Block(body.reverse, do getCurrentContext(), pos)
+        else {
+            if (chained) {
+                deferred = Cons(
+                    InlineAssembly("jmp jasl$$defer_end"++id.show, pos),
+                    Cons(InlineAssembly(deferID++":", pos),
+                    Cons(InlineAssembly("mov &edi pop %ui", pos), deferred))
+                )
+                deferred = deferred.append([InlineAssembly("jmp &edi", pos), InlineAssembly("jasl$$defer_end"++id.show++":", pos)])
+            } else ()
+
+            Block(body.reverse.append(deferred), do getCurrentContext(), pos)
         }
-        def getDeferIDs() = {
-            val list = do getDeferIDs()
-            resume(Cons(deferID, list))
+    } with Defer {
+        def defer(stmt) = stmt match {
+            case ExpressionStatement(Call(_, _, pos), _) => {
+                if (chained)
+                    do ParserError("Defer statements after early exits are problematic due to my poor engineering skills. Please rewrite all your defers to be placed before the early exit, if possible.", pos)
+
+                deferred = Cons(stmt, deferred)
+                debugPrint("Defer statement at this block, handling it. "++pos.show)
+                resume(())
+            }
+            case _ => unreachable(__FILE__, __LINE__)
+        }
+        def getDeferIDs(t) = {
+            chained = true
+            t match {
+                case ReturnDefer() => {
+                    val list = do getDeferIDs(t)
+                    if (deferred is Cons(_, _)) resume(Cons(deferID, list))
+                    else resume(list)
+                }
+                case LoopDefer() => deferred match {
+                    case Cons(_, _) => {
+                        if (isLoop) resume([deferID])
+                        else resume(Cons(deferID, do getDeferIDs(t)))
+                    }
+                    case _ => {
+                        if (isLoop) resume([])
+                        else resume(do getDeferIDs(t))
+                    }
+                }
+            }
         }
         def isDeferring() = deferred match {
             case Cons(_, _) => resume(true)
-            case _ => resume(false)
+            case _ => resume(do isDeferring())
         }
     }
 }
@@ -1312,7 +1441,7 @@ def handleConditional(): Statement / {Defer, LoopHandler, GlobalVariableRegister
         do ParserError("If condition must return type '(bool)'. Got '"++condition.evalType.show++"' instead.", pos)
 
     val body: Statement = (do advance()).tokenType match {
-        case Symbol(LBrace()) => handleBlockStatement(scope)
+        case Symbol(LBrace()) => handleBlockStatement(scope, false)
         case _ => do ParserError("Expected a block after if statement.", pos)
     }
 
@@ -1320,7 +1449,7 @@ def handleConditional(): Statement / {Defer, LoopHandler, GlobalVariableRegister
         case Keyword(Else()) => {
             do advance()
             (do advance()).tokenType match {
-                case Symbol(LBrace()) => Some(handleBlockStatement(do createChildContext()))
+                case Symbol(LBrace()) => Some(handleBlockStatement(do createChildContext(), false))
                 case Keyword(If()) => Some(handleConditional())
                 case _ => do ParserError("Expected either an 'if' statement or a block after 'else'.", (do previous()).position)
             }
@@ -1342,7 +1471,7 @@ def handleWhile(): Statement / {Defer, GlobalVariableRegister, FunctionOwnership
     with handleLoop(loopID);
 
     val body: Statement = (do advance()).tokenType match {
-        case Symbol(LBrace()) => handleBlockStatement(do createChildContext())
+        case Symbol(LBrace()) => handleBlockStatement(do createChildContext(), true)
         case _ => do ParserError("Expected a block after if statement.", pos)
     }
 
@@ -1354,34 +1483,81 @@ def handleDefer(): Statement / {Defer, GlobalVariableRegister, FunctionOwnership
 
     val pos = do previous().position
 
-    do ParserError("Defer statements are not supported yet due to my skill issue.", pos)
+    // do ParserError("Defer statements are not supported yet due to my skill issue.", pos)
 
     val stmt: Statement = parseStatement()
+
+    stmt match {
+        case ExpressionStatement(expr, pos) => expr match {
+            case Call(_, _, _) => ()
+            case _ => do ParserError("Statements of this type are not allowed in defer statements.", pos)
+        }
+        case _ => do ParserError("Statements of this type are not allowed in defer statements.", pos)
+    }
+
     do defer(stmt)
-    InlineAssembly("", pos)
+    InlineAssembly("#deferred#", pos)
 }
 
 // TODO: Break from nth loop
-def handleBreak(): Statement / {LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleBreak(): Statement / {Defer, LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     val pos = do previous().position
 
     if (do inLoop()) {
         do checkReturnOrCrash(Symbol(Semicolon()))
-        BreakStmt(do getLoopID(), pos)
+
+        if (do isDeferring()) {
+            debugPrint("Early exit from loop, setting up defers.");
+            val defers = do getDeferIDs(LoopDefer()).reverse
+            val breakID = "jasl$$break_"++random_range(0, native::i64Max).show
+            var generated: List[Statement] = []
+
+            generated = Cons(InlineAssembly("sad "++breakID, pos), generated)
+            defers.foreach{defer => {
+                generated = Cons(InlineAssembly("sad "++defer, pos), generated)
+            }}
+
+            generated = Cons(
+                InlineAssembly(breakID++":", pos),
+                Cons(InlineAssembly("mov &edi pop %ui jmp &edi", pos), generated)
+            )
+
+            Block(generated.reverse.append([BreakStmt(do getLoopID(), pos)]), do createChildContext(), pos)
+        }
+        else BreakStmt(do getLoopID(), pos)
     } else {
         do ParserError("'break' statements are not allowed when not inside a loop body.", pos)
     }
 }
 
 // TODO: Continue from nth loop
-def handleContinue(): Statement / {LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+def handleContinue(): Statement / {Defer, LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     val pos = do previous().position
 
     if (do inLoop()) {
         do checkReturnOrCrash(Symbol(Semicolon()))
-        ContinueStmt(do getLoopID(), pos)
+
+        if (do isDeferring()) {
+            debugPrint("Early exit from loop, setting up defers.");
+            val defers = do getDeferIDs(LoopDefer()).reverse
+            val continueID = "jasl$$continue_"++random_range(0, native::i64Max).show
+            var generated: List[Statement] = []
+
+            generated = Cons(InlineAssembly("sad "++continueID, pos), generated)
+            defers.foreach{defer => {
+                generated = Cons(InlineAssembly("sad "++defer, pos), generated)
+            }}
+
+            generated = Cons(
+                InlineAssembly(continueID++":", pos),
+                Cons(InlineAssembly("mov &edi pop %ui jmp &edi", pos), generated)
+            )
+
+            Block(generated.reverse.append([ContinueStmt(do getLoopID(), pos)]), do createChildContext(), pos)
+        }
+        else ContinueStmt(do getLoopID(), pos)
     } else {
-        do ParserError("'break' statements are not allowed when not inside a loop body.", pos)
+        do ParserError("'continue' statements are not allowed when not inside a loop body.", pos)
     }
 }
 
@@ -1434,7 +1610,7 @@ def parseStatement(): Statement / {Defer, LoopHandler, GlobalVariableRegister, F
     case Assembly() => InlineAssembly((do previous()).text, (do previous()).position)
     case Keyword(Return()) => handleReturnStatement()
     case Keyword(Let()) => handleVariableDef()
-    case Symbol(LBrace()) => handleBlockStatement(do createChildContext())
+    case Symbol(LBrace()) => handleBlockStatement(do createChildContext(), false)
     case Keyword(If()) => handleConditional()
     case Keyword(While()) => handleWhile()
     case IdentifierT() =>
@@ -1637,7 +1813,6 @@ def parsePostfix(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
 
             def _inner(expr: Expression, pos: Position, member: String): Expression = expr match {
                 case Dot(lhs, name, _) => {
-                    debugPrint(member)
                     if (do hasFunction(QualifiedName(None(), member)) || do peek().tokenType == Symbol(DoubleColon()))
                         _fnCall(expr, member)
                     else
@@ -1742,21 +1917,15 @@ def parseUnary(): Expression / {GlobalVariableRegister, FunctionOwnership, Retur
     token.tokenType match {
         case Symbol(NotSym()) => {
             do advance()
-            val expr = parseUnary()
-            if (expr.evalType is Cons(Custom(_), _)) {
-                do ParserError("Logic operations on custom types is not supported.", do previous().position)
-                <>
-            }
-            Unary(Not(expr), token.position)
+            val expr = Unary(Not(parseUnary()), token.position)
+            expr.evalType
+            expr
         }
         case Symbol(Minus()) => {
             do advance()
-            val expr = parseUnary()
-            if (expr.evalType is Cons(Custom(_), _)) {
-                do ParserError("Logic operations on custom types is not supported.", do previous().position)
-                <>
-            }
-            Unary(Negation(expr), token.position)
+            val expr = Unary(Negation(parseUnary()), token.position)
+            expr.evalType
+            expr
         }
         case _ => parsePostfix()
     }
@@ -1765,20 +1934,16 @@ def parseUnary(): Expression / {GlobalVariableRegister, FunctionOwnership, Retur
 def parseFactor(): Expression / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     def recurse(expr: Expression): Expression = (do peek()).tokenType match {
         case Symbol(Divide()) => {
-            if (expr.evalType is Cons(Custom(_), _)) {
-                do ParserError("Arithmetic operations on custom types is not supported.", do previous().position)
-                <>
-            }
             do advance()
-            recurse(Binary(Division(expr, parseUnary()), (do previous()).position))
+            val expr = Binary(Division(expr, parseUnary()), (do previous()).position)
+            expr.evalType
+            recurse(expr)
         }
         case Symbol(Asterix()) => {
-            if (expr.evalType is Cons(Custom(_), _)) {
-                do ParserError("Arithmetic operations on custom types is not supported.", do previous().position)
-                <>
-            }
             do advance()
-            recurse(Binary(Multiplication(expr, parseUnary()), (do previous()).position))
+            val expr = Binary(Multiplication(expr, parseUnary()), (do previous()).position)
+            expr.evalType
+            recurse(expr)
         }
         case _ => expr
     }
@@ -1789,20 +1954,16 @@ def parseFactor(): Expression / {GlobalVariableRegister, FunctionOwnership, Retu
 def parseTerm(): Expression / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     def recurse(expr: Expression): Expression = (do peek()).tokenType match {
         case Symbol(Minus()) => {
-            if (expr.evalType is Cons(Custom(_), _)) {
-                do ParserError("Arithmetic operations on custom types is not supported.", do previous().position)
-                <>
-            }
             do advance()
-            recurse(Binary(Subtraction(expr, parseFactor()), (do previous()).position))
+            val expr = Binary(Subtraction(expr, parseFactor()), (do previous()).position)
+            expr.evalType
+            recurse(expr)
         }
         case Symbol(Plus()) => {
-            if (expr.evalType is Cons(Custom(_), _)) {
-                do ParserError("Arithmetic operations on custom types is not supported.", do previous().position)
-                <>
-            }
             do advance()
-            recurse(Binary(Addition(expr, parseFactor()), (do previous()).position))
+            val expr = Binary(Addition(expr, parseFactor()), (do previous()).position)
+            expr.evalType
+            recurse(expr)
         }
         case _ => expr
     }
@@ -1813,36 +1974,28 @@ def parseTerm(): Expression / {GlobalVariableRegister, FunctionOwnership, Return
 def parseComparison(): Expression / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     def recurse(expr: Expression): Expression = (do peek()).tokenType match {
         case Symbol(GreatSym()) => {
-            if (expr.evalType is Cons(Custom(_), _)) {
-                do ParserError("Comparison between custom types is not supported.", do previous().position)
-                <>
-            }
             do advance()
-            recurse(Binary(Great(expr, parseTerm()), (do previous()).position))
+            val expr = Binary(Great(expr, parseTerm()), (do previous()).position)
+            expr.evalType
+            recurse(expr)
         }
         case Symbol(GreatEq()) => {
-            if (expr.evalType is Cons(Custom(_), _)) {
-                do ParserError("Comparison between custom types is not supported.", do previous().position)
-                <>
-            }
             do advance()
-            recurse(Binary(GreaterEqual(expr, parseTerm()), (do previous()).position))
+            val expr = Binary(GreaterEqual(expr, parseTerm()), (do previous()).position)
+            expr.evalType
+            recurse(expr)
         }
         case Symbol(LessSym()) => {
-            if (expr.evalType is Cons(Custom(_), _)) {
-                do ParserError("Comparison between custom types is not supported.", do previous().position)
-                <>
-            }
             do advance()
-            recurse(Binary(Lesser(expr, parseTerm()), (do previous()).position))
+            val expr = Binary(Lesser(expr, parseTerm()), (do previous()).position)
+            expr.evalType
+            recurse(expr)
         }
         case Symbol(LessEq()) => {
-            if (expr.evalType is Cons(Custom(_), _)) {
-                do ParserError("Comparison between custom types is not supported.", do previous().position)
-                <>
-            }
             do advance()
-            recurse(Binary(LesserEqual(expr, parseTerm()), (do previous()).position))
+            val expr = Binary(LesserEqual(expr, parseTerm()), (do previous()).position)
+            expr.evalType
+            recurse(expr)
         }
         case _ => expr
     }
@@ -1853,20 +2006,16 @@ def parseComparison(): Expression / {GlobalVariableRegister, FunctionOwnership, 
 def parseEquality(): Expression / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     def recurse(expr: Expression): Expression =  (do peek()).tokenType match {
         case Symbol(Equals()) => {
-            if (expr.evalType is Cons(Custom(_), _)) {
-                do ParserError("Comparison between custom types is not supported.", do previous().position)
-                <>
-            }
             do advance()
-            recurse(Binary(Equality(expr, parseComparison()), (do previous()).position))
+            val expr = Binary(Equality(expr, parseComparison()), (do previous()).position)
+            expr.evalType
+            recurse(expr)
         }
         case Symbol(NotEq()) => {
-            if (expr.evalType is Cons(Custom(_), _)) {
-                do ParserError("Comparison between custom types is not supported.", do previous().position)
-                <>
-            }
             do advance()
-            recurse(Binary(Inequality(expr, parseComparison()), (do previous()).position))
+            val expr = Binary(Inequality(expr, parseComparison()), (do previous()).position)
+            expr.evalType
+            recurse(expr)
         }
         case _ => expr
     }
@@ -1878,7 +2027,9 @@ def parseAndExpression(): Expression / {GlobalVariableRegister, FunctionOwnershi
     def recurse(expr: Expression): Expression =  (do peek()).tokenType match {
         case Symbol(AndSym()) => {
             do advance()
-            recurse(Binary(And(expr, parseEquality()), (do previous()).position))
+            val expr = Binary(And(expr, parseEquality()), (do previous()).position)
+            expr.evalType
+            recurse(expr)
         }
         case _ => expr
     }
@@ -1890,7 +2041,9 @@ def parseOrExpression(): Expression / {GlobalVariableRegister, FunctionOwnership
     def recurse(expr: Expression): Expression =  (do peek()).tokenType match {
         case Symbol(OrSym()) => {
             do advance()
-            recurse(Binary(Or(expr, parseAndExpression()), (do previous()).position))
+            val expr = Binary(Or(expr, parseAndExpression()), (do previous()).position)
+            expr.evalType
+            recurse(expr)
         }
         case _ => expr
     }

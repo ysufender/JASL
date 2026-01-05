@@ -13,11 +13,6 @@ pub fn String::size(this: String) -> u32 {
     return this.data.ptrcast(u32).*;
 }
 
-pub fn String::data(this: String) -> i8* {
-    if this.data == nullptr { return nullptr; }
-    return this.data.offset(4).ptrcast(i8);
-}
-
 pub fn String::clone(this: String) -> String {
     if this.data == nullptr { return empty(); }
     return String(this.data);
@@ -30,7 +25,7 @@ pub fn String::get(this: String, index: u32) -> (bool, u8) {
         return {false, 0u8};
     }
 
-    return {true, this.data.offset(index).ptrcast(u8).*};
+    return {true, this.data.offset(index+4u32).ptrcast(u8).*};
 }
 
 pub fn String::equals(this: String, other: String) -> bool {
@@ -41,9 +36,11 @@ pub fn String::equals(this: String, other: String) -> bool {
 
     let mut index := 0u32;
     while true {
-        if this.get(index) != other.get(index) {
-            return false;
-        }
+        let (cnd1:, ch1:) = this.get(index);
+        let (cnd2:, ch2:) = other.get(index);
+
+        if !(cnd1 && cnd2) { return false; }
+        if ch1 != ch2 { return false; }
 
         index = index + 1u32;
         if index == thisSize {
@@ -51,11 +48,11 @@ pub fn String::equals(this: String, other: String) -> bool {
         }
     }
 
-    return false;
+    return true;
 }
 
 pub fn String::isEmpty(this: String) -> bool {
-    if this.data == nullptr { return false; }
+    if this.data == nullptr { return true; }
     return this.size() == 0u32;
 }
 
