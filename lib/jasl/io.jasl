@@ -6,3 +6,12 @@ pub fn println(str: string::String) -> void {
     if str.string::isEmpty() { return; }
     asm { sys "CSR_Println" }
 }
+
+pub fn print(str: string::String) -> void {
+    if str.string::isEmpty() { return; }
+    asm { sys "CSR_Print" }
+}
+
+pub fn printU32(u: u32) -> void {
+    asm { sys "CSR_PrintU32" }
+}

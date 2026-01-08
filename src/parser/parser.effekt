@@ -532,7 +532,7 @@ def tokenHandler[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {
         def checkReturnOrCrash(token) = resume {
             try {
                 if (token.infixEq(tokens.head.tokenType)) { next() }
-                else do ParserError("Expected '"++token.show++"', got '"++tokens.head.tokenType.show++"'.", previousToken.position)
+                else do ParserError("Expected '"++token.show++"', got '"++tokens.head.tokenType.show++"'.", tokens.head.position)
             } with Exception[MissingValue] {
                 def raise(_, _) = do ParserError("Expected '"++token.show++"', got an unexpected EOF.", previousToken.position)
             }
@@ -705,7 +705,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
         VariableSignature(identifier.text, public, mutable, false, glob, index, typename)
     }
     def handleLet(public: Bool): Unit = {
-        // do ParserError("Top-level global variables are not (yet) supported.", (do previous()).position)
+        do ParserError("Top-level global variables are not (yet) supported.", (do previous()).position)
         val pos = do previous().position
 
         // TODO: Type inference at top-level, requires parsing the expressions right here but anyway.
@@ -934,7 +934,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
             case Keyword(Layout()) => handleLayout(false, false)
             case EOF() => ()
             case Keyword(Defer()) => do ParserError("Defer statements at top-level are not allowed.", token.position)
-            case _ => do ParserError("Unexpected token at top-level.", token.position)
+            case _ => do ParserError("Unexpected token '"++token.text++"' at top-level.", token.position)
         }
     }
 
@@ -1487,7 +1487,7 @@ def handleDefer(): Statement / {Defer, GlobalVariableRegister, FunctionOwnership
 
     stmt match {
         case ExpressionStatement(Call(_, _, _), pos) => ()
-        case _ => do ParserError("Statements of this type are not allowed in defer statements.", pos)
+        case _ => do ParserError("Only function calls are allowed in defer statements.", pos)
     }
 
     do defer(stmt)

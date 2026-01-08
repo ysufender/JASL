@@ -118,7 +118,7 @@ def handleTokens[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {
         def checkReturnOrCrash(token) = resume {
             try {
                 if (token.infixEq(tokens.head.tokenType)) { next() }
-                else do ILGenError("Expected '"++token.show++"', got '"++tokens.head.tokenType.show++"'.", previousToken.position)
+                else do ILGenError("Expected '"++token.show++"', got '"++tokens.head.tokenType.show++"'.", tokens.head.position)
             } with Exception[MissingValue] {
                 def raise(_, _) = do ILGenError("Expected '"++token.show++"', got an unexpected EOF.", previousToken.position)
             }
@@ -421,13 +421,13 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                             do spit("stc %ui 0")
                             do spit("cnj %ui %equ jasl$$internal$$nullptrjump")
                         }
+                        val size = right.evalType.map{t => t.typeSize}.sum.show.show
+                        right.expressionGen
+                        do spit("dcr %ui &sp "++size)
                         do spit("mov &ebx")
                         do spit("mov &sp &eax")
-                        right.expressionGen
-                        val size = right.evalType.map{t => t.typeSize}.sum.show
                         do spit("mov "++size++" &ecx")
                         do spit("mcp %s %s")
-                        do spit("dcr %ui &sp "++size)
                     } else do ParserError("Missmatching types in 'set' operation, given value doesn't match the pointer type. "++left.evalType.map{t => t.pointingType}.show++" vs "++right.evalType.show, pos)
                 }
                 case _ => unreachable(__FILE__, __LINE__)
@@ -706,7 +706,9 @@ def statementGen(stmt: Statement): Unit / {ILGenError, ParserContextRequest, Int
         do spit("ret")
     }
     case InlineAssembly(asm, _) => {
+        do spit("#begin inline asm#")
         do spit(asm)
+        do spit("#end inline asm#")
     }
     case VariableDefinition(signature, initializer, pos) => {
         with parser_report;
@@ -720,8 +722,15 @@ def statementGen(stmt: Statement): Unit / {ILGenError, ParserContextRequest, Int
     case Block(inside, scope, _) => {
         do beginBlock()
             with parser_report;
-            with contextHandler(scope);
-            inside.foreach{stmt => stmt.statementGen}
+            contextHandler(scope) {
+                inside.foreach{stmt => stmt.statementGen}
+            }
+            def findIndex(scope: ParserContext) = scope.parent match {
+                case Some(p) => p.stackIndex
+                case None() => scope.stackIndex
+            }
+            do spit("mov &bp &sp")
+            do spit("inc %ui &sp "++findIndex(scope).show)
         do endBlock()
     }
     case Conditional(condition, body, fallback, pos) => {

@@ -11,6 +11,7 @@ pub fn free(pointer: void*, size: u32, alloc: allocator::Allocator) -> bool {
         return alloc.allocator::deallocate(pointer, size);
     }
 
+
     asm {
         rdl %ui 4
         mov &ecx

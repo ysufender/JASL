@@ -28,6 +28,10 @@ pub fn String::get(this: String, index: u32) -> (bool, u8) {
     return {true, this.data.offset(index+4u32).ptrcast(u8).*};
 }
 
+pub fn String::unsafe_get(this: String, index: u32) -> u8 {
+    return this.data.offset(index+4u32).ptrcast(u8).*;
+}
+
 pub fn String::equals(this: String, other: String) -> bool {
     let thisSize := this.size();
     if thisSize != other.size() {
