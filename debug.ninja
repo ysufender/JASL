@@ -9,7 +9,7 @@ basebuild = build
 builddir = $basebuild/debug
 
 CC = gcc
-CL = g++
+LD = g++
 CFLAGS = -O0 -ggdb
 LFLAGS = -O0 -flto -no-pie
 LLFLAGS = --debugger-tune=gdb -O0 -opaque-pointers
@@ -38,6 +38,12 @@ rule cc
     depfile = $out.d
     command = $CC $CFLAGS $in -c -o $out
 
+rule cxx
+    pool = cpool
+    deps = gcc
+    depfile = $out.d
+    command = $LD $CFLAGS $in -c -o $out
+
 rule ccc
     pool = cpool
     deps = gcc
@@ -46,7 +52,7 @@ rule ccc
 
 rule link
     pool = linkpool
-    command = $CL $in $LFLAGS -o $out -luv -lpthread -ldl
+    command = $LD $in $LFLAGS -o $out -luv -lpthread -ldl
 
 rule lc
     pool = cpool
@@ -78,7 +84,8 @@ build $builddir/main.ll: efc $builddir/main.effekt | $builddir/lexer/lexer.effek
 build $builddir/jasl.bs: las $builddir/main.ll
 build $builddir/jasl.o: lc $builddir/jasl.bs
 
-build $builddir/jasm_wrapper.o: cc $libdir/jasm/jasm.c | $libdir/jasm/jasm.h
+build $builddir/jasm_wrapper.o: cxx $libdir/jasm/jasm.cpp
+    CFLAGS = $CFLAGS -I lib/jasm/include -I lib/effekt -std=c++20
 #build $builddir/csr_wrapper.o: cc $libdir/csr/csr.c | $libdir/csr/csr.h
 
 build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a
