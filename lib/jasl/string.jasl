@@ -8,6 +8,9 @@ pub wrapper layout String {
     data: void*;
 }
 
+//
+// Public API
+//
 pub fn String::size(this: String) -> u32 {
     if this.data == nullptr { return 0u32; }
     return this.data.ptrcast(u32).*;

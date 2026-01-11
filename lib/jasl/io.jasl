@@ -15,3 +15,5 @@ pub fn print(str: string::String) -> void {
 pub fn printU32(u: u32) -> void {
     asm { sys "CSR_PrintU32" }
 }
+
+pub let greeting: string::String = "Hello World";

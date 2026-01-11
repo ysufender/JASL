@@ -705,7 +705,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
         VariableSignature(identifier.text, public, mutable, false, glob, index, typename)
     }
     def handleLet(public: Bool): Unit = {
-        do ParserError("Top-level global variables are not (yet) supported.", (do previous()).position)
+        // do ParserError("Top-level global variables are not (yet) supported.", (do previous()).position)
         val pos = do previous().position
 
         // TODO: Type inference at top-level, requires parsing the expressions right here but anyway.

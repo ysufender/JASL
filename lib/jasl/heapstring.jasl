@@ -9,6 +9,9 @@ pub layout HeapString {
     pub allocator: allocator::Allocator;
 }
 
+//
+// Public API
+//
 pub fn HeapString::new(str: string::String, alloc: allocator::Allocator) -> HeapString {
     let strSize := str.string::size();
     let totalSize := strSize+36u32;
@@ -52,26 +55,4 @@ pub fn HeapString::view(this: HeapString) -> string::String {
 
 pub fn HeapString::clone(this: HeapString, alloc: allocator::Allocator) -> HeapString {
     return new(this.view(), alloc);
-}
-
-pub fn HeapString::append(this: HeapString*, other: string::String) -> HeapString* {
-    let currentSize := this.data.*.ptrcast(u32).*;
-    let otherSize := other.string::size();
-    let alloc := this.allocator.*;
-    let mut totalSize := this.totalSize.*;
-
-    if currentSize + otherSize > totalSize - 4u32 {
-        // TODO
-        return this;
-    }
-
-    let src := other.&.ptrcast(u32**).*.ptrcast(void).offset(4u32);
-    let dest := this.data.*.offset(currentSize+4u32);
-
-    if !memory::memcpy(src, dest, otherSize) {
-        return this;
-    }
-
-    this.data.*.ptrcast(u32).set(currentSize+otherSize);
-    return this;
 }

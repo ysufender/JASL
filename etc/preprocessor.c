@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define VERSION "0.0.1"
+#define VERSION "0.1.0"
 
 typedef const char* Str;
 

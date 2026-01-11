@@ -1,0 +1,19 @@
+module iterator
+
+// Just like the Allocator, Iterator is an
+// interface.
+pub wrapper layout Iterator {
+    // Might be the current element, might be the collection itself,
+    // might be something completely else. As long as the interface
+    // works properly.
+    context: void*;
+
+    // Returns true if the collection has been fully iterated
+    done: fn (void*) -> bool;
+
+    // Returns a pointer to the next element without advancing
+    peek: fn (void*) -> void*;
+
+    // Returns a pointer to the next element and advances the iterator
+    next: fn (void*) -> void*;
+}
