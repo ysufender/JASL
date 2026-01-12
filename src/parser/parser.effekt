@@ -45,7 +45,8 @@ interface FunctionOwnership {
 
 interface GlobalVariableRegister {
     def registerGlobalVar(variable: Statement): Statement / CompilerContextRequest
-    def getGlobalVarASTs(): List[AST]
+    // def getGlobalVarASTs(): List[AST]
+    def getGlobalVarASTs(): List[(String, String, Statement)]
 }
 
 interface LoopHandler {
@@ -129,7 +130,7 @@ def typeString(t: Type): String / {TokenRequest, ParserError, ParserContextReque
 
 def show(v: VariableSignature): String / {TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     var str: String = "["++v.varType.typeSize().show()++"]["++v.stackIndex.show()++"] "
-    if (v.global) str = "global "
+    if (v.global) str = str++" global "
     if (v.comptime) str = str++"comptime "
     if (v.public) str = str++"pub "
     // str = str++"let "
@@ -196,21 +197,24 @@ def noLoop[T]() { prog: () => T / LoopHandler } = {
 }
 
 def handleGlobals[T]() { prog: () => T / GlobalVariableRegister }: T / {InternalError, CompilerContextRequest} = {
-    var globalVars: Map[String, List[Statement]] = map::empty(box strOrder)
+    // var globalVars: Map[String, List[Statement]] = map::empty(box strOrder)
+    var globalVars: List[(String, String, Statement)] = []
     try { prog() }
     with GlobalVariableRegister {
         def registerGlobalVar(variable) = resume {
-            val old = globalVars.get(do getWorkingModule()) match {
+            /*val old = globalVars.get(do getWorkingModule()) match {
                 case Some(stmts) => stmts
                 case None() => Nil()
             }
-            globalVars = globalVars.put(do getWorkingModule(), Cons(variable, old))
-            InlineAssembly("", Position(0, 0, 0))
+            globalVars = globalVars.put(do getWorkingModule(), Cons(variable, old))*/
+            globalVars = Cons((do getWorkingModule(), do getWorkingFile(), variable), globalVars)
+            InlineAssembly("#global var#", Position(0, 0, 0))
         }
         def getGlobalVarASTs() = {
-            var asts: List[AST] = []
-            globalVars.foreach { (mod, stmts) => { asts = Cons(AST("???", mod, stmts), asts) }}
-            resume(asts)
+            // var asts: List[AST] = []
+            // globalVars.foreach { (mod, stmts) => { asts = Cons(AST("???", mod, stmts), asts) }}
+            // resume(asts)
+            resume(globalVars.reverse)
         }
     }
 }
@@ -705,7 +709,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
         VariableSignature(identifier.text, public, mutable, false, glob, index, typename)
     }
     def handleLet(public: Bool): Unit = {
-        do ParserError("Top-level global variables are not (yet) supported.", (do previous()).position)
+        // do ParserError("Top-level global variables are not (yet) supported.", (do previous()).position)
         val pos = do previous().position
 
         // TODO: Type inference at top-level, requires parsing the expressions right here but anyway.
@@ -718,6 +722,8 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
 
                     if (do hasVar(QualifiedName(None(), v.name), true))
                         do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                    else if (v.mutable)
+                        do ParserError("Mutable global variables are not (yet) supported.", pos)
                     
                     if ((do peek()).tokenType != Symbol(RParen()))
                         val _ = do checkReturnOrCrash(Symbol(Comma()))
@@ -733,6 +739,8 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
                 val v: VariableSignature = handleVariable(true, public, do getGlobalStackIndex()).enforceStaticType(pos)
                 if (do hasVar(QualifiedName(None(), v.name), true))
                     do ParserError("Multiple definitions of variable '"++v.name++"' in this scope.", pos)
+                else if (v.mutable)
+                    do ParserError("Mutable global variables are not (yet) supported.", pos)
                 do increaseGlobalStackIndex(v.varType.typeSize)
                 do addVariable(v)
             }
@@ -1246,7 +1254,7 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
             }
         }
 
-        VariableSignature(identifier.text, false, mutable, false, false, stackIndex, typename)
+        VariableSignature(identifier.text, false, mutable, false, do hasVar(QualifiedName(None(), identifier.text), true), stackIndex, typename)
     }
 
     def inferType(vars: List[VariableSignature], expressions: List[Type]): List[VariableSignature] = {
@@ -1302,13 +1310,24 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
             do ParserError("Can't infer the type of an uninitialized variable.", pos)
         else {
             vars = vars.map{v => 
-                val vt = VariableSignature(v.name, v.public, v.mutable, v.comptime, v.global, stackIndex, v.varType)
-                stackIndex = stackIndex + vt.varType.typeSize
-                vt
+                if (do isTopLevel()) {
+                    val vt = do getVar(QualifiedName(None(), v.name))
+                    vt
+                } else {
+                    val vt = VariableSignature(v.name, v.public, v.mutable, v.comptime, v.global, stackIndex, v.varType)
+                    stackIndex = stackIndex + vt.varType.typeSize
+                    vt
+                }
             }
             val vd = VariableDefinition(vars, None(), pos)
-            if (do isTopLevel() && vars.all{v => v.global})
-                do registerGlobalVar(vd)
+            if (do isTopLevel()) {
+                if (vars.all{v => v.global}) {
+                    do increaseGlobalStackIndex(vars.map{v => v.varType.typeSize}.sum)
+                    do registerGlobalVar(vd)
+                }
+                else
+                    do ParserError("Non-global top-level variable definition, how is that even possible?", pos)
+            }
             else { 
                 vars.foreach{v => {
                     if (do hasVar(QualifiedName(None(), v.name), false)) {
@@ -1330,14 +1349,25 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
         if (expr.evalType.compare(vars.map{v => v.varType}){(a, b) => a == b})
         {
             vars = vars.inferType(expr.evalType).map{v => 
-                val vt = VariableSignature(v.name, v.public, v.mutable, v.comptime, v.global, stackIndex, v.varType)
-                stackIndex = stackIndex + vt.varType.typeSize
-                vt
+                if (do isTopLevel()) {
+                    val vt = do getVar(QualifiedName(None(), v.name))
+                    vt
+                } else {
+                    val vt = VariableSignature(v.name, v.public, v.mutable, v.comptime, v.global, stackIndex, v.varType)
+                    stackIndex = stackIndex + vt.varType.typeSize
+                    vt
+                }
             }
 
             val vd = VariableDefinition(vars, Some(expr), pos)
-            if (do isTopLevel() && vars.all{v => v.global})
-                do registerGlobalVar(vd)
+            if (do isTopLevel()) {
+                if (vars.all{v => v.global}) {
+                    do increaseGlobalStackIndex(vars.map{v => v.varType.typeSize}.sum)
+                    do registerGlobalVar(vd)
+                }
+                else
+                    do ParserError("Non-global top-level variable definition, how is that even possible?", pos)
+            }
             else { 
                 vars.foreach{v => {
                     if (do hasVar(QualifiedName(None(), v.name), false)) {
@@ -1558,7 +1588,8 @@ def checkReturns(conditional: Statement): Unit / {FunctionOwnership, ReturnTypeR
     case _ => ()
 }
 
-def parseStatement(): Statement / {Defer, LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = (do advance()).tokenType match {
+def parseStatement(): Statement / {Defer, LoopHandler, GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
+    (do advance()).tokenType match {
     // skip these
     case Keyword(Preprocessor(_)) => {
         do advance()
@@ -1621,6 +1652,7 @@ def parseStatement(): Statement / {Defer, LoopHandler, GlobalVariableRegister, F
     //case Keyword(Let()) => handleVariableDefinition()
     // case _ => do ParserError("Unexpected token '"++(do previous()).text++"', expected statement.", (do previous()).position)
 }
+}
 
 def parsePrimary(): Expression / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
     try {
@@ -1637,8 +1669,8 @@ def parsePrimary(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
                     )
                     val value = Literal(Literal::String(token.text), token.position)
                     val stmt = VariableDefinition([sign], Some(value), token.position)
-                    do addVariable(sign)
                     do registerGlobalVar(stmt)
+                    do addVariable(sign)
                     do increaseGlobalStackIndex(token.text.length+4)
                     Identifier(QualifiedName(Some(do getWorkingModule()), sign.name), token.position)
                     // Literal(Literal::String(token.text), token.position)
@@ -1829,7 +1861,7 @@ def parsePostfix(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
                         do ParserError("Missmatching types on type initialization. Expected '"++signature.fields.map{f => f.varType}.show++"' got '"++initializer.evalType.show++"'.", pos)
                     recurse(Initialization(Custom(name), initializer, pos))
                 }
-                case None() => unreachable(__FILE__, __LINE__)
+                case None() => do ParserError("Couldn't resolve type '"++name.show++"' in this context.", pos)
             }
             case Dot(lhs, function, dpos) => do getFunctionSignature(function) match {
                 case Some(signature) => {

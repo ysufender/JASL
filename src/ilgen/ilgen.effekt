@@ -805,10 +805,22 @@ def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister
             do spit("jasl$$internal$$globals:")
             do beginBlock()
                 do spit("rep %s %b 32 0")
-                do getGlobalVarASTs().foreach{ast => {
+                /*do getGlobalVarASTs().reverse.foreach{ast => {
                     do setWorkingFile(ast.filename)
                     do setWorkingModule(ast.moduleName)
-                    _gen(ast.body.reverse)
+                    _gen(ast.body)
+                }}*/
+                do getGlobalVarASTs()
+                    .sortBy{(l, r) => (l, r) match {
+                        case ((_, _, VariableDefinition(Cons(sl, _), _, _)), (_, _, VariableDefinition(Cons(sr, _), _, _))) => {
+                            sl.stackIndex <= sr.stackIndex
+                        }
+                        case _ => unreachable(__FILE__, __LINE__)
+                    }}
+                    .foreach{case (mod, file, stmt) => {
+                    do setWorkingFile(file)
+                    do setWorkingModule(mod)
+                    statementGen(stmt)
                 }}
             do endBlock()
             do spit("")
