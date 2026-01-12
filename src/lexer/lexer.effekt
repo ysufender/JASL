@@ -10,7 +10,7 @@ def show(t: PreprocessorKeywordType): String = t match {
 }
 
 def show(t: KeywordType): String = t match {
-    case Preprocessor(pWord) => "#"++show(pWord)
+    case Preprocessor(pWord) => "#" ++ show(pWord)
     case Wrapper() => "wrapper"
     case Layout() => "layout"
     case Fn() => "fn"
@@ -65,26 +65,26 @@ def show(t: DataType): String = t match {
     case FloatT() => "float"
     case UByteT() => "u8"
     case ByteT() => "i8"
-    case PointerT(ptrType) => show(ptrType)++"*"
+    case PointerT(ptrType) => show(ptrType) ++ "*"
     case VoidT() => "void"
-    case CustomT(name) => "custom type "++name
+    case CustomT(name) => "custom type " ++ name
 }
 
 def show(t: TokenType): String = t match {
-    case LiteralT(valueType) => show(valueType)++" literal"
+    case LiteralT(valueType) => show(valueType) ++ " literal"
     case IdentifierT() => "identifier"
-    case Keyword(keywordType) => "keyword "++show(keywordType)
-    case Symbol(symbolType) => show(symbolType)++" symbol"
-    case TypeNameT(typeType) => "typename "++show(typeType)
+    case Keyword(keywordType) => "keyword " ++ show(keywordType)
+    case Symbol(symbolType) => show(symbolType) ++ " symbol"
+    case TypeNameT(typeType) => "typename " ++ show(typeType)
     case EOF() => "EOF"
     case Assembly() => "assembly block"
 }
 
 def show(p: Position): String =
-    show(p.line)++":"++show(p.col)
+    show(p.line) ++ ":" ++ show(p.col)
 
 def show(t: Token): String =
-    t.tokenType.show()++" ["++t.text++"]"
+    t.tokenType.show() ++ " [" ++ t.text ++ "]"
 
 def infixEq(l: PreprocessorKeywordType, r: PreprocessorKeywordType): Bool = {
     (l, r) match {
@@ -206,14 +206,14 @@ def lexer_report[T]() { prog: () => T / {LexerError, InternalError} }: T / {Comp
                                 def raise(_, _) = "<unknown>"
                             }
 
-        val spaces: String = " ".repeat(pos.col+7)
+        val spaces: String = " ".repeat(pos.col + 7)
         val helpLine: String = getHelpLine()
     
-        println("[LEXER ERROR] "++do getWorkingFile()++" at "++show(pos)++": "++msg)
-        println("\n        "++errLine)
-        println(spaces++"^")
-        println(spaces++helpLine)
-        //println("        "++msg)
+        println("[LEXER ERROR] " ++ do getWorkingFile() ++ " at " ++ show(pos) ++ ": " ++ msg)
+        println("\n        " ++ errLine)
+        println(spaces ++ "^")
+        println(spaces ++ helpLine)
+        //println("        " ++ msg)
         exit(1)
         <>
     }}
@@ -258,7 +258,7 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
     var index: Int = 0;
     var currentToken: Token = Token(EOF(), "", Position(0, 0, 0))
 
-    def pos(textSize: Int): Position = Position(line, col-textSize, index)
+    def pos(textSize: Int): Position = Position(line, col - textSize, index)
     def is_eof(): Bool = index >= in.length
     def advance_line(): Unit = { line = line + 1; col = 1 }
     def change_index(amount: Int): Unit = { index = index + amount; col = col + amount; }
@@ -327,7 +327,7 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
                     do add_token(Token(Symbol(LParen()), "(", pos(1)))
                     do add_token(Token(Symbol(RParen()), ")", pos(1)))
                 }
-                case _ => do LexerError("Unexpected character '"++c.show++"'.", pos(1))
+                case _ => do LexerError("Unexpected character '" ++ c.show ++ "'.", pos(1))
             }
             val curPos: Position = Position(line, col, index)
             if (is_eof()) { handleSingle(first) }
@@ -386,7 +386,7 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
 
                 var suffix = ""
                 while (not(is_eof()) && ((countWhiteSpace{peek}).isAlphabetic() || countWhiteSpace{peek}.isDigit)) {
-                    suffix = suffix++(countWhiteSpace { advance }).toString()
+                    suffix = suffix ++ (countWhiteSpace { advance }).toString()
                 }
 
                 suffix match {
@@ -436,7 +436,7 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
                     do add_token(Token(TypeNameT(tt), text, pos(text.length)))
                 } else if (countWhiteSpace{peek} == '*') {
                     while (not(is_eof()) && skipWhiteSpace{peek} == '*') {
-                        text = text++"*"
+                        text = text ++ "*"
                         skipWhiteSpace { advance }
                         tt = PointerT(tt)
                     }
@@ -523,7 +523,7 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
                 currentToken = handleIdentifier(ch)
                 currentToken
             } else {
-                do LexerError("Unexpected character '"++ch.toString()++"'", pos(1))
+                do LexerError("Unexpected character '" ++ ch.toString() ++ "'", pos(1))
                 <>
             }
         }

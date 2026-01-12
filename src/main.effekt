@@ -32,7 +32,7 @@ def printHelp(): Unit = {
     println("\t\t--output <file_name>    : set output file name")
     println("\t\t--working <file_name>   : set working directory\n")
     println("\t\t--check-nullptr         : enable nullptr check on every pointer operation\n")
-    println("\t\t--include               : include the given directory as a search path\n")
+    println("\t\t--include <dir_path>    : include the given directory as a search path\n")
     // println("\t\t--run                   : run the given file after compiling")
 }
 
@@ -73,7 +73,7 @@ def parseCommandLine(): String / CompilerSettingsRegister = {
                 if (someOther.startsWith("--")) {
                     args = Cons(someOther, args)
                 } else {
-                    println("Expected a flag or boolean here, got '"++someOther++"' instead.")
+                    println("Expected a flag or boolean here, got '" ++ someOther ++ "' instead.")
                     exit(1)
                 }
         }
@@ -86,7 +86,7 @@ def parseCommandLine(): String / CompilerSettingsRegister = {
             if (file.length == 0)
                 file = someOther
             else {
-                println("Unknown command line argument '"++someOther++"'. See 'jasl --help' for correct use.")
+                println("Unknown command line argument '" ++ someOther ++ "'. See 'jasl --help' for correct use.")
                 exit(0)
             }
     }
@@ -119,7 +119,10 @@ def main() = {
 
     do setWorkingFile(getFile(parseCommandLine()))
 
-    val ilPath = do getOutFile()++".jasm"
+    // TODO: Invoke `jasl_install --stdlib` and read the stdout to get the stdlib dir,
+    // then include it as a search path.
+
+    val ilPath = do getOutFile() ++ ".jasm"
     create_context(ilPath)
 
     val tokenized: List[Token] = lexer::lex()
@@ -147,25 +150,25 @@ __DEBUG_START__
         with parser_report;
         with tokenHandler(tokenized);
         with contextHandler(emptyParserContext())
-        println("\nModule Info: "++name)
+        println("\nModule Info: " ++ name)
 
         do setWorkingModule(name)
 
         println("\tVariables:")
-        feed[VariableSignature] { vars.eachValue } { v => println("\t\t"++v.show()) }
+        feed[VariableSignature] { vars.eachValue } { v => println("\t\t" ++ v.show()) }
 
         println("\tFunctions:")
-        feed[FunctionSignature] { fns.eachValue } { v => println("\t\t"++v.show()) }
+        feed[FunctionSignature] { fns.eachValue } { v => println("\t\t" ++ v.show()) }
 
         println("\tLayouts:")
-        feed[LayoutSignature] { lays.eachValue } { v => println("\t\t"++v.show()) }
+        feed[LayoutSignature] { lays.eachValue } { v => println("\t\t" ++ v.show()) }
     }} 
 __DEBUG_END__
 
     feed[(String, LexerContext)]{ () => do emitLexerOutput() } { case (filename, context) => {
         do setWorkingFile(filename)
         do setWorkingModule(context.name)
-        debugPrint("Parse called for "++filename++" module "++do getWorkingModule())
+        debugPrint("Parse called for " ++ filename ++ " module " ++ do getWorkingModule())
         do registerAST(parser::parse(context.tokens, topLevel))
     }}
 
@@ -178,7 +181,7 @@ __DEBUG_END__
     // register global variable ASTs, the AST register is LIFO
     // let the ilgen handle this
     /*(do getGlobalVarASTs()).foreach{ ast => {
-        debugPrint("Registering global variables for module "++ast.moduleName++".")
+        debugPrint("Registering global variables for module " ++ ast.moduleName ++ ".")
         do registerAST(ast)
     }}*/
 
@@ -189,12 +192,13 @@ __DEBUG_END__
         exit(0)
     }
 
+    println("Making an assemble call...")
     if (AssembleIL()) {
         println("Finished compiling.")
 /*        if (do getFlag("run")) {
             val exitCode = RunByteCode(do getOutFile())
             if (exitCode != 0) {
-                println("An error occured during runtime. Exit Code: "++exitCode.show)
+                println("An error occured during runtime. Exit Code: " ++ exitCode.show)
             }
         }
 */

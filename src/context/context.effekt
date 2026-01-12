@@ -37,8 +37,8 @@ effect InternalError(msg: String, file: String, line: String): Nothing
 def internalErrorHandler[T]{ prog: () => T / InternalError }: T = {
     try { prog() }
     with InternalError { (msg, file, line) => {
-        println("[INTERNAL ERROR "++file++":"++line++"] The program ran into an unexpected internal error. Please report this issue to the author.")
-        println("        Internal Message: "++msg)
+        println("[INTERNAL ERROR " ++ file ++ ":" ++ line ++ "] The program ran into an unexpected internal error. Please report this issue to the author.")
+        println("        Internal Message: " ++ msg)
         exit(1)
     }}
 }
@@ -388,7 +388,7 @@ def infixEq(l: QualifiedName, r: QualifiedName): Bool = {
 
 // TODO: Proper caching
 def getFile(_file: String): String / {InternalError, CompilerSettingsRegister} = {
-    var file = do getWorkingDir()++_file
+    var file = do getWorkingDir() ++ _file
     var includes = do getIncludePaths()
 
     var cnd = true
@@ -402,7 +402,7 @@ def getFile(_file: String): String / {InternalError, CompilerSettingsRegister} =
             }
             case false => includes match {
                 case Cons(head, rest) => {
-                    file = head++_file
+                    file = head ++ _file
                     includes = rest
                 }
                 case Nil() => { cnd = false }
@@ -417,18 +417,18 @@ def openRead(file: String): String / {InternalError, CompilerSettingsRegister} =
     try { with filesystem; do readFile(file) }
     with Exception[IOError] {
         def raise(_, _) = {
-            println("Couldn't open file at path '"++file++"'.")
+            println("Couldn't open file at path '" ++ file ++ "'.")
             exit(1)
         }
     }
 }
 
 def openWrite(file: String, content: String): Unit / {InternalError, CompilerSettingsRegister} = {
-    val file = do getWorkingDir()++file
+    val file = do getWorkingDir() ++ file
     try { with filesystem; writeFile(file, content) }
     with Exception[IOError] {
         def raise(_, _) = {
-            println("Couldn't open file at path '"++file++"'.")
+            println("Couldn't open file at path '" ++ file ++ "'.")
             exit(1)
         }
     }
@@ -447,7 +447,7 @@ def unimplemented(file: String, line: String): Nothing / InternalError = {
 }
 
 def unimplemented(file: String, line: String, message: String): Nothing / InternalError = {
-    do InternalError("This segment of the project is still unimplemented. Please stay tuned.\n\t\tDetailed Message: "++message, file, line)
+    do InternalError("This segment of the project is still unimplemented. Please stay tuned.\n\t\tDetailed Message: " ++ message, file, line)
 }
 
 def unreachable(file: String, line: String): Nothing / InternalError = {
@@ -456,7 +456,7 @@ def unreachable(file: String, line: String): Nothing / InternalError = {
 
 def debugPrint(msg: String): Unit = {
 __DEBUG_START__
-    println("[DEBUG] "++msg)
+    println("[DEBUG] " ++ msg)
 __DEBUG_END__
 }
 
@@ -466,7 +466,7 @@ def combine[T](l1: List[T], l2: List[T]): List[T] = l1 match {
 }
 
 def show(n: QualifiedName): String = n.mod match {
-    case Some(modname) => modname++"::"++n.name
+    case Some(modname) => modname ++ "::" ++ n.name
     case None() => n.name
 }
 
@@ -641,9 +641,9 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
             val oldInf = modules.get(currentModule).unpack()
 
             if (builtIns.contains(fn.name)) {
-                println("[WARNING] "++currentFile++" at ???: User defined function '"++fn.name++"' will be shadowed by the built-in '"++fn.name++"'. Use a qualified name ('"++currentModule++"::"++fn.name++"') to use the function.")
+                println("[WARNING] " ++ currentFile ++ " at ???: User defined function '" ++ fn.name ++ "' will be shadowed by the built-in '" ++ fn.name ++ "'. Use a qualified name ('" ++ currentModule ++ "::" ++ fn.name ++ "') to use the function.")
             } else if (oldInf.functions.contains(fn.name)) {
-                println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++fn.name++"' in module '"++currentModule++"'.")
+                println("[PARSER ERROR] " ++ currentFile ++ " at ???: Multiple definitions of '" ++ fn.name ++ "' in module '" ++ currentModule ++ "'.")
                 exit(1)
             }
 
@@ -662,7 +662,7 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
             val oldInf = modules.get(currentModule).unpack()
 
             /*if (oldInf.layouts.contains(layout.name)) {
-                println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++layout.name++"' in module '"++currentModule++"'.")
+                println("[PARSER ERROR] " ++ currentFile ++ " at ???: Multiple definitions of '" ++ layout.name ++ "' in module '" ++ currentModule ++ "'.")
                 exit(1)
             }*/
 
@@ -681,7 +681,7 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
             val oldInf = modules.get(currentModule).unpack()
 
             if (oldInf.variables.contains(variable.name)) {
-                println("[PARSER ERROR] "++currentFile++" at ???: Multiple definitions of '"++variable.name++"' in module '"++currentModule++"'.")
+                println("[PARSER ERROR] " ++ currentFile ++ " at ???: Multiple definitions of '" ++ variable.name ++ "' in module '" ++ currentModule ++ "'.")
                 exit(1)
             }
 
@@ -832,13 +832,13 @@ def settingsHandler[T] { prog: () => T /  CompilerSettingsRegister }: T / StopCo
         def setWorkingDir(dir) = {
             if (dir.endsWith("/") || dir.endsWith("\\"))
                 workingDir = dir
-            else workingDir = dir++"/"
+            else workingDir = dir ++ "/"
             resume(())
         }
         def addIncludePath(path) = {
             if (path.endsWith("/") || path.endsWith("\\"))
                 includePaths = Cons(path, includePaths)
-            else includePaths = Cons(path++"/", includePaths)
+            else includePaths = Cons(path ++ "/", includePaths)
             resume(())
         }
         def setFlag(name) = flags.contains(name){(a,b) => a == b} match {
@@ -856,13 +856,13 @@ def settingsHandler[T] { prog: () => T /  CompilerSettingsRegister }: T / StopCo
             if (outputFile.endsWith(getExtension()))
                 outputFile
             else {
-                outputFile = outputFile++getExtension()
+                outputFile = outputFile ++ getExtension()
                 outputFile
             }
         )
         def getWorkingDir() = resume(workingDir)
         def getPipelineMode() = resume(pipeline)
         def getIncludePaths() = resume(includePaths)
-        def getFlag(name) = resume(flags.contains(name){(a,b) => a==b})
+        def getFlag(name) = resume(flags.contains(name){(a,b) => a == b})
     }
 }

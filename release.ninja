@@ -48,7 +48,7 @@ rule ccc
     pool = cpool
     deps = gcc
     depfile = $out.d
-    command = $CC $in -o $out
+    command = $LD $in -o $out
 
 rule link
     pool = linkpool
@@ -62,7 +62,7 @@ rule las
     pool = cpool
     command = llvm-as $in -o $out -opaque-pointers
 
-build $basebuild/preprocessor: ccc $etcdir/preprocessor.c
+build $basebuild/preprocessor: ccc $etcdir/preprocessor.cpp
 
 build $builddir/bytearray.o: cc $effektdir/bytearray.c
 build $builddir/main.o: cc $effektdir/main.c
@@ -91,3 +91,6 @@ build $builddir/jasm_wrapper.o: cxx $libdir/jasm/jasm.cpp
 build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a
 #build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a $builddir/csr_wrapper.o $libdir/csr/libcsr.a
 # build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o  $builddir/jasm_wrapper.o
+
+build $basebuild/jasl_install.cpp: prp $etcdir/jasl_install.cpp | $basebuild/preprocessor
+build $basebuild/jasl_install: ccc $basebuild/jasl_install.cpp

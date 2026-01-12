@@ -29,13 +29,13 @@ def ilgen_report[T] { prog: () => T / ILGenError }: T / {CompilerSettingsRegiste
                                 def raise(_, _) = "<unknown>"
                             }
 
-        val spaces: String = " ".repeat(pos.col+7)
+        val spaces: String = " ".repeat(pos.col + 7)
         val helpLine: String = getHelpLine()
 
-        println("[ILGEN ERROR] "++do getWorkingFile()++" at "++show(pos)++": "++msg)
-        println("\n        "++errLine)
-        println(spaces++"^")
-        println(spaces++helpLine)
+        println("[ILGEN ERROR] " ++ do getWorkingFile() ++ " at " ++ show(pos) ++ ": " ++ msg)
+        println("\n        " ++ errLine)
+        println(spaces ++ "^")
+        println(spaces ++ helpLine)
         exit(1)
     }}
 }
@@ -47,7 +47,7 @@ def ilgen[T](target: String) { prog: () => T / ILGenerator }: T / {CompilerSetti
     try {
         val res = prog()
         openWrite(target, do flush())
-        println("[ILGEN] IL output written to path: "++target)
+        println("[ILGEN] IL output written to path: " ++ target)
         res
     } with ILGenerator {
         def spit(asm) = {
@@ -109,18 +109,18 @@ def handleTokens[T](_tokens: List[Token]){ prog: () => T / TokenRequest }: T / {
         def checkOrCrash(token) = resume {
             try {
                 if (token.infixEq(tokens.head.tokenType)) { true }
-                else do ILGenError("Expected '"++token.show++"', got '"++tokens.head.tokenType.show++"'.", tokens.head.position)
+                else do ILGenError("Expected '" ++ token.show ++ "', got '" ++ tokens.head.tokenType.show ++ "'.", tokens.head.position)
             }
             with Exception[MissingValue] {
-                def raise(_, _) = do ILGenError("Expected `"++token.show++"', got  EOF.", previousToken.position)
+                def raise(_, _) = do ILGenError("Expected `" ++ token.show ++ "', got  EOF.", previousToken.position)
             }
         }
         def checkReturnOrCrash(token) = resume {
             try {
                 if (token.infixEq(tokens.head.tokenType)) { next() }
-                else do ILGenError("Expected '"++token.show++"', got '"++tokens.head.tokenType.show++"'.", tokens.head.position)
+                else do ILGenError("Expected '" ++ token.show ++ "', got '" ++ tokens.head.tokenType.show ++ "'.", tokens.head.position)
             } with Exception[MissingValue] {
-                def raise(_, _) = do ILGenError("Expected '"++token.show++"', got an unexpected EOF.", previousToken.position)
+                def raise(_, _) = do ILGenError("Expected '" ++ token.show ++ "', got an unexpected EOF.", previousToken.position)
             }
         }
         def advance() = resume { next() }
@@ -150,12 +150,13 @@ def getModeFromType(t: Type) = t match {
 }
 
 def makeSymbol(name: QualifiedName, public: Bool) = name.mod match {
-    case None() => do getWorkingModule()++"$$"++if(public){"pub"}else{"priv"}++"$$"++name.name
-    case Some(mod) => mod++"$$"++if(public){"pub"}else{"priv"}++"$$"++name.name
+    case None() => do getWorkingModule() ++ "$$" ++ if(public){"pub"}else{"priv"} ++ "$$" ++ name.name
+    case Some(mod) => mod ++ "$$" ++ if(public){"pub"}else{"priv"} ++ "$$" ++ name.name
 }
 
 def pointingType(ptr: Type) = ptr match {
     case Type::Pointer(to) => to
+    case Type::FunctionPointer(_, _) => ptr
     case _ => unreachable(__FILE__, __LINE__)
 }
 
@@ -168,13 +169,13 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
             case true => do spit("stc %ub 1")
             case false => do spit("stc %ub 0")
         }
-        case Literal::UInt(value) => do spit("stc %ui "++value.show)
-        case Literal::Int(value) => do spit("stc %i "++value.show)
-        case Literal::Float(value) => do spit("stc %f "++value.show)
-        case Literal::UByte(value) => do spit("stc %ub "++value.show)
-        case Literal::Byte(value) => do spit("stc %b "++value.show)
+        case Literal::UInt(value) => do spit("stc %ui " ++ value.show)
+        case Literal::Int(value) => do spit("stc %i " ++ value.show)
+        case Literal::Float(value) => do spit("stc %f " ++ value.show)
+        case Literal::UByte(value) => do spit("stc %ub " ++ value.show)
+        case Literal::Byte(value) => do spit("stc %b " ++ value.show)
         case Literal::Nullptr() => do spit("stc %ui 0")
-        case Literal::String(value) => do spit("raw "++value.length.show++" \""++value++"\" ;")
+        case Literal::String(value) => do spit("raw " ++ value.length.show ++ " \"" ++ value ++ "\" ;")
         case Literal::TypeLiteral(_) => ()
     }
     case Identifier(name, pos) => {
@@ -184,38 +185,38 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
 
             sign.varType.getModeFromType match {
                 case Some(modeflag) => sign.global match {
-                    case false => do spit("rdl "++modeflag++" "++sign.stackIndex.show)
+                    case false => do spit("rdl " ++ modeflag ++ " " ++ sign.stackIndex.show)
                     case true => {
-                        do spit("mov "++sign.stackIndex.show++" &ebx")
-                        do spit("rda "++modeflag)
+                        do spit("mov " ++ sign.stackIndex.show ++ " &ebx")
+                        do spit("rda " ++ modeflag)
                     }
                 }
                 case None() =>
                     if (sign.name.startsWith("$") && sign.varType == Type::Custom(QualifiedName(Some("string"), "String")) && sign.global) {
-                        do spit("stc %ui "++sign.stackIndex.show)
+                        do spit("stc %ui " ++ sign.stackIndex.show)
                     } else sign.varType match {
                         case Type::Custom(_) => {
                             // TODO: make this into a single instruction, or a couple at least based on layout size
-                            do spit("mov "++sign.stackIndex.show++" &eax")
+                            do spit("mov " ++ sign.stackIndex.show ++ " &eax")
                             if (not(sign.global))
                                 do spit("add %ui &bp &eax")
-                            do spit("mov "++sign.varType.typeSize.show++" &ecx")
+                            do spit("mov " ++ sign.varType.typeSize.show ++ " &ecx")
                             do spit("mov &sp &ebx")
                             do spit("mcp %s %s")
-                            do spit("inc %ui &sp "++sign.varType.typeSize.show)
+                            do spit("inc %ui &sp " ++ sign.varType.typeSize.show)
                         }
                         case _ => {
                             if (not(sign.global)) {
-                                do spit("rdl "++sign.varType.getModeFromType.unpack++" "++sign.stackIndex.show)
+                                do spit("rdl " ++ sign.varType.getModeFromType.unpack ++ " " ++ sign.stackIndex.show)
                             } else {
-                                do spit("mov "++sign.stackIndex.show++" &ebx")
-                                do spit("rda "++sign.varType.getModeFromType.unpack)
+                                do spit("mov " ++ sign.stackIndex.show ++ " &ebx")
+                                do spit("rda " ++ sign.varType.getModeFromType.unpack)
                             }
                         }
                     }
             }
         } else if (do hasFunction(name)) {
-            do spit("sad "++name.makeSymbol(do getFunctionSignature(name).unpackOrCrash.public))
+            do spit("sad " ++ name.makeSymbol(do getFunctionSignature(name).unpackOrCrash.public))
         } else unreachable(__FILE__, __LINE__) 
     }
     case Call(fn, args, pos) => {
@@ -234,7 +235,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
             }
             // TODO: Handle this in parser.
             case QualifiedName(None(), "sizeof") => {
-                do spit("stc %ui "++args.evalType.map{t => t.typeSize}.sum.show)
+                do spit("stc %ui " ++ args.evalType.map{t => t.typeSize}.sum.show)
             }
             // this is just an illusion
             case QualifiedName(None(), "ptrcast") => args.foreach{arg => arg.expressionGen}
@@ -383,14 +384,14 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                             case Some(modeflag) => {
                                 do spit("mov &ebx")
                                 do spit("pop %ui")
-                                do spit("rda "++modeflag)
+                                do spit("rda " ++ modeflag)
                             }
                             case None() => {
                                 do spit("mov &eax")
                                 do spit("mov &sp &ebx")
-                                do spit("mov "++t.typeSize.show++" &ecx")
+                                do spit("mov " ++ t.typeSize.show ++ " &ecx")
                                 do spit("mcp %h %s")
-                                do spit("inc %ui &sp "++t.typeSize.show)
+                                do spit("inc %ui &sp " ++ t.typeSize.show)
                             }
                         }
                     }
@@ -401,14 +402,14 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                 case Cons(Identifier(name, _), Nil()) =>
                     if (do hasVar(name, true)){
                         val sign = do getVar(name)
-                        do spit("stc %ui "++sign.stackIndex.show)
+                        do spit("stc %ui " ++ sign.stackIndex.show)
                         if (not(sign.global)) {
                             do spit("rda &bp")
                             do spit("add %ui")
                         }
                     } else if (do hasFunction(name)) {
                         val sign = do getFunctionSignature(name).unpack
-                        do spit("sad "++name.makeSymbol(sign.public))
+                        do spit("sad " ++ name.makeSymbol(sign.public))
                     } else unreachable(__FILE__, __LINE__)
                 case _ => do ILGenError("Can't take the address of a temporary value.", pos)
             }
@@ -423,12 +424,12 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                         }
                         val size = right.evalType.map{t => t.typeSize}.sum.show.show
                         right.expressionGen
-                        do spit("dcr %ui &sp "++size)
+                        do spit("dcr %ui &sp " ++ size)
                         do spit("mov &ebx")
                         do spit("mov &sp &eax")
-                        do spit("mov "++size++" &ecx")
+                        do spit("mov " ++ size ++ " &ecx")
                         do spit("mcp %s %s")
-                    } else do ParserError("Missmatching types in 'set' operation, given value doesn't match the pointer type. "++left.evalType.map{t => t.pointingType}.show++" vs "++right.evalType.show, pos)
+                    } else do ParserError("Missmatching types in 'set' operation, given value doesn't match the pointer type. " ++ left.evalType.map{t => t.pointingType}.show ++ " vs " ++ right.evalType.show, pos)
                 }
                 case _ => unreachable(__FILE__, __LINE__)
             }
@@ -446,16 +447,16 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                 if (do hasFunction(name)) {
                     val sign = do getFunctionSignature(name).unpack
                     val sym = name.makeSymbol(sign.public)
-                    do spit("mov "++args.evalType.map{s => s.typeSize}.sum.show++" &bl")
-                    do spit("cal "++sym)
+                    do spit("mov " ++ args.evalType.map{s => s.typeSize}.sum.show ++ " &bl")
+                    do spit("cal " ++ sym)
                 } else {
                     val fpv = do getVar(name)
                     val fns = fpv.varType
                     if (fns is FunctionPointer(args, _)) {
-                        do spit("rdl %ui "++fpv.stackIndex.show)
+                        do spit("rdl %ui " ++ fpv.stackIndex.show)
                         do spit("mov &ebx")
                         do spit("pop %ui")
-                        do spit("mov "++args.map{a => a.typeSize}.sum.show++" &bl")
+                        do spit("mov " ++ args.map{a => a.typeSize}.sum.show ++ " &bl")
                         do spit("cal &ebx")
                     } else unreachable(__FILE__, __LINE__)
                 }
@@ -470,7 +471,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                     fn.expressionGen
                     do spit("mov &ebx")
                     do spit("pop %ui")
-                    do spit("mov "++arguments.map{a => a.typeSize}.sum.show++" &bl")
+                    do spit("mov " ++ arguments.map{a => a.typeSize}.sum.show ++ " &bl")
                     do spit("cal &ebx")
                 } else unreachable(__FILE__, __LINE__)
         }
@@ -485,9 +486,9 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
             val t = rhs.evalType.head
             val ts = t.getModeFromType.unpack
 
-            do spit("stc "++ts++" 0")
+            do spit("stc " ++ ts ++ " 0")
             rhs.expressionGen
-            do spit("sub "++ts)
+            do spit("sub " ++ ts)
         }
         case Not(rhs) => {
             rhs.expressionGen
@@ -505,66 +506,66 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                 lhs.expressionGen
                 rhs.expressionGen
                 val t = lhs.evalType.head.getModeFromType.unpack
-                do spit("add "++t)
+                do spit("add " ++ t)
             }
             case Subtraction(lhs, rhs) => { 
                 lhs.expressionGen
                 rhs.expressionGen
                 val t = lhs.evalType.head.getModeFromType.unpack
-                do spit("sub "++t)
+                do spit("sub " ++ t)
             }
             case Division(lhs, rhs) => { 
                 lhs.expressionGen
                 rhs.expressionGen
                 val t = lhs.evalType.head.getModeFromType.unpack
-                do spit("div "++t)
+                do spit("div " ++ t)
             }
             case Multiplication(lhs, rhs) => { 
                 lhs.expressionGen
                 rhs.expressionGen
                 val t = lhs.evalType.head.getModeFromType.unpack
-                do spit("mul "++t)
+                do spit("mul " ++ t)
             }
             case Equality(lhs, rhs) => { 
                 lhs.expressionGen
                 rhs.expressionGen
                 val t = lhs.evalType.head.getModeFromType.unpack
-                do spit("cmp "++t++" %equ")
+                do spit("cmp " ++ t ++ " %equ")
                 do spit("rda &bl")
             }
             case Inequality(lhs, rhs) => { 
                 lhs.expressionGen
                 rhs.expressionGen
                 val t = lhs.evalType.head.getModeFromType.unpack
-                do spit("cmp "++t++" %neq")
+                do spit("cmp " ++ t ++ " %neq")
                 do spit("rda &bl")
             }
             case Great(lhs, rhs) => { 
                 lhs.expressionGen
                 rhs.expressionGen
                 val t = lhs.evalType.head.getModeFromType.unpack
-                do spit("cmp "++t++" %gre")
+                do spit("cmp " ++ t ++ " %gre")
                 do spit("rda &bl")
             }
             case Lesser(lhs, rhs) => { 
                 lhs.expressionGen
                 rhs.expressionGen
                 val t = lhs.evalType.head.getModeFromType.unpack
-                do spit("cmp "++t++" %les")
+                do spit("cmp " ++ t ++ " %les")
                 do spit("rda &bl")
             }
             case GreaterEqual(lhs, rhs) => { 
                 lhs.expressionGen
                 rhs.expressionGen
                 val t = lhs.evalType.head.getModeFromType.unpack
-                do spit("cmp "++t++" %geq")
+                do spit("cmp " ++ t ++ " %geq")
                 do spit("rda &bl")
             }
             case LesserEqual(lhs, rhs) => { 
                 lhs.expressionGen
                 rhs.expressionGen
                 val t = lhs.evalType.head.getModeFromType.unpack
-                do spit("cmp "++t++" %leq")
+                do spit("cmp " ++ t ++ " %leq")
                 do spit("rda &bl")
             }
             case And(lhs, rhs) => { 
@@ -576,12 +577,12 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                 val id = random_range(0, native::i64Max).show
                 lhs.expressionGen
                 do spit("stc %ub 0")
-                do spit("cnj %ub %equ and$$short_circuit_"++id)
+                do spit("cnj %ub %equ and$$short_circuit_" ++ id)
                 rhs.expressionGen
-                do spit("jmp and$$end_"++id)
-                do spit("and$$short_circuit_"++id++":")
+                do spit("jmp and$$end_" ++ id)
+                do spit("and$$short_circuit_" ++ id ++ ":")
                 do spit("stc %ub 0")
-                do spit("and$$end_"++id++":")
+                do spit("and$$end_" ++ id ++ ":")
             }
             case Or(lhs, rhs) => { 
                 // TODO: Make short-circuit
@@ -592,12 +593,12 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                 val id = random_range(0, native::i64Max).show
                 lhs.expressionGen
                 do spit("stc %ub 1")
-                do spit("cnj %ub %equ and$$short_circuit_"++id)
+                do spit("cnj %ub %equ and$$short_circuit_" ++ id)
                 rhs.expressionGen
-                do spit("jmp and$$end_"++id)
-                do spit("and$$short_circuit_"++id++":")
+                do spit("jmp and$$end_" ++ id)
+                do spit("and$$short_circuit_" ++ id ++ ":")
                 do spit("stc %ub 1")
-                do spit("and$$end_"++id++":")
+                do spit("and$$end_" ++ id ++ ":")
             }
         }
     }
@@ -635,22 +636,22 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
         rhs.expressionGen
         t match {
             case Type::Custom(name) => {
-                do spit("mov "++addr.show++" &ebx")
+                do spit("mov " ++ addr.show ++ " &ebx")
                 if (not(glob))
                     do spit("add %ui &bp &ebx")
-                do spit("mov "++t.typeSize.show++" &ecx")
+                do spit("mov " ++ t.typeSize.show ++ " &ecx")
                 do spit("mov &sp &eax")
-                do spit("dcr %ui &eax "++t.typeSize.show)
+                do spit("dcr %ui &eax " ++ t.typeSize.show)
                 do spit("mcp %s %s")
             }
             case _ => glob match {
                 // there is no stl instruction yet
-                // case false => do spit("stl "++t.getModeFromType.unpack++" "++addr.show) 
+                // case false => do spit("stl " ++ t.getModeFromType.unpack ++ " " ++ addr.show) 
                 /*case true*/ case _ => {
-                    do spit("mov "++addr.show++" &ebx")
+                    do spit("mov " ++ addr.show ++ " &ebx")
                     if (not(glob))
                         do spit("add %ui &bp &ebx")
-                    do spit("ldc "++t.getModeFromType.unpack)
+                    do spit("ldc " ++ t.getModeFromType.unpack)
                 }
             }
         }
@@ -687,20 +688,20 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
         _setUpLeft(expr)
         t match {
             case Type::Custom(name) => {
-                do spit("mov "++addr.show++" &eax")
+                do spit("mov " ++ addr.show ++ " &eax")
                 if (not(glob))
                     do spit("add %ui &bp &eax")
-                do spit("mov "++t.typeSize.show++" &ecx")
+                do spit("mov " ++ t.typeSize.show ++ " &ecx")
                 do spit("mov &sp &ebx")
                 do spit("mcp %s %s")
-                do spit("inc %ui &sp "++t.typeSize.show)
+                do spit("inc %ui &sp " ++ t.typeSize.show)
             }
             case _ => 
                 if (t.getModeFromType is Some(ts)) glob match {
-                    case false => do spit("rdl "++ts++" "++addr.show)
+                    case false => do spit("rdl " ++ ts ++ " " ++ addr.show)
                     case true => {
-                        do spit("mov "++addr.show++" &ebx")
-                        do spit("ldc "++ts)
+                        do spit("mov " ++ addr.show ++ " &ebx")
+                        do spit("ldc " ++ ts)
                     }
                 }
                 else { }
@@ -712,7 +713,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
 def statementGen(stmt: Statement): Unit / {ILGenError, ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = stmt match {
     case FnDefinition(sign, body, scope, _) => {
         do spit("")
-        do spit(do getWorkingModule()++if(sign.public){"$$pub"}else{"$$priv"}++"$$"++sign.name++":")
+        do spit(do getWorkingModule() ++ if(sign.public){"$$pub"}else{"$$priv"} ++ "$$" ++ sign.name ++ ":")
         do beginBlock()
             with parser_report;
             with contextHandler(scope);
@@ -722,7 +723,7 @@ def statementGen(stmt: Statement): Unit / {ILGenError, ParserContextRequest, Int
     case ReturnStmt(returns, _) => {
         with parser_report;
         returns.foreach{ret => ret.expressionGen}
-        do spit("mov "++returns.evalType.map{t => t.typeSize}.sum.show++" &bl")
+        do spit("mov " ++ returns.evalType.map{t => t.typeSize}.sum.show ++ " &bl")
         do spit("ret")
     }
     case InlineAssembly(asm, _) => {
@@ -732,12 +733,12 @@ def statementGen(stmt: Statement): Unit / {ILGenError, ParserContextRequest, Int
     }
     case VariableDefinition(signature, initializer, pos) => {
         with parser_report;
-        do spit("#begin "++signature.map{s => s.show}.join(", ")++"#")
+        do spit("#begin " ++ signature.map{s => s.show}.join(", ") ++ "#")
         initializer match {
             case Some(expr) => expr.expressionGen
-            case None() => do spit("inc %ui &sp "++signature.map{s => s.varType.typeSize}.sum.show)
+            case None() => do spit("inc %ui &sp " ++ signature.map{s => s.varType.typeSize}.sum.show)
         }
-        do spit("#end "++signature.map{s => s.name}.join(", ")++"#")
+        do spit("#end " ++ signature.map{s => s.name}.join(", ") ++ "#")
     }
     case Block(inside, scope, _) => {
         do beginBlock()
@@ -750,45 +751,45 @@ def statementGen(stmt: Statement): Unit / {ILGenError, ParserContextRequest, Int
                 case None() => scope.stackIndex
             }
             do spit("mov &bp &sp")
-            do spit("inc %ui &sp "++findIndex(scope).show)
+            do spit("inc %ui &sp " ++ findIndex(scope).show)
         do endBlock()
     }
     case Conditional(condition, body, fallback, pos) => {
         condition.expressionGen
         val conditionID = random_range(0, native::i64Max).show
         do spit("stc %ub 0")
-        do spit("cnj %ub %equ jasl$$else_"++conditionID)
+        do spit("cnj %ub %equ jasl$$else_" ++ conditionID)
         body.statementGen
         fallback match {
             case Some(conditional) => {
-                do spit("jmp jasl$$conditional_end_"++conditionID)
-                do spit("jasl$$else_"++conditionID++":")
+                do spit("jmp jasl$$conditional_end_" ++ conditionID)
+                do spit("jasl$$else_" ++ conditionID ++ ":")
                 conditional.statementGen
-                do spit("jasl$$conditional_end_"++conditionID++":")
+                do spit("jasl$$conditional_end_" ++ conditionID ++ ":")
             }
-            case None() => do spit("jasl$$else_"++conditionID++":")
+            case None() => do spit("jasl$$else_" ++ conditionID ++ ":")
         }
     }
     case WhileStmt(condition, body, id, pos) => {
         with handleLoop(id);
         val loopID = id.show
-        do spit("jasl$$while_begin_"++loopID++":")
+        do spit("jasl$$while_begin_" ++ loopID ++ ":")
         condition.expressionGen
         do spit("stc %ub 0")
-        do spit("cnj %ub %equ jasl$$while_end_"++loopID)
+        do spit("cnj %ub %equ jasl$$while_end_" ++ loopID)
         body.statementGen
-        do spit("jmp jasl$$while_begin_"++loopID)
-        do spit("jasl$$while_end_"++loopID++":")
+        do spit("jmp jasl$$while_begin_" ++ loopID)
+        do spit("jasl$$while_end_" ++ loopID ++ ":")
     }
     case ExpressionStatement(expr, _) => {
         with parser_report;
         val size = expr.evalType.map{t => t.typeSize}.sum
         expr.expressionGen
         if (size > 0)
-            do spit("dcr %ui &sp "++size.show)
+            do spit("dcr %ui &sp " ++ size.show)
     }
-    case BreakStmt(id, _) => do spit("jmp jasl$$while_end_"++id.show)
-    case ContinueStmt(id, _) => do spit("jmp jasl$$while_begin_"++id.show)
+    case BreakStmt(id, _) => do spit("jmp jasl$$while_end_" ++ id.show)
+    case ContinueStmt(id, _) => do spit("jmp jasl$$while_begin_" ++ id.show)
 }
 
 def _gen(stmts: List[Statement]): Unit / {ILGenError, ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = stmts match {
