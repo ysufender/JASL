@@ -568,16 +568,36 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                 do spit("rda &bl")
             }
             case And(lhs, rhs) => { 
-                lhs.expressionGen
+                // TODO: Make short-circuit
+                /*lhs.expressionGen
                 rhs.expressionGen
                 do spit("and %ub &bl")
-                do spit("rda &bl")
+                do spit("rda &bl")*/
+                val id = random_range(0, native::i64Max).show
+                lhs.expressionGen
+                do spit("stc %ub 0")
+                do spit("cnj %ub %equ and$$short_circuit_"++id)
+                rhs.expressionGen
+                do spit("jmp and$$end_"++id)
+                do spit("and$$short_circuit_"++id++":")
+                do spit("stc %ub 0")
+                do spit("and$$end_"++id++":")
             }
             case Or(lhs, rhs) => { 
-                lhs.expressionGen
+                // TODO: Make short-circuit
+                /*lhs.expressionGen
                 rhs.expressionGen
                 do spit("or %ub &bl")
-                do spit("rda &bl")
+                do spit("rda &bl")*/
+                val id = random_range(0, native::i64Max).show
+                lhs.expressionGen
+                do spit("stc %ub 1")
+                do spit("cnj %ub %equ and$$short_circuit_"++id)
+                rhs.expressionGen
+                do spit("jmp and$$end_"++id)
+                do spit("and$$short_circuit_"++id++":")
+                do spit("stc %ub 1")
+                do spit("and$$end_"++id++":")
             }
         }
     }

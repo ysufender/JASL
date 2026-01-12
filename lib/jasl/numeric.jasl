@@ -11,8 +11,16 @@ pub layout FloatLimits {
     pub epsilon: float;
 }
 
+/*
 pub let u8Limits: U8Limits = U8Limits(0u8, 4294967295u8);
 pub let i8Limits: I8Limits = I8Limits(-128i8, 127i8);
 pub let u32Limits: U32Limits = U32Limits(0u32, 0u32);
 pub let i32Limits: I32Limits = I32Limits(-2147483648, 2147483647);
 pub let floatLimits: FloatLimits = FloatLimits(-340282300000000000000000000000000000000f, 340282300000000000000000000000000000000f, 0.0000001192092896);
+*/
+
+pub fn u8Limits() -> U8Limits { return U8Limits(0u8, 4294967295u8); }
+pub fn i8Limits() -> I8Limits { return I8Limits(-128i8, 127i8); }
+pub fn u32Limits() -> U32Limits { return U32Limits(0u32, 0u32); }
+pub fn i32Limits() -> I32Limits { return I32Limits(-2147483648, 2147483647); }
+pub fn floatLimits() -> FloatLimits { return FloatLimits(-340282300000000000000000000000000000000f, 340282300000000000000000000000000000000f, 0.0000001192092896); }

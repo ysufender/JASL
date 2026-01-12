@@ -3,8 +3,12 @@ module math
 // TODO: implement bitwise operations in JASM, then use them here to implement
 // floor and ceil
 
+/*
 pub let pi: float = 3.14159265358979323846;
 pub let e: float =  0.57721566490153286060;
+*/
+pub fn pi() -> float { return 3.14159265358979323846; }
+pub fn e() -> float {  return 0.57721566490153286060; }
 
 pub fn i32::abs(this: i32) -> i32 {
     if this < 0i32 { return -this; }
