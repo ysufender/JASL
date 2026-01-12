@@ -7,7 +7,9 @@
 #include <limits>
 #include <string_view>
 #include <vector>
+#include <fstream>
 
+#include "JASMConfig.hpp"
 #include "assemblycontext.hpp"
 #include "bytemode/assembler/assembler.hpp"
 #include "bytemode/linker/linker.hpp"
@@ -45,14 +47,15 @@ extern "C" {
         return rand() % (max - min + 1) + min;
     }
 
-    struct Pos assemble_il_call(struct Pos filePath)
+    static AssemblyContext context { DefaultContext };
+    void create_assembly_context(String filePath)
     {
         Str fileName { c_bytearray_into_nullterminated_string(filePath) };
 
         if (!std::filesystem::exists("build/"))
             std::filesystem::create_directories("build/");
 
-        AssemblyContext context {
+        context = {
             true,
             false, 
             false,
@@ -62,9 +65,12 @@ extern "C" {
             std::vector<std::string>{fileName.data()},
             std::vector<std::string>{},
             true,
-            false 
+            true
         };
+    }
 
+    struct Pos assemble_il_call(struct Pos filePath)
+    {
         ByteAssembler::ByteAssembler basm {context};
 
         ByteAssembler::AssemblyInfoCollection infos;
@@ -87,5 +93,14 @@ extern "C" {
 
         erasePositive(filePath);
         return BooleanTrue;
+    }
+
+    void read_lib(String filePath)
+    {
+        Str fileName { c_bytearray_into_nullterminated_string(filePath) };
+        std::ifstream stream { fileName.data(), std::ios::in };
+
+        ByteAssembler::AssemblyInfo info { fileName.data(), ByteAssembler::AssemblyFlags::Static, context };
+        info.Deserialize(stream);
     }
 }

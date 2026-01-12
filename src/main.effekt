@@ -119,6 +119,9 @@ def main() = {
 
     do setWorkingFile(getFile(parseCommandLine()))
 
+    val ilPath = do getOutFile()++".jasm"
+    create_context(ilPath)
+
     val tokenized: List[Token] = lexer::lex()
     val topLevel: ParserContext = emptyParserContext()
     parser::prepass(tokenized, topLevel)
@@ -179,14 +182,14 @@ __DEBUG_END__
         do registerAST(ast)
     }}*/
 
-    ilgen::gen(do getOutFile()++".jasm", topLevel)
+    ilgen::gen(ilPath, topLevel)
 
     if (do getPipelineMode() is ILOnly()) {
         println("Finished generating IL.")
         exit(0)
     }
 
-    if (AssembleIL(do getOutFile()++".jasm")) {
+    if (AssembleIL()) {
         println("Finished compiling.")
 /*        if (do getFlag("run")) {
             val exitCode = RunByteCode(do getOutFile())

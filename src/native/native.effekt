@@ -2,9 +2,10 @@ module native
 
 extern llvm """
     declare %Int @random_range(%Int, %Int)
-    declare %Pos @assemble_il_call(%Pos)
+    declare %Pos @assemble_il_call()
     declare %Double @string_to_float(%Pos)
     declare %Pos @file_exists(%Pos)
+    declare void @create_assembly_context(%Pos)
     ; declare %Int @run_bytecode(%Pos)
 """
 
@@ -16,9 +17,15 @@ extern def random_range(min: Int, max: Int): Int =
 
 val i64Max: Int = 9223372036854775807
 
-extern def AssembleIL(filePath: String): Bool =
+extern def create_context(filePath: String): Unit =
     llvm """
-        %r = call %Pos @assemble_il_call(%Pos ${filePath})
+        call void @create_assembly_context(%Pos ${filePath})
+        ret %Pos zeroinitializer
+    """
+
+extern def AssembleIL(): Bool =
+    llvm """
+        %r = call %Pos @assemble_il_call()
         ret %Pos %r
     """
 
