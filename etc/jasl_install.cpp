@@ -57,7 +57,7 @@ void uninstall(const fs::path& dir) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cout << "JASL Installation Manager\n\nUsage:\n\tjasl_install [install <symlink_dir>|uninstall <symlink_dir>|--version|--stdlib]\n";
+        std::cout << "JASL Installation Manager __VERSION__\n\nUsage:\n\tjasl_install [install <symlink_dir>|uninstall <symlink_dir>|--version|--stdlib]\n";
         return 0;
     }
 

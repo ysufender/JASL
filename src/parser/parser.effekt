@@ -408,7 +408,7 @@ def returnHandler[T](expected: List[Type]) { prog: () => T / ReturnTypeRegister 
             if (expected.compare(returnTypes){(l, r) => l == r}){
                 returns = returns + 1
             } else {
-                do ParserError("Missmatching return types. Type '" ++ returnTypes.show ++ "' is not allowed in this context, '" ++ expected.show ++ "' is expected.", pos)
+                do ParserError("Mismatching return types. Type '" ++ returnTypes.show ++ "' is not allowed in this context, '" ++ expected.show ++ "' is expected.", pos)
             }
         }
         def addPath() = {
@@ -994,7 +994,7 @@ def __evalBin(lhs: Expression, rhs: Expression, pos: Position): List[Type] / {In
     else if (t1.compare(t2){(a, b) => a == b})
         t1
     else
-        do ParserError("Type missmatch between the sides of binary expression. Expected '" ++ t1.typeString ++ "' on both, got '" ++ t2.typeString ++ "' instead on one side.", pos)
+        do ParserError("Type mismatch between the sides of binary expression. Expected '" ++ t1.typeString ++ "' on both, got '" ++ t2.typeString ++ "' instead on one side.", pos)
 } with Exception[MissingValue] {
     def raise(_, _) = unreachable(__FILE__, __LINE__)
 }
@@ -1011,7 +1011,7 @@ def __evalLogic(lhs: Expression, rhs: Expression, pos: Position): List[Type] / {
     else if (t1.compare(t2){(a, b) => a == b})
         [Type::Bool()]
     else
-        do ParserError("Type missmatch between the sides of binary expression. Expected '" ++ t1.typeString ++ "' on both, got '" ++ t2.typeString ++ "' instead on one side.", pos)
+        do ParserError("Type mismatch between the sides of binary expression. Expected '" ++ t1.typeString ++ "' on both, got '" ++ t2.typeString ++ "' instead on one side.", pos)
 } with Exception[MissingValue] {
     def raise(_, _) = unreachable(__FILE__, __LINE__)
 }
@@ -1382,7 +1382,7 @@ def handleVariableDef(): Statement / {GlobalVariableRegister, FunctionOwnership,
             }
         }
         else
-            do ParserError("Missmatching types in variable definition. Expected '" ++ vars.map{v => v.varType}.show ++ "' got '" ++ expr.evalType.show ++ "'.", pos)
+            do ParserError("Mismatching types in variable definition. Expected '" ++ vars.map{v => v.varType}.show ++ "' got '" ++ expr.evalType.show ++ "'.", pos)
     }
 }
 
@@ -1405,7 +1405,6 @@ def handleBlockStatement(context: ParserContext, isLoop: Bool): Statement / {Def
     } with Defer {
         def defer(stmt) = stmt match {
             case ExpressionStatement(Call(fn, args, pos), outerPos) => {
-                // TODO: Evaluate parameters in place
                 var tmps: List[Expression] = []
 
                 def setUpReturns(rets: List[Expression]): Unit = rets match {
@@ -1417,6 +1416,7 @@ def handleBlockStatement(context: ParserContext, isLoop: Bool): Statement / {Def
                                 case Cons(t, _) => t
                                 case _ => unreachable(__FILE__, __LINE__)
                             }
+                            debugPrint(typ.show)
                             val sign = VariableSignature(tmpName, false, false, false, false, do stackIndex(), typ)
                             do addVar(tmpName, sign)
                             body = Cons(VariableDefinition([sign], Some(head), pos), body)
@@ -1428,7 +1428,7 @@ def handleBlockStatement(context: ParserContext, isLoop: Bool): Statement / {Def
                 }
 
                 setUpReturns(args)
-                deferred = Cons(ExpressionStatement(Call(fn, tmps, pos), outerPos), deferred)
+                deferred = Cons(ExpressionStatement(Call(fn, tmps.reverse, pos), outerPos), deferred)
                 // deferred = Cons(stmt, deferred)
                 resume(())
             }
@@ -1858,7 +1858,7 @@ def parsePostfix(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
                     do advance()
                     initializer = initializer.reverse
                     if (not(initializer.evalType.compare(signature.fields.map{f => f.varType}){(a, b) => a == b}))
-                        do ParserError("Missmatching types on type initialization. Expected '" ++ signature.fields.map{f => f.varType}.show ++ "' got '" ++ initializer.evalType.show ++ "'.", pos)
+                        do ParserError("Mismatching types on type initialization. Expected '" ++ signature.fields.map{f => f.varType}.show ++ "' got '" ++ initializer.evalType.show ++ "'.", pos)
                     recurse(Initialization(Custom(name), initializer, pos))
                 }
                 case None() => do ParserError("Couldn't resolve type '" ++ name.show ++ "' in this context.", pos)
@@ -1880,7 +1880,7 @@ def parsePostfix(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
                     args = args.reverse
                     args = Cons(lhs, args)
                     if (not(args.evalType.compare(signature.arguments.map{a => a.varType}){(a, b) => a == b}))
-                        do ParserError("Missmatching types on function call. Expected '" ++ signature.arguments.map{a => a.varType}.show ++ "' got '" ++ args.evalType.show ++ "'.", pos)
+                        do ParserError("Mismatching types on function call. Expected '" ++ signature.arguments.map{a => a.varType}.show ++ "' got '" ++ args.evalType.show ++ "'.", pos)
                     recurse(Call(Identifier(function, dpos), args, pos))
                 }
                 case None() => unreachable(__FILE__, __LINE__)
@@ -1904,7 +1904,7 @@ def parsePostfix(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
                         do advance()
                         args = args.reverse
                         if (not(args.evalType.compare(fnArgs){(a, b) => a == b}))
-                            do ParserError("Missmatching types on function call. Expected '" ++ fnArgs.show ++ "' got '" ++ args.evalType.show ++ "'.", pos)
+                            do ParserError("Mismatching types on function call. Expected '" ++ fnArgs.show ++ "' got '" ++ args.evalType.show ++ "'.", pos)
                         recurse(Call(expr, args, pos))
                     }
                     case _ => do ParserError("Attempt to call non-function expression.", pos)
@@ -2096,7 +2096,7 @@ def parseAssignmentExpression(): Expression / {GlobalVariableRegister, FunctionO
             if (rhs.evalType.compare(expr.evalType){(a, b) => a == b})
                 recurse(Assignment(expr, rhs, pos))
             else
-                do ParserError("Type missmatch in assignment operation. Expected '" ++ expr.evalType.show ++ "' got '" ++ rhs.evalType.show ++ "'.", pos)
+                do ParserError("Type mismatch in assignment operation. Expected '" ++ expr.evalType.show ++ "' got '" ++ rhs.evalType.show ++ "'.", pos)
         }
         case _ => expr
     }

@@ -157,7 +157,10 @@ def makeSymbol(name: QualifiedName, public: Bool) = name.mod match {
 def pointingType(ptr: Type) = ptr match {
     case Type::Pointer(to) => to
     case Type::FunctionPointer(_, _) => ptr
-    case _ => unreachable(__FILE__, __LINE__)
+    case _ => {
+        println("Unexpected type '" ++ ptr.show ++ "' at pointer check.")
+        unreachable(__FILE__, __LINE__)
+    }
 }
 
 def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = expr match {
@@ -429,7 +432,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
                         do spit("mov &sp &eax")
                         do spit("mov " ++ size ++ " &ecx")
                         do spit("mcp %s %s")
-                    } else do ParserError("Missmatching types in 'set' operation, given value doesn't match the pointer type. " ++ left.evalType.map{t => t.pointingType}.show ++ " vs " ++ right.evalType.show, pos)
+                    } else do ParserError("Mismatching types in 'set' operation, given value doesn't match the pointer type. " ++ left.evalType.map{t => t.pointingType}.show ++ " vs " ++ right.evalType.show, pos)
                 }
                 case _ => unreachable(__FILE__, __LINE__)
             }

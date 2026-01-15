@@ -37,6 +37,7 @@ int main(int argc, char** argv) {
     std::string line;
     int lineno = 1;
     bool in_debug_block = false;
+    bool in_release_block = false;
 
     while (std::getline(finput, line)) {
 
@@ -54,7 +55,27 @@ int main(int argc, char** argv) {
             continue;
         }
 
+        if (line.find("__RELEASE_START__") != std::string::npos) {
+            in_release_block = true;
+            ftarget << "\n";
+            ++lineno;
+            continue;
+        }
+
+        if (line.find("__RELEASE_END__") != std::string::npos) {
+            in_release_block = false;
+            ftarget << "\n";
+            ++lineno;
+            continue;
+        }
+
         if (in_debug_block && !debug_enabled) {
+            ftarget << "\n";
+            ++lineno;
+            continue;
+        }
+
+        if (in_release_block && debug_enabled) {
             ftarget << "\n";
             ++lineno;
             continue;

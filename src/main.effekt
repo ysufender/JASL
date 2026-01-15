@@ -20,7 +20,12 @@ import map
 
 def printHelp(): Unit = {
     println("The JASL Compiler")
+__DEBUG_START__
+    println("\tVersion: __VERSION__-debug")
+__DEBUG_END__
+__RELEASE_START__
     println("\tVersion: __VERSION__")
+__RELEASE_END__
     println("\tUsage:\n\tjasl <input_file> [flags]")
     println("\t\tFlags:")
     println("\t\t--help                  : print this help message\n")
@@ -128,7 +133,7 @@ def main() = {
     }
     do addIncludePath(stdlibPath)
 
-    val ilPath = do getOutFile() ++ ".jasm"
+    val ilPath = "build/" ++ do getOutFile() ++ ".jasm"
     create_context(ilPath)
 
     val tokenized: List[Token] = lexer::lex()
@@ -201,6 +206,7 @@ __DEBUG_END__
     println("Making an assemble call...")
     if (assemble_il()) {
         println("Finished compiling.")
+        println("Build files written to 'build/'.")
 /*        if (do getFlag("run")) {
             val exitCode = RunByteCode(do getOutFile())
             if (exitCode != 0) {
