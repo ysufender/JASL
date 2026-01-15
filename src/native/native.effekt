@@ -6,6 +6,7 @@ extern llvm """
     declare %Double @string_to_float(%Pos)
     declare %Pos @file_exists(%Pos)
     declare void @create_assembly_context(%Pos)
+    declare %Pos @stdlib_path()
     ; declare %Int @run_bytecode(%Pos)
 """
 
@@ -23,7 +24,13 @@ extern def create_context(filePath: String): Unit =
         ret %Pos zeroinitializer
     """
 
-extern def AssembleIL(): Bool =
+extern def read_stdlib_path(): String =
+    llvm """
+        %r = call %Pos @stdlib_path()
+        ret %Pos %r 
+    """
+
+extern def assemble_il(): Bool =
     llvm """
         %r = call %Pos @assemble_il_call()
         ret %Pos %r

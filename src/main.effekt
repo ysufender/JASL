@@ -121,6 +121,12 @@ def main() = {
 
     // TODO: Invoke `jasl_install --stdlib` and read the stdout to get the stdlib dir,
     // then include it as a search path.
+    var stdlibPath = read_stdlib_path()
+    if (stdlibPath.length == 0) {
+        println("Couldn't get the stdlib path using 'jasl_install'. Make sure 'jasl_install' executable is on your path.")
+        exit(127)
+    }
+    do addIncludePath(stdlibPath)
 
     val ilPath = do getOutFile() ++ ".jasm"
     create_context(ilPath)
@@ -193,7 +199,7 @@ __DEBUG_END__
     }
 
     println("Making an assemble call...")
-    if (AssembleIL()) {
+    if (assemble_il()) {
         println("Finished compiling.")
 /*        if (do getFlag("run")) {
             val exitCode = RunByteCode(do getOutFile())

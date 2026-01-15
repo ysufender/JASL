@@ -19,12 +19,71 @@ extern "C" {
 
 #include "types.h"
 #include "bytearray.h"
+
+#include "sys/types.h"
+#include "sys/wait.h"
+
 /*
 #define JASM_EMBED
 #include "jasm.h"
 */
 
     using Str = std::string_view;
+
+    String stdlib_path()
+    {
+        int pipefd[2];
+        if (pipe(pipefd) != 0) return (String){0, NULL};
+
+        pid_t pid = fork();
+        if (pid < 0)
+            return (String){0, NULL};
+
+        if (pid == 0)
+        {
+            close(pipefd[0]);
+            dup2(pipefd[1], STDOUT_FILENO);
+            close(pipefd[1]);
+
+            execlp("jasl_install", "jasl_install", "--stdlib", NULL);
+            std::cerr << "Couldn't find 'jasl_install' on path, please install jasl toolchain completely first.\n";
+            _exit(127);
+        }
+
+        close(pipefd[1]);
+
+        uint64_t capacity = 64;
+        uint64_t length   = 0;
+        char* buffer      = static_cast<char*>(std::malloc(capacity));
+        if (!buffer) return (String){0, NULL};
+
+        int c;
+        while ((c = read(pipefd[0], &buffer[length], 1)) == 1)
+        {
+            length++;
+            if (length == capacity)
+            {
+                capacity *= 2;
+                char* newbuf = static_cast<char*>(std::realloc(buffer, capacity));
+                if (!newbuf)
+                {
+                    free(buffer);
+                    return (String){0, NULL};
+                }
+                buffer = newbuf;
+            }
+        }
+
+        close(pipefd[0]);
+        waitpid(pid, NULL, 0);
+
+        while (length > 0 && (buffer[length - 1] == '\n' || buffer[length - 1] == '\r'))
+            length--;
+
+        String result = c_bytearray_construct(length, (const uint8_t*)buffer);
+        free(buffer);
+        return result;
+    }
 
     struct Pos file_exists(String _str)
     {
