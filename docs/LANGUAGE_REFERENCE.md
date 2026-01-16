@@ -142,6 +142,7 @@ You can use `install` to create symlinks under any directory that is included in
 * [Appendices](#appendices)
     * [Keywords](#appendix-i-keywords)
     * [Operators](#appendix-ii-operators)
+    * [EBNF Notation](#appendix-iii-ebnf-notation)
 
 </td></tr>
 </table>
@@ -214,7 +215,7 @@ fn main() -> void {
 ```
 
 > NOTE: For the sake of simplicity, I will omit the `include`, `module` directives and `main` function
-> definition while giving examples.
+> definition from time to time while giving examples.
 
 ## Compiling Multiple Sources
 
@@ -243,6 +244,7 @@ include "dir/main"
 
 pub fn helperFunc() -> void {
     io::println("Hello From Helper");
+    main::fnInMain();
 }
 
 // main.jasl
@@ -255,6 +257,8 @@ fn main() -> void {
     io::println("Hello From Main");
     script::helperFunc();
 }
+
+pub fn fnInMain() -> void { /*Do Something*/ }
 ```
 
 As you can see, the files have a little circular dependency. However this is not a problem, because
@@ -283,6 +287,7 @@ This is the output you'll get, and if you run the program, you'll see:
 >>> csr -e build/out.jef
 Hello From Main
 Hello From Helper
+Hello From Fn In Main
 ```
 
 Any unused files will simply be ignored.
@@ -305,16 +310,16 @@ module main
 include "io"
 
 fn main() -> void {
-	io::println(add(77, 33));
-	io::println(sub(100, 50));
+	add(77, 33);
+	sub(100, 50);
 }
 
 fn add(x: i32, y: i32) -> i32 {
-	return x + y
+	return x + y;
 }
 
 fn sub(x: i32, y: i32) -> i32 {
-	return x - y
+	return x - y;
 }
 ```
 
@@ -409,6 +414,25 @@ let a:i32= 5;
 let a: i32 = 5;   ---> or this
 ```
 
+Essentially, the `:` is a part of the `variable signature`. The variable definition can be written as:
+
+```rust
+let <signature> [= initialization];
+
+or
+
+let (<signature>, <signature>, ....) [= initialization];
+
+where
+
+<signature> = [mut] <identifier> : [type]
+```
+
+Where the brackets symbolize optional components, and `<x>` or `x` means `x` is mandatory.
+This is precisely the reason why the `:` symbol persists even in multiple returns, or in type
+inference. It indicates a type assignment for the identifier provided, if no type is given, it
+assigns the inferred type.
+
 ### Mutable variables
 
 ```rust
@@ -418,6 +442,9 @@ age = 21;
 
 To change the value of the variable use `=`. In JASL, variables are immutable by default.
 To be able to change the value of the variable, you have to mark it with `mut`.
+
+Mutability is not at type level but at variable level, for now. That means you can mutate immutable
+variables using pointers since they provide unlimited access.
 
 ### Variable Shadowing
 
@@ -446,10 +473,8 @@ float (32 bit)
 and pointers to any of these, including pointers
 ```
 
-These are the only primitive types in JASL, strings are of type `string::String` under
-the stdlib. They are just a wrapper layout around raw VM pointers.
-
-There are no automatic conversions between nothing, not even primitive types.
+There is no implicit conversion in JASL, conversion between types must either be done by
+compiler builtins `ptrcast` and `intcasr`, or by manually writing conversion functions.
 
 ```rust
 let u := 12u32;
@@ -471,6 +496,18 @@ In JASL, strings are just wrappers around raw VM pointers pointing to a block of
 with layout `[4 byte size header][u8 data...]`. However accessing the raw pointer under
 is not directly possible. You can check out the string module in stdlib for more.
 
+Here is the `string::String` layout from stdlib if you are lazy to go check it:
+
+```rust
+//
+// Stack String, Static, No Free.
+// Just a pointer to the constant string.
+//
+pub wrapper layout String {
+    data: void*;
+}
+```
+
 ### Numbers
 
 ```rust
@@ -491,7 +528,7 @@ let c := 12345u32;
 Assigning floating point numbers works the same way pretty much:
 
 ```
-let a := 1.0;
+let a := 1.0; // There is literally a floating point in the literal
 let b := 1f;
 ```
 
@@ -770,8 +807,8 @@ an interface. You'll see it in detail later.
 
 Now, heap layouts are just the same. You can do it in two styles:
 
-1- C style, allocate and set the fields one-by-one,
-2- Use the `set` operator to directly set it's value.
+1- C style, allocate and set the fields one-by-one,  
+2- Use the `set` operator to directly set it's value.  
 
 However for the C style (method 1), the variable, and all the fields must be mutable.
 So I suggest using the second method, it is cleaner.
@@ -1078,17 +1115,17 @@ means you can freely corrupt your program by messing with the stack. You're welc
 
 Since JASL is a low-level (at least I marketed it as one) language, a couple questions may arise about:
 
-1- Alignment
-2- Evaluation Order
-3- Endianness (perhaps)
-4- Calling Convention
-5- Name Mangling
+1- Alignment  
+2- Evaluation Order  
+3- Endianness (perhaps)  
+4- Calling Convention  
+5- Name Mangling  
 
-I have short questions to all of them.
+I have short questions to all of them.  
 
-1- VM RAM is unaligned, everything is packed tightly.
+1- VM RAM is unaligned, everything is packed tightly.  
 
-2- Strictly Left-to-Right, as JASL is read. For example:
+2- Strictly Left-to-Right, as JASL is read. For example:  
 
 ```rust
 value.function1().function2().function3()
@@ -1109,7 +1146,7 @@ value -> function1 -> function2 -> function3
 as UFCS is written. This aligns with the postfix `.&` and `.*` operators too.
 
 3- VM enforces a specific endianness, for now it is big endian. Refer to the [VM page](https://github.com/ysufender/CSR)
-to be sure, it is not a part of JASL.
+to be sure, it is not a part of JASL.  
 
 4- Parameters are passed, and returned on the stack. The caller pushes the parameters
 to the stack, and uses the `cal` instruction. The VM does some frame setting and when
@@ -1117,11 +1154,11 @@ PC is set to the target function, the stack layout is `[Base Pointer][Program Co
 The returns work the same, callee pushes the return values onto stack, and uses the `ret` instruction.
 The VM reverts the frame and at the end the stack layout is `[...returned values...]`. Be aware
 that returned values overwrite the pushed arguments at the end, so essentially they are written
-to the start of the pushed arguments.
+to the start of the pushed arguments.  
 
 Refer to the [VM page](https://github.com/ysufender/CSR) for details.
 
-5- Name mangling is simple, all names are mangled in the following format:
+5- Name mangling is simple, all names are mangled in the following format:  
 
 ```rust
 modulename$$visibility$$membername
@@ -1188,3 +1225,28 @@ Assignment Operators
 Be aware that operators strictly require values of same types on both sides.
 
 Also the logical binary operators are short-circuiting.
+
+## Appendix III: EBNF Notation
+
+The EBNF form given below might not match with the language at any given time, that is because
+compiler is still under development and new features, feature refactorings and rewrites are happening
+day by day.
+
+Use at your own risk.
+
+```rust
+    <expression> ::= <conditional-expression>
+    <conditional-expression> ::= <logical-or-expression>
+    <logical-or-expression> ::= <logical-and-expression> { "||" <logical-and-expression> }
+    <logical-and-expression> ::= <equality-expression> { "&&" <equality-expression> }
+    <equality-expression> ::= <comparsion-expression> { ( "==" | "!=" ) <comparsion-expression> }
+    <comparsion-expression> ::= <additive-expression> { ( ">" | "<" | ">=" | "<=" ) <additive-expression> }
+    <additive-expression> ::= <multiplicative-expression> { ( "+" | "-" ) <multiplicative-expression> }
+    <multiplicative-expression> ::= <unary-expression> { ( "*" | "/" ) <unary-expression> }
+    <unary-expression> ::= ( "-" | "!" ) <unary-expression> | <postfix-expression>
+    <postfix-expression> ::= <primary-expression> { <postfix-suffix> }
+    <postfix-suffix> ::= "." <identifier> | "(" [ <arg-list> ] ")" | "::" <identifier>
+    <arg-list> ::= "{" <expression> { "," <expression> } "}"
+    <primary-expression> ::= <identifier> | <literal> | "(" <expression> ")" | <block-expression>
+    <block-expression> ::= "{" { <statement> } "}"
+```

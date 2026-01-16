@@ -71,10 +71,10 @@ Usage:
         jasl_install [install <symlink_dir>|uninstall <symlink_dir>|--version|--stdlib]
 ```
 
-`install` will create symlinks for `jasl` and `jasl_install` under the given directory
-`uninstall` will remove the symlinks from the given directory
-`version` will print the JASL version as usual
-`stdlib` will print the JASL stdlib path
+`install` will create symlinks for `jasl` and `jasl_install` under the given directory  
+`uninstall` will remove the symlinks from the given directory  
+`version` will print the JASL version as usual  
+`stdlib` will print the JASL stdlib path  
 
 You can use `install` to create symlinks under any directory that is included in path, such as
 `/usr/local/bin` or something, then use `jasl` and `jasl_install` freely.
