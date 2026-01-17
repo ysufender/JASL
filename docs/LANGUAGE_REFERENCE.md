@@ -1235,18 +1235,81 @@ day by day.
 Use at your own risk.
 
 ```rust
-    <expression> ::= <conditional-expression>
+File:
+    <jasl-code> ::= <module-directive> { <function-definition> | <layout-definition> | <variable-definition> | <include-directive> }
+
+Common:
+    <newline> ::= "\r" | "\n"
+    <comment> ::= "//" { <character> } <newline> | "/*" <character> "*/"
+
+    <identifier> ::= ( "_" ( "a"..."z" | "A"..."Z" ) | "a"..."z" ) { "_" | "a"..."z" | "A"..."Z" | "0"..."9" }
+
+    <lvalue> ::= <identifier> { "." <identifier> }
+
+    <custom-typename> ::= "A"..."Z" { "a"..."z" | "_" | "A"..."Z" }
+    <typename> ::= <custom-typename> | ( "i" | "u" ) ( "32" | "8" ) | "float" | "bool" | "void" | <typename> "*"
+
+    <mutable-variable> ::= "mut" <identifier> ":" [ <typename> ]
+    <immutable-variable> ::= <identifier> ":" [ <typename> ]
+    <typed-variable> ::= [ "mut" ] <identifier> ":" <typename>
+    <variable-signature> ::= <mutable-variable> | <immutable-variable>
+
+    <pointer-value> ::= any pointer
+    <variable> ::= any defined variable
+
+Special:
+    <private-field> ::= <typed-variable> ";"
+    <field> ::= "pub" <private-field>
+    <wrapper-layout-definition> ::= [ "pub" ] "wrapper" "layout" <custom-typename> "{" <private-field> { <private-field> } "}"
+    <normal-layout-definition> ::= [ "pub" ] "layout" <custom-typename> "{" <field> { <field> } "}"
+    <layout-definition> ::= <wrapper-layout-definition> | <normal-layout-definition>
+
+    <module-directive> ::= "module" <identifier>
+    <include-directive> ::= "include" '"' <character> { <character> } '"'
+
+    <jasm-il> ::= any acceptable JASM IL code
+    <character> ::= any ASCII character
+    <string-applicable-character> ::= any <character> except '"'
+
+    <referencing> ::= <variable> "." "&"
+    <dereferencing> ::= <pointer-value> "." "*"
+    <memory-writing> ::= <pointer-value> "." "set" "(" <expression> ")" | "set" "(" ( <pointer-value> "," <expression> | <expression-list> ) ")"
+    <offsetting> ::= <pointer-value> "." "offset" "(" <expression> ")" | "offset" "(" ( <pointer-value> "," <expression> | <expression-list> ) ")"
+
+Statement:
+    <statement> ::= <function-definition> | <return> | <assembly> | <variable-definition> | <block> | <conditional> | <while> | <expression-statement> | <break> | <continue> | <defer>
+    <function-definition> ::= [ "pub" ] "fn" <identifier> "(" [ <typed-variable> { "," <typed-variable> } ] ")" "->" ( "(" [ <typename> { "," <typename> } ] ")" | <typename> ) <block>
+    <return> ::= "return" <expression> ";"
+    <assembly> ::= "asm" "{" { <jasm-il> } "}"
+    <variable-definition> ::= [ "pub" ] "let" (
+                                <mutable-variable> [ "=" <expression> ] | <immutable-variable> "=" <expression>
+                                | "(" <mutable-variable> { "," <mutable-variable> } ")" [ "=" <expression> ]
+                                | "(" <immutable-variable> { "," <immutable-variable> } ")" "=" <expression>
+                            ) ";"
+    <block> ::= "{" { <statement> } "}"
+    <conditional> ::= "if" <expression> <block> [ "else" ( <block> | <conditional> ) ]
+    <while> ::= "while" <expression> <block>
+    <expression-statement> ::= ( <function-call> | <assignment-expression> ) ";"
+    <break> ::= "break" ";"
+    <continue> ::= "continue" ";"
+    <defer> ::= "defer" <function-call> ";"
+
+Expression:
+    <expression> ::= <assignment-expression> | <initialization>
+    <assignment-expression> ::= <lvalue> "=" <expression>
     <conditional-expression> ::= <logical-or-expression>
     <logical-or-expression> ::= <logical-and-expression> { "||" <logical-and-expression> }
     <logical-and-expression> ::= <equality-expression> { "&&" <equality-expression> }
-    <equality-expression> ::= <comparsion-expression> { ( "==" | "!=" ) <comparsion-expression> }
-    <comparsion-expression> ::= <additive-expression> { ( ">" | "<" | ">=" | "<=" ) <additive-expression> }
+    <equality-expression> ::= <comparison-expression> { ( "==" | "!=" ) <comparison-expression> }
+    <comparison-expression> ::= <additive-expression> { ( ">" | "<" | ">=" | "<=" ) <additive-expression> }
     <additive-expression> ::= <multiplicative-expression> { ( "+" | "-" ) <multiplicative-expression> }
     <multiplicative-expression> ::= <unary-expression> { ( "*" | "/" ) <unary-expression> }
     <unary-expression> ::= ( "-" | "!" ) <unary-expression> | <postfix-expression>
     <postfix-expression> ::= <primary-expression> { <postfix-suffix> }
-    <postfix-suffix> ::= "." <identifier> | "(" [ <arg-list> ] ")" | "::" <identifier>
-    <arg-list> ::= "{" <expression> { "," <expression> } "}"
-    <primary-expression> ::= <identifier> | <literal> | "(" <expression> ")" | <block-expression>
-    <block-expression> ::= "{" { <statement> } "}"
+    <postfix-suffix> ::= "." <identifier> | "(" [ <expression-list> ] ")" | "::" <identifier>
+    <primary-expression> ::= <identifier> | <literal> | "(" <expression> ")" | <expression-list>
+    <expression-list> ::= "{" [ <expression> { "," <expression> } ] "}"
+    <literal> ::= '"' { <string-applicable-character> } '"' | <integer> [ <integer-suffix> ] | <integer> "." <integer> | "nullptr"
+    <initialization> ::= <custom-typename> "(" <expression> { "," <expression> } ")"
+    <function-call> ::= [ <expression> "." ] <expression> "(" [ <expression> { "," <expression> } ] ")"
 ```
