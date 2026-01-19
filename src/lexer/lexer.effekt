@@ -3,6 +3,7 @@ module lexer
 import process
 
 import context/context
+import native/native
 
 def show(t: PreprocessorKeywordType): String = t match {
     case Module() => "module"
@@ -214,7 +215,7 @@ def lexer_report[T]() { prog: () => T / {LexerError, InternalError} }: T / {Comp
         println(spaces ++ "^")
         println(spaces ++ helpLine)
         //println("        " ++ msg)
-        exit(1)
+        exit(LEXER_ERROR)
         <>
     }}
 }

@@ -346,7 +346,7 @@ def parser_report[T] { prog: () => T / ParserError }: T / {CompilerSettingsRegis
         println("\n        " ++ errLine)
         println(spaces ++ "^")
         println(spaces ++ helpLine)
-        exit(1)
+        exit(PARSER_ERROR)
     }}
 }
 

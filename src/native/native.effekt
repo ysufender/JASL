@@ -55,3 +55,14 @@ extern def RunByteCode(filePath: String): Int =
         ret %Int %r
     """
 */
+
+val OK = 0
+val INVALID_ARGUMENT = 1
+val NO_ENTRY_POINT = 50
+val LEXER_ERROR = 51
+val PARSER_ERROR = 52
+val ILGEN_ERROR = 53
+val BACKEND_ERROR = 54
+val COMPILER_INTERNAL_ERROR = 55
+val IO_ERROR = 74
+val COMMAND_NOT_FOUND = 127

@@ -26,7 +26,7 @@ __DEBUG_END__
 __RELEASE_START__
     println("\tVersion: __VERSION__")
 __RELEASE_END__
-    println("\tUsage:\n\tjasl <input_file> [flags]")
+    println("\tUsage:\n\tjaslc <input_file> [flags]")
     println("\t\tFlags:")
     println("\t\t--help                  : print this help message\n")
     println("\t\t--typecheck             : do not compile or assemble, typecheck only")
@@ -48,7 +48,7 @@ def parseCommandLine(): String / CompilerSettingsRegister = {
 
     if (argc <= 1) {
         printHelp()
-        exit(0)
+        exit(OK)
     }
 
     def shift(): String = args match {
@@ -58,14 +58,14 @@ def parseCommandLine(): String / CompilerSettingsRegister = {
         }
         case Nil() => {
             println("Unexpected end of arguments at command line. Check 'jasl --help' to see the correct use.")
-            exit(1)
+            exit(INVALID_ARGUMENT)
         }
     }
 
     while (not(args.isEmpty)) shift() match {
         case "--help" => {
             printHelp()
-            exit(0)
+            exit(OK)
         }
         case "--typecheck" => do typeCheckOnly()
         case "--compile" => do compileOnly()
@@ -77,9 +77,10 @@ def parseCommandLine(): String / CompilerSettingsRegister = {
             case someOther => 
                 if (someOther.startsWith("--")) {
                     args = Cons(someOther, args)
+                    do releaseBuild(true)
                 } else {
                     println("Expected a flag or boolean here, got '" ++ someOther ++ "' instead.")
-                    exit(1)
+                    exit(INVALID_ARGUMENT)
                 }
         }
         case "--output" => do setOutputFile(shift())
@@ -92,13 +93,13 @@ def parseCommandLine(): String / CompilerSettingsRegister = {
                 file = someOther
             else {
                 println("Unknown command line argument '" ++ someOther ++ "'. See 'jasl --help' for correct use.")
-                exit(0)
+                exit(INVALID_ARGUMENT)
             }
     }
 
     if (file.length == 0) {
         println("No input files were given.")
-        exit(0)
+        exit(INVALID_ARGUMENT)
     }
 
     file
@@ -129,7 +130,7 @@ def main() = {
     var stdlibPath = read_stdlib_path()
     if (stdlibPath.length == 0) {
         println("Couldn't get the stdlib path using 'jasl_install'. Make sure 'jasl_install' executable is on your path.")
-        exit(127)
+        exit(COMMAND_NOT_FOUND)
     }
     do addIncludePath(stdlibPath)
 
@@ -153,7 +154,7 @@ def main() = {
         println("                fn main() -> void {")
         println("                ")
         println("                }")
-        exit(1)
+        exit(NO_ENTRY_POINT)
     }
 
 __DEBUG_START__
@@ -186,7 +187,7 @@ __DEBUG_END__
     if (do getPipelineMode() is TypeCheckOnly())
     {
         println("Finished typechecking.")
-        exit(0)
+        exit(OK)
     }
 
     // register global variable ASTs, the AST register is LIFO
@@ -200,13 +201,14 @@ __DEBUG_END__
 
     if (do getPipelineMode() is ILOnly()) {
         println("Finished generating IL.")
-        exit(0)
+        exit(OK)
     }
 
     println("Making an assemble call...")
     if (assemble_il()) {
         println("Finished compiling.")
         println("Build files written to 'build/'.")
+        exit(OK)
 /*        if (do getFlag("run")) {
             val exitCode = RunByteCode(do getOutFile())
             if (exitCode != 0) {
@@ -216,6 +218,7 @@ __DEBUG_END__
 */
     } else {
         println("Compilation terminated.")
+        exit(BACKEND_ERROR)
     }
 }
 

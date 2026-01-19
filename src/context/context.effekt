@@ -39,7 +39,7 @@ def internalErrorHandler[T]{ prog: () => T / InternalError }: T = {
     with InternalError { (msg, file, line) => {
         println("[INTERNAL ERROR " ++ file ++ ":" ++ line ++ "] The program ran into an unexpected internal error. Please report this issue to the author.")
         println("        Internal Message: " ++ msg)
-        exit(1)
+        exit(COMPILER_INTERNAL_ERROR)
     }}
 }
 
@@ -418,7 +418,7 @@ def openRead(file: String): String / {InternalError, CompilerSettingsRegister} =
     with Exception[IOError] {
         def raise(_, _) = {
             println("Couldn't open file at path '" ++ file ++ "'.")
-            exit(1)
+            exit(IO_ERROR)
         }
     }
 }
@@ -429,7 +429,7 @@ def openWrite(file: String, content: String): Unit / {InternalError, CompilerSet
     with Exception[IOError] {
         def raise(_, _) = {
             println("Couldn't open file at path '" ++ file ++ "'.")
-            exit(1)
+            exit(IO_ERROR)
         }
     }
 }
@@ -644,7 +644,7 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
                 println("[WARNING] " ++ currentFile ++ " at ???: User defined function '" ++ fn.name ++ "' will be shadowed by the built-in '" ++ fn.name ++ "'. Use a qualified name ('" ++ currentModule ++ "::" ++ fn.name ++ "') to use the function.")
             } else if (oldInf.functions.contains(fn.name)) {
                 println("[PARSER ERROR] " ++ currentFile ++ " at ???: Multiple definitions of '" ++ fn.name ++ "' in module '" ++ currentModule ++ "'.")
-                exit(1)
+                exit(PARSER_ERROR)
             }
 
             val newInf = ModuleInfo(
@@ -663,7 +663,7 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
 
             /*if (oldInf.layouts.contains(layout.name)) {
                 println("[PARSER ERROR] " ++ currentFile ++ " at ???: Multiple definitions of '" ++ layout.name ++ "' in module '" ++ currentModule ++ "'.")
-                exit(1)
+                exit(PARSER_ERROR)
             }*/
 
             val newInf = ModuleInfo(
@@ -682,7 +682,7 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
 
             if (oldInf.variables.contains(variable.name)) {
                 println("[PARSER ERROR] " ++ currentFile ++ " at ???: Multiple definitions of '" ++ variable.name ++ "' in module '" ++ currentModule ++ "'.")
-                exit(1)
+                exit(PARSER_ERROR)
             }
 
             val newInf = ModuleInfo(

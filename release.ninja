@@ -88,7 +88,7 @@ build $builddir/jasm_wrapper.o: cxx $libdir/jasm/jasm.cpp
     CFLAGS = $CFLAGS -I lib/jasm/include -I lib/effekt -std=c++20
 #build $builddir/csr_wrapper.o: cc $libdir/csr/csr.c | $libdir/csr/csr.h
 
-build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a
+build $builddir/jaslc: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a
 #build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a $builddir/csr_wrapper.o $libdir/csr/libcsr.a
 # build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o  $builddir/jasm_wrapper.o
 

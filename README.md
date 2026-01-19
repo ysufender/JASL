@@ -35,49 +35,61 @@ If you want more complicated examples, you can check the JASL stdlib under `lib/
 
 ## Quickstart
 
-### Installation
+### Building From the Source
 
-You can either grab the compiled binaries from the release section (if there are any), or build JASL from source. I recommend
-building from source since it's pretty easy.
+The cleanest way to get JASL is to build it from source, currently Windows/Mac builds
+are unsupported and/or untested. The compilation speed depends on the performance
+of the [Effekt](https://effekt-lang.org/) compiler, the language that JASL compiler is written in.
 
-#### Building From The Source
-
-##### Prerequisites
+#### Prerequisites
 
 - Builds are only tested on a Linux machine, Windows/Mac builds/crossbuilds are not supported.
 - Ninja Makefiles 1.11+
 - Effekt 0.58+
 - C++20 and C17 compatible compilers (I used gcc/g++, you might need to tweak the ninja files otherwise)
+- LLVM 15
 
 The Effekt version must be exactly the same for a smooth experience. Since it is a research language I can't promise for any kind
 of backwards compatibility.
 
-##### Building
+#### Building
 
-Just run `ninja -f <configuration>.ninja` and the final executable `jasl` will be written to `$SOURCE_DIR/build/$CONFIGURATION/`
+```bash
+git clone https://github.com/ysufender/JASL
+ninja -f release.ninja
+```
 
-> WARNING:  
-> Compilation times on release builds are LONG, due to optimizations done by the Effekt compiler.  
+OR
 
-##### Setting Up the Environment
+```bash
+git clone https://github.com/ysufender/JASL
+ninja -f debug.ninja
+```
 
-After a successful build, there will be an executable named `jasl_install` under `build` directory.
+The resulting binaries will be written to `$SOURCEDIR/build/<configuration>/`
+
+#### Setting Up the Environment
+
+One of the resulting binaries is `jasl_install`, which is a compile-time hardcoded executable for managing
+`jaslc` executable and stdlib paths. The compiler relies on `jasl_install` to detect the stdlib path, and will error out
+if it can't find it on the path.
+
 Here is the helper text of the current `jasl_install`:
 
 ```
-JASL Installation Manager
+JASL Installation Manager 0.1.0
 
 Usage:
         jasl_install [install <symlink_dir>|uninstall <symlink_dir>|--version|--stdlib]
 ```
 
-`install` will create symlinks for `jasl` and `jasl_install` under the given directory  
-`uninstall` will remove the symlinks from the given directory  
-`version` will print the JASL version as usual  
-`stdlib` will print the JASL stdlib path  
+`install` will create symlinks for `jaslc` and `jasl_install` under the given directory
+`uninstall` will remove the symlinks from the given directory
+`version` will print the JASL version as usual
+`stdlib` will print the JASL stdlib path
 
 You can use `install` to create symlinks under any directory that is included in path, such as
-`/usr/local/bin` or something, then use `jasl` and `jasl_install` freely.
+`/usr/local/bin` or something, then use `jaslc` and `jasl_install` freely.
 
 ### Basic CLI Usage
 
@@ -85,9 +97,9 @@ Here is the helper text from the current version of JASL:
 
 ```
 The JASL Compiler
-        Version: 0.1.0
+        Version: 0.1.0-debug
         Usage:
-        jasl <input_file> [flags]
+        jaslc <input_file> [flags]
                 Flags:
                 --help                  : print this help message
 

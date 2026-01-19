@@ -4,7 +4,7 @@
 
 namespace fs = std::filesystem;
 
-constexpr auto BUILD_OUTPUT = "__SOURCE_DIR__/build/__CONFIG__/jasl";
+constexpr auto BUILD_OUTPUT = "__SOURCE_DIR__/build/__CONFIG__/jaslc";
 constexpr auto SELF_NAME    = "__SOURCE_DIR__/build/jasl_install";
 constexpr auto JASL_VERSION = "__VERSION__";
 constexpr auto JASL_STDLIB  = "__SOURCE_DIR__/lib/jasl";
@@ -25,6 +25,8 @@ void create_symlink(const fs::path& source, const fs::path& target) {
 void remove_symlink(const fs::path& path) {
     std::error_code ec;
     if (fs::exists(path, ec) && fs::is_symlink(path, ec)) fs::remove(path, ec);
+
+    if (ec) { std::cerr << "Failed to remove symlink: " << ec.message() << "\n"; exit(1); }
 }
 
 void install(const fs::path& dir) {

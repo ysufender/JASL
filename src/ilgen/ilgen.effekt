@@ -36,7 +36,7 @@ def ilgen_report[T] { prog: () => T / ILGenError }: T / {CompilerSettingsRegiste
         println("\n        " ++ errLine)
         println(spaces ++ "^")
         println(spaces ++ helpLine)
-        exit(1)
+        exit(ILGEN_ERROR)
     }}
 }
 

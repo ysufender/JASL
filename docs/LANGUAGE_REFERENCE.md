@@ -47,6 +47,7 @@ of the [Effekt](https://effekt-lang.org/) compiler, the language that JASL compi
 - Ninja Makefiles 1.11+
 - Effekt 0.58+
 - C++20 and C17 compatible compilers (I used gcc/g++, you might need to tweak the ninja files otherwise)
+- LLVM 15
 
 The Effekt version must be exactly the same for a smooth experience. Since it is a research language I can't promise for any kind
 of backwards compatibility.
@@ -70,7 +71,7 @@ The resulting binaries will be written to `$SOURCEDIR/build/<configuration>/`
 #### Setting Up the Environment
 
 One of the resulting binaries is `jasl_install`, which is a compile-time hardcoded executable for managing
-`jasl` executable and stdlib paths. The compiler relies on `jasl_install` to detect the stdlib path, and will error out
+`jaslc` executable and stdlib paths. The compiler relies on `jasl_install` to detect the stdlib path, and will error out
 if it can't find it on the path.
 
 Here is the helper text of the current `jasl_install`:
@@ -82,13 +83,13 @@ Usage:
         jasl_install [install <symlink_dir>|uninstall <symlink_dir>|--version|--stdlib]
 ```
 
-`install` will create symlinks for `jasl` and `jasl_install` under the given directory
+`install` will create symlinks for `jaslc` and `jasl_install` under the given directory
 `uninstall` will remove the symlinks from the given directory
 `version` will print the JASL version as usual
 `stdlib` will print the JASL stdlib path
 
 You can use `install` to create symlinks under any directory that is included in path, such as
-`/usr/local/bin` or something, then use `jasl` and `jasl_install` freely.
+`/usr/local/bin` or something, then use `jaslc` and `jasl_install` freely.
 
 ## Table of Contents
 
@@ -142,7 +143,7 @@ You can use `install` to create symlinks under any directory that is included in
 * [Appendices](#appendices)
     * [Keywords](#appendix-i-keywords)
     * [Operators](#appendix-ii-operators)
-    * [EBNF Notation](#appendix-iii-ebnf-notation)
+    * [BNF Notation](#appendix-iii-ebnf-notation)
 
 </td></tr>
 </table>
@@ -159,9 +160,9 @@ fn main() -> void {
 }
 ```
 
-Save this snippet into a file named `hello.jasl`. Now do: `jasl hello.jasl`.
+Save this snippet into a file named `hello.jasl`. Now do: `jaslc hello.jasl`.
 
-> That is assuming you have successfully added `jasl` and `jasl_install` executables to the PATH of your system,
+> That is assuming you have successfully added `jaslc` and `jasl_install` executables to the PATH of your system,
 or used `jasl_install` to create symlinks to somewhere on the PATH of your system.
 > If you haven't yet, you have to type the path to JASL manually.
 
@@ -187,7 +188,7 @@ Once you have the runtime, you can execute the output by doing `csr -e build/out
 Hello World
 ```
 
-See `jasl --help` for all supported commands.
+See `jaslc --help` for all supported commands.
 
 From the example above, you can see that functions are declared with the `fn` keyword.
 The return type is specified after the function name, after an arrow `->`.
@@ -267,7 +268,7 @@ parsed in the second pass, the program won't run into a circular dependency prob
 it by doing:
 
 ```
-jasl script.jasl
+jaslc script.jasl
 ```
 
 and the compiler will automatically detect that `dir/main.jasl` was used, process it and write the
@@ -469,6 +470,8 @@ i8  i32
 u8  u32
 
 float (32 bit)
+
+void
 
 and pointers to any of these, including pointers
 ```
@@ -1121,7 +1124,7 @@ Since JASL is a low-level (at least I marketed it as one) language, a couple que
 4- Calling Convention  
 5- Name Mangling  
 
-I have short questions to all of them.  
+I have short answers to all of them.  
 
 1- VM RAM is unaligned, everything is packed tightly.  
 
@@ -1198,7 +1201,8 @@ See also [JASL Types](#jasl-types).
 
 ## Appendix II: Operators
 
-This lists operators for [primitive types](#primitive-types) only.
+This list operators is for [primitive types](#primitive-types) only, except for
+the assignment operator.
 
 ```rust
 +    sum                    integers, floats
@@ -1210,8 +1214,8 @@ This lists operators for [primitive types](#primitive-types) only.
 &&   logical AND            bools
 ||   logical OR             bools
 
-==   Equality               all primitives
-!=   Inequality             all primitives
+==   Equality               all primitives, except void
+!=   Inequality             all primitives, except void
 
 <=   Lesser Equal           integers, floats
 >=   Greater Equal          integers, floats
@@ -1222,94 +1226,122 @@ Assignment Operators
 =
 ```
 
-Be aware that operators strictly require values of same types on both sides.
+Be aware that operators strictly require values of same types on both sides, as per
+the "no implicity conversions" rule.
 
 Also the logical binary operators are short-circuiting.
 
-## Appendix III: EBNF Notation
+## Appendix III: BNF Notation
 
-The EBNF form given below might not match with the language at any given time, that is because
+The BNF form given below might not match with the language at any given time, that is because
 compiler is still under development and new features, feature refactorings and rewrites are happening
-day by day.
+day by day, and that the parser as well as the lexer are hand-rolled, so I write this BNF additionally.
 
-Use at your own risk.
+Use at your own risk, the valid syntax might not be semantically correct, though I tried my best
+to set up the BNF so that it'll also be semantically correct.
 
-```rust
+```
 File:
-    <jasl-code> ::= <module-directive> { <function-definition> | <layout-definition> | <variable-definition> | <include-directive> }
+    jasl_code = ModuleDirective , { FunctionDefinition | LayoutDefinition | VariableDefinition | IncludeDirective } ;
 
 Common:
-    <newline> ::= "\r" | "\n"
-    <comment> ::= "//" { <character> } <newline> | "/*" <character> "*/"
+    newline = "\r" | "\n" ;
 
-    <identifier> ::= ( "_" ( "a"..."z" | "A"..."Z" ) | "a"..."z" ) { "_" | "a"..."z" | "A"..."Z" | "0"..."9" }
+    comment = "//" , { character } , newline
+            | "/*" , { character } , "*/" ;
 
-    <lvalue> ::= <identifier> { "." <identifier> }
+    identifier = ( "_" , ( "a".."z" | "A".."Z" ) | "a".."z" ) , { "_" | "a".."z" | "A".."Z" | "0".."9" } ;
 
-    <custom-typename> ::= "A"..."Z" { "a"..."z" | "_" | "A"..."Z" }
-    <typename> ::= <custom-typename> | ( "i" | "u" ) ( "32" | "8" ) | "float" | "bool" | "void" | <typename> "*"
+    lvalue = identifier , { "." , identifier } ;
 
-    <mutable-variable> ::= "mut" <identifier> ":" [ <typename> ]
-    <immutable-variable> ::= <identifier> ":" [ <typename> ]
-    <typed-variable> ::= [ "mut" ] <identifier> ":" <typename>
-    <variable-signature> ::= <mutable-variable> | <immutable-variable>
+    custom_typename = "A".."Z" , { "a".."z" | "_" | "A".."Z" } ;
+    typename = custom_typename
+             | ( "i" | "u" ) , ( "32" | "8" )
+             | "float" | "bool" | "void"
+             | typename , "*" ;
 
-    <pointer-value> ::= any pointer
-    <variable> ::= any defined variable
+    mutable_variable = "mut" , identifier , ":" , [ typename ] ;
+    immutable_variable = identifier , ":" , [ typename ] ;
+    typed_variable = [ "mut" ] , identifier , ":" , typename ;
+    variable_signature = mutable_variable | immutable_variable ;
+
+    pointer_value = /* any pointer */;
+    variable = /* any defined variable */ ;
 
 Special:
-    <private-field> ::= <typed-variable> ";"
-    <field> ::= "pub" <private-field>
-    <wrapper-layout-definition> ::= [ "pub" ] "wrapper" "layout" <custom-typename> "{" <private-field> { <private-field> } "}"
-    <normal-layout-definition> ::= [ "pub" ] "layout" <custom-typename> "{" <field> { <field> } "}"
-    <layout-definition> ::= <wrapper-layout-definition> | <normal-layout-definition>
+    private_field = typed_variable , ";" ;
+    field = "pub" , private_field ;
+    wrapper_layout_definition = [ "pub" ] , "wrapper" , "layout" , custom_typename , "{" , { private_field } , "}" ;
+    normal_layout_definition = [ "pub" ] , "layout" , custom_typename , "{" , { field } , "}" ;
+    layout_definition = wrapper_layout_definition | normal_layout_definition ;
 
-    <module-directive> ::= "module" <identifier>
-    <include-directive> ::= "include" '"' <character> { <character> } '"'
+    module_directive = "module" , identifier ;
+    include_directive = "include" , '"' , { character } , '"' ;
 
-    <jasm-il> ::= any acceptable JASM IL code
-    <character> ::= any ASCII character
-    <string-applicable-character> ::= any <character> except '"'
+    jasm_il = /* any acceptable JASM IL code */;
+    character = /* any ASCII character */;
+    string_applicable_character = /* any character except '"' */ ;
 
-    <referencing> ::= <variable> "." "&"
-    <dereferencing> ::= <pointer-value> "." "*"
-    <memory-writing> ::= <pointer-value> "." "set" "(" <expression> ")" | "set" "(" ( <pointer-value> "," <expression> | <expression-list> ) ")"
-    <offsetting> ::= <pointer-value> "." "offset" "(" <expression> ")" | "offset" "(" ( <pointer-value> "," <expression> | <expression-list> ) ")"
+    referencing = variable , "." , "&" ;
+    dereferencing = pointer_value , "." , "*" ;
+    memory_writing = pointer_value , "." , "set" , "(" , expression , ")"
+                   | "set" , "(" , ( pointer_value , "," , expression | expression_list ) , ")" ;
+    offsetting = pointer_value , "." , "offset" , "(" , expression , ")"
+               | "offset" , "(" , ( pointer_value , "," , expression | expression_list ) , ")" ;
 
 Statement:
-    <statement> ::= <function-definition> | <return> | <assembly> | <variable-definition> | <block> | <conditional> | <while> | <expression-statement> | <break> | <continue> | <defer>
-    <function-definition> ::= [ "pub" ] "fn" <identifier> "(" [ <typed-variable> { "," <typed-variable> } ] ")" "->" ( "(" [ <typename> { "," <typename> } ] ")" | <typename> ) <block>
-    <return> ::= "return" <expression> ";"
-    <assembly> ::= "asm" "{" { <jasm-il> } "}"
-    <variable-definition> ::= [ "pub" ] "let" (
-                                <mutable-variable> [ "=" <expression> ] | <immutable-variable> "=" <expression>
-                                | "(" <mutable-variable> { "," <mutable-variable> } ")" [ "=" <expression> ]
-                                | "(" <immutable-variable> { "," <immutable-variable> } ")" "=" <expression>
-                            ) ";"
-    <block> ::= "{" { <statement> } "}"
-    <conditional> ::= "if" <expression> <block> [ "else" ( <block> | <conditional> ) ]
-    <while> ::= "while" <expression> <block>
-    <expression-statement> ::= ( <function-call> | <assignment-expression> ) ";"
-    <break> ::= "break" ";"
-    <continue> ::= "continue" ";"
-    <defer> ::= "defer" <function-call> ";"
+    statement = FunctionDefinition | Return | Assembly | VariableDefinition | Block | Conditional | While | ExpressionStatement | Break | Continue | Defer ;
+
+    FunctionDefinition = [ "pub" ] , "fn" , identifier , "(" , [ typed_variable , { "," , typed_variable } ] , ")"
+                         , "->" , ( "(" , [ typename , { "," , typename } ] , ")" | typename ) , Block ;
+
+    Return = "return" , expression , ";" ;
+    Assembly = "asm" , "{" , { jasm_il } , "}" ;
+
+    VariableDefinition =
+        [ "pub" ] , "let" , ( 
+            mutable_variable , [ "=" , expression ]
+          | immutable_variable , "=" , expression
+          | "(" , mutable_variable , { "," , mutable_variable } , ")" , [ "=" , expression ]
+          | "(" , immutable_variable , { "," , immutable_variable } , ")" , "=" , expression
+        ) , ";" ;
+
+    Block = "{" , { statement } , "}" ;
+
+    Conditional = "if" , expression , Block , [ "else" , ( Block | Conditional ) ] ;
+
+    While = "while" , expression , Block ;
+
+    ExpressionStatement = ( FunctionCall | AssignmentExpression ) , ";" ;
+
+    Break = "break" , ";" ;
+    Continue = "continue" , ";" ;
+    Defer = "defer" , FunctionCall , ";" ;
 
 Expression:
-    <expression> ::= <assignment-expression> | <initialization>
-    <assignment-expression> ::= <lvalue> "=" <expression>
-    <conditional-expression> ::= <logical-or-expression>
-    <logical-or-expression> ::= <logical-and-expression> { "||" <logical-and-expression> }
-    <logical-and-expression> ::= <equality-expression> { "&&" <equality-expression> }
-    <equality-expression> ::= <comparison-expression> { ( "==" | "!=" ) <comparison-expression> }
-    <comparison-expression> ::= <additive-expression> { ( ">" | "<" | ">=" | "<=" ) <additive-expression> }
-    <additive-expression> ::= <multiplicative-expression> { ( "+" | "-" ) <multiplicative-expression> }
-    <multiplicative-expression> ::= <unary-expression> { ( "*" | "/" ) <unary-expression> }
-    <unary-expression> ::= ( "-" | "!" ) <unary-expression> | <postfix-expression>
-    <postfix-expression> ::= <primary-expression> { <postfix-suffix> }
-    <postfix-suffix> ::= "." <identifier> | "(" [ <expression-list> ] ")" | "::" <identifier>
-    <primary-expression> ::= <identifier> | <literal> | "(" <expression> ")" | <expression-list>
-    <expression-list> ::= "{" [ <expression> { "," <expression> } ] "}"
-    <literal> ::= '"' { <string-applicable-character> } '"' | <integer> [ <integer-suffix> ] | <integer> "." <integer> | "nullptr"
-    <initialization> ::= <custom-typename> "(" <expression> { "," <expression> } ")"
-    <function-call> ::= [ <expression> "." ] <expression> "(" [ <expression> { "," <expression> } ] ")"
+    expression = AssignmentExpression | Initialization ;
+
+    AssignmentExpression = lvalue , "=" , expression ;
+
+    ConditionalExpression = LogicalOrExpression ;
+
+    LogicalOrExpression = LogicalAndExpression , { "||" , LogicalAndExpression } ;
+    LogicalAndExpression = EqualityExpression , { "&&" , EqualityExpression } ;
+    EqualityExpression = ComparisonExpression , { ( "==" | "!=" ) , ComparisonExpression } ;
+    ComparisonExpression = AdditiveExpression , { ( ">" | "<" | ">=" | "<=" ) , AdditiveExpression } ;
+    AdditiveExpression = MultiplicativeExpression , { ( "+" | "-" ) , MultiplicativeExpression } ;
+    MultiplicativeExpression = UnaryExpression , { ( "*" | "/" ) , UnaryExpression } ;
+    UnaryExpression = ( "-" | "!" ) , UnaryExpression | PostfixExpression ;
+    PostfixExpression = PrimaryExpression , { PostfixSuffix } ;
+    PostfixSuffix = "." , identifier | "(" , [ ExpressionList ] , ")" | "::" , identifier ;
+    PrimaryExpression = identifier | literal | "(" , expression , ")" | ExpressionList ;
+    ExpressionList = "{" , [ expression , { "," , expression } ] , "}" ;
+
+    literal = '"' , { string_applicable_character } , '"' 
+            | integer , [ integer_suffix ]
+            | integer , "." , integer
+            | "nullptr" ;
+
+    Initialization = custom_typename , "(" , expression , { "," , expression } , ")" ;
+    FunctionCall = [ expression , "." ] , expression , "(" , [ expression , { "," , expression } ] , ")" ;
 ```
