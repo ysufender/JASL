@@ -327,6 +327,6 @@ At the end, the Parser has:
 The include order, hence the parsing order, of the files affect the generated AST ordering. This effect is
 purely structural and guaranteed to be semantically equivalent.
 
-#### IL Generation
+### IL Generation
 
 Documentation is WIP

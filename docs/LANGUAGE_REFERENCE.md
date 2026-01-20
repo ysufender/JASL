@@ -143,7 +143,7 @@ You can use `install` to create symlinks under any directory that is included in
 * [Appendices](#appendices)
     * [Keywords](#appendix-i-keywords)
     * [Operators](#appendix-ii-operators)
-    * [BNF Notation](#appendix-iii-ebnf-notation)
+    * [EBNF Notation](#appendix-iii-ebnf-notation)
 
 </td></tr>
 </table>
@@ -1231,7 +1231,7 @@ the "no implicity conversions" rule.
 
 Also the logical binary operators are short-circuiting.
 
-## Appendix III: BNF Notation
+## Appendix III: EBNF Notation
 
 The BNF form given below might not match with the language at any given time, that is because
 compiler is still under development and new features, feature refactorings and rewrites are happening
