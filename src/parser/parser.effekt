@@ -941,7 +941,6 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
             case Keyword(Wrapper()) => handleWrapper(false)
             case Keyword(Layout()) => handleLayout(false, false)
             case EOF() => ()
-            case Keyword(Defer()) => do ParserError("Defer statements at top-level are not allowed.", token.position)
             case _ => do ParserError("Unexpected token '" ++ token.text ++ "' at top-level.", token.position)
         }
     }
@@ -1118,7 +1117,7 @@ def evalType(tl: List[Expression]): List[Type] / {InternalError, TokenRequest, P
 }
 
 def handleFunctionDef(): Statement / {Defer, LoopHandler, GlobalVariableRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
-    // non-top level checks are already done by prepass
+    // non top-level checks are already done by prepass
     if (not(do isTopLevel()))
         do ParserError("Function definitions in non top-level contexts are not permitted.", (do previous()).position)
 
@@ -1510,6 +1509,9 @@ def handleDefer(): Statement / {Defer, GlobalVariableRegister, FunctionOwnership
     with noLoop;
 
     val pos = do previous().position
+
+    if (do isTopLevel())
+        do ParserError("Defer statements at top-level are not allowed.", token.position)
 
     // do ParserError("Defer statements are not supported yet due to my skill issue.", pos)
 

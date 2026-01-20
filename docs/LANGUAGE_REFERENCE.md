@@ -1175,7 +1175,7 @@ this point, apart from its module, visibility and name.
 
 ## Appendix I: Keywords
 
-JASL has 17 reserved keywords (1 of them is a literal):
+JASL has 17 reserved keywords (2 of them are literals):
 
 ```rust
 asm
