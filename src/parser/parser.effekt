@@ -436,12 +436,26 @@ def contextHandler[T](_context: ParserContext) { prog: () => T / ParserContextRe
     var context = _context
     var stackIndex: Int = _context.stackIndex
 
-    def _getVar(name: QualifiedName, ctx: ParserContext): VariableSignature / {ParserError, CompilerContextRequest} = ctx.variables.get(name.name) match {
+    /*def _getVar(name: QualifiedName, ctx: ParserContext): VariableSignature / {ParserError, CompilerContextRequest} = ctx.variables.get(name.name) match {
         case Some(sign) => sign
         case None() => ctx.parent match {
             case Some(parent) => _getVar(name, parent)
             case None() => do getVariableSignature(name) match {
                 case Some(sign) => sign
+                case None() => do ParserError("Given variable '" ++ name.show ++ "' doesn't exists in the current context.", (do previous()).position)
+            }
+        }
+    }*/
+
+    def _getVar(name: QualifiedName, ctx: ParserContext): VariableSignature / {ParserError, CompilerContextRequest} = name.mod match {
+        case Some(_) => do getVariableSignature(name) match {
+            case Some(sign) => sign
+            case None() => do ParserError("Couldn't find variable " ++ name.show ++ "' in the namespace. Did you perhaps mean '" ++ name.name ++ "' without resolution?", (do previous()).position)
+        }
+        case None() => ctx.variables.get(name.name) match {
+            case Some(sign) => sign
+            case None() => ctx.parent match {
+                case Some(parent) => _getVar(name, parent)
                 case None() => do ParserError("Given variable '" ++ name.show ++ "' doesn't exists in the current context.", (do previous()).position)
             }
         }
@@ -940,6 +954,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
             case Keyword(Let()) => handleLet(false)
             case Keyword(Wrapper()) => handleWrapper(false)
             case Keyword(Layout()) => handleLayout(false, false)
+            case Keyword(Defer()) => do ParserError("Defer statements are not allowed in top-level contexts.", token.position)
             case EOF() => ()
             case _ => do ParserError("Unexpected token '" ++ token.text ++ "' at top-level.", token.position)
         }
@@ -1510,8 +1525,9 @@ def handleDefer(): Statement / {Defer, GlobalVariableRegister, FunctionOwnership
 
     val pos = do previous().position
 
-    if (do isTopLevel())
-        do ParserError("Defer statements at top-level are not allowed.", token.position)
+/*    if (do isTopLevel())
+        do ParserError("Defer statements at top-level are not allowed.", pos)
+*/
 
     // do ParserError("Defer statements are not supported yet due to my skill issue.", pos)
 
@@ -1731,9 +1747,7 @@ def parsePrimary(): Expression / {GlobalVariableRegister, FunctionOwnership, Ret
             case Keyword(Fn()) => Literal(TypeLiteral(makeFunctionType()), token.position)
             case _ => do ParserError("Expected expression, got unexpected token '" ++ token.text ++ "'", token.position)
         }
-    } with Exception[WrongFormat] {
-        def raise(_, _) = do ParserError("The number format is invalid.", (do previous()).position)
-    }
+    } with fail { () => do ParserError("The number format is invalid.", (do previous()).position) }
 }
 
 def parsePostfix(): Expression / {GlobalVariableRegister, FunctionOwnership, ReturnTypeRegister, InternalError, TokenRequest, ParserError, ParserContextRequest, CompilerContextRequest} = {
@@ -1946,7 +1960,7 @@ def parseFactor(): Expression / {GlobalVariableRegister, FunctionOwnership, Retu
             expr.evalType
             recurse(expr)
         }
-        case Symbol(Asterix()) => {
+        case Symbol(Asterisk()) => {
             do advance()
             val expr = Binary(Multiplication(expr, parseUnary()), (do previous()).position)
             expr.evalType

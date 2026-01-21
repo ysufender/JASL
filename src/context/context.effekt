@@ -40,6 +40,7 @@ def internalErrorHandler[T]{ prog: () => T / InternalError }: T = {
         println("[INTERNAL ERROR " ++ file ++ ":" ++ line ++ "] The program ran into an unexpected internal error. Please report this issue to the author.")
         println("        Internal Message: " ++ msg)
         exit(COMPILER_INTERNAL_ERROR)
+        <>
     }}
 }
 
@@ -151,7 +152,7 @@ type SymbolType {
     DoubleColon()
     Arrow()
     Assign()
-    Asterix()
+    Asterisk()
     LessSym()
     GreatSym()
     LessEq()

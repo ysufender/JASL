@@ -45,7 +45,7 @@ of the [Effekt](https://effekt-lang.org/) compiler, the language that JASL compi
 
 - Builds are only tested on a Linux machine, Windows/Mac builds/crossbuilds are not supported.
 - Ninja Makefiles 1.11+
-- Effekt 0.58+
+- Effekt 0.59
 - C++20 and C17 compatible compilers (I used gcc/g++, you might need to tweak the ninja files otherwise)
 - LLVM 15
 
@@ -449,6 +449,8 @@ variables using pointers since they provide unlimited access.
 
 ### Variable Shadowing
 
+The classic shadowing works like most languages:
+
 ```rust
 let a := "Outer";
 {
@@ -457,6 +459,52 @@ let a := "Outer";
 }
 
 io::println(a); // Output: Outer
+```
+
+The important point here is that variables can shadow functions with the same name. For example:
+
+```rust
+module main
+
+fn main() -> void {
+    let test := nullptr;
+    test();
+}
+
+fn test() -> void { }
+
+/*
+[PARSER ERROR] test/main.jasl at 5:9: Attempt to call non-function expression.
+
+            test();
+                ^
+                Right here buddy
+*/
+```
+
+As you can see, the identifier `test` in the local scope shadows the identifier `test`,
+which is a function that resides in the global scope, and the compiler warns us for attempting
+to call a non-function expression.
+
+In such cases, you can use namespace resolution to refer to the global symbol:
+
+```
+module main
+
+include "io"
+
+fn main() -> void {
+    let test := nullptr;
+    main::test();
+}
+
+fn test() -> void {
+    io::println("Hello World");
+}
+
+/*
+Hello World
+*/
 ```
 
 ## JASL Types

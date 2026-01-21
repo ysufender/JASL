@@ -41,7 +41,7 @@ def show(t: SymbolType): String = t match {
     case DoubleColon() => "::"
     case Arrow() => "->"
     case Assign() => "="
-    case Asterix() => "*"
+    case Asterisk() => "*"
     case LessSym() => "<"
     case GreatSym() => ">"
     case LessEq() => "<="
@@ -130,7 +130,7 @@ def infixEq(l: SymbolType, r: SymbolType): Bool = {
         case (DoubleColon(), DoubleColon()) => true
         case (Arrow(), Arrow()) => true
         case (Assign(), Assign()) => true
-        case (Asterix(), Asterix()) => true
+        case (Asterisk(), Asterisk()) => true
         case (LessSym(), LessSym()) => true
         case (GreatSym(), GreatSym()) => true
         case (LessEq(), LessEq()) => true
@@ -315,7 +315,7 @@ def lexer[T](in: String) { prog: => T / {Lexer} } : T / {LexerError, TokenListHa
                         do add_token(Token(Symbol(LParen()), "(", pos(1)))
                         do add_token(Token(Symbol(RParen()), ")", pos(1)))
                     }
-                    case _ => do add_token(Token(Symbol(Asterix()), c.show, pos(1)))
+                    case _ => do add_token(Token(Symbol(Asterisk()), c.show, pos(1)))
                 }
                 case '<'  => do add_token(Token(Symbol(LessSym()), c.show, pos(1)))
                 case '>'  => do add_token(Token(Symbol(GreatSym()), c.show, pos(1)))

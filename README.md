@@ -45,7 +45,7 @@ of the [Effekt](https://effekt-lang.org/) compiler, the language that JASL compi
 
 - Builds are only tested on a Linux machine, Windows/Mac builds/crossbuilds are not supported.
 - Ninja Makefiles 1.11+
-- Effekt 0.58+
+- Effekt 0.59
 - C++20 and C17 compatible compilers (I used gcc/g++, you might need to tweak the ninja files otherwise)
 - LLVM 15
 

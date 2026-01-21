@@ -14,9 +14,6 @@ such as file IO etc.
 
 ## Table of Contents
 
-<table>
-<tr><td width=33% valign=top>
-
 * [Compilation Model](#compilation-model)
     * [Compilation Phase Chart](#compilation-phase-chart)
 * [Compilation Phases](#compilation-phases)
@@ -31,23 +28,13 @@ such as file IO etc.
             * [Notes and Closing](#notes-and-closing)
     * [IL Generation](#il-generation)
 
-</td><td width=33% valign=top>
-
-</td><td valign=top>
-
-</td></tr>
-<tr><td width=33% valign=top>
-
-</td></tr>
-</table>
-
 ## Compilation Model
 
 JASL Compiler (will be addressed as JASLC from now on) is a single threaded, phase-based two-pass compiler with recursive source discovery during the first pass.
 The compiler works recursively upon itself in the first pass, invoking the lexical analysis phase for every included file. We'll explain this in detail later.
 
-There are mainly four phases, where one of them includes two sub-phases, resulting in a two-pass architecture. See the ["Compilation Phases"](#compilation-phases)
-and the [compilation chart](#compilation-chart) below.
+There are mainly four phases, where one of them (that being the Parser) includes two sub-phases, resulting in a two-pass architecture. See the
+["Compilation Phases"](#compilation-phases) and the [compilation chart](#compilation-chart) below.
 
 ### Compilation Phase Chart
 
@@ -163,7 +150,7 @@ After the Entry Phase, the input file given will be passed to the Lexer. The pos
     * DoubleColon
     * Arrow
     * Assign
-    * Asterix
+    * Asterisk
     * LessSym
     * GreatSym
     * LessEq
@@ -199,13 +186,19 @@ After the Entry Phase, the input file given will be passed to the Lexer. The pos
 The lexer is context free and does not perform semantic evaluation. All tokens are produced
 greedily, and invalid sequences result in immediate lexer errors.
 
+That being said, the language does a clear distinction between type names and identifiers, the
+type names must start with an uppercase letter. Hence, it is possible to make the distinction
+between a type name and an identifier at lexical analysis phase, but still that distinction
+is purely syntactic, and the validation of existence/reachability of the said type is handled
+in the Parser.
+
 #### Lexer Level Desugaring
 
-There are (for now) two specific sequences of characters that the lexer desugar directly.
+There are (for now) two specific sequences of characters that the lexer desugars directly.
 Said sequences are: `.& (address operator)` and `.* (dereferencing operator)`.
 
-The parser never sees these tokens as-is. They are converted into their identifier based
-compiler builtins `.ref()` and `.deref()` respectively.
+The parser never sees these tokens in their original forms (that being `[dot][&]` and `[dot][*]`) as-is.
+They are converted into their identifier based compiler builtins `.ref()` and `.deref()` respectively.
 
 This conversion is purely based on the sequence of characters and not on any kind of semantic
 context.
@@ -243,6 +236,12 @@ The prepass pipeline can be visualized like:
 
 So with each include, a new Prepass fork will be created and the current fork will wait
 until the child fork finishes. After this fork finishes, it will yield back to the parent fork.
+This behaviour can be visualized in a single line, for a single include like:
+
+`start prepass A -> include "B" -> start prepass B -> end prepass B -> continue prepass A -> end prepass A`
+
+In case of a cyclic include, the global compiler context keeps a list of every visited file, and the prepass
+skips the inclusion if the given file is already present in the context.
 
 Essentially, the task of the prepass is to set-up the environment for the second parser phase.
 
@@ -268,7 +267,7 @@ The Parse phase is responsible for detecting any semantic error, such as, but no
 
 The only place where a semantic error occurs, except the Parse phase is ILGen phase, during the generation
 of the compiler builtin `ref` function, in case the programmer is trying to get the address of a temporary value.
-This occurence is due to the implementation of the builtin signatures into the compiler. They are treated no different
+This occurrence is due to the implementation of the builtin signatures into the compiler. They are treated no different
 than a normal function during the parsing phase, so the specific condition checking for them happen after the Parse phase.
 
 ##### Scopes
@@ -281,17 +280,22 @@ allowed.
 Every scope can be described as a record of: optional parent, stack index, variable map. The details of the implementation
 will not be explained as per the aforementioned reasons.
 
+Variable shadowing in child scopes is permitted. Shadowing may affect both function names, and variable names.
+
 ##### Type Checking
 
-> WARNING: The current typechecker is a hazily craeted one, due to certain deadlines. The nature of the
+> WARNING: The current typechecker is a hazily created one, due to certain deadlines. The nature of the
 > typechecker will change drastically in the future.
 
 Typechecking is done during and only during this phase. Currently mutability is not a part of the type system but rather
 a part of the variable signature, but for future compatibility I'll act like it is a part of the type system here.
 
-Type missmatches and conversions (both zero-cost and runtime) are checked here. Typechecker is not a separate
+Type mismatches and conversions (both zero-cost and runtime) are checked here. Typechecker is not a separate
 phase but an act that is done alongside the parsing. Due to this nature of the type resolving system, type inference 
 is limited to inference from RHS in place, purely depending on the current context so far.
+
+Keep in mind that since the inference is in-place and independent of lookaheads and backtracing, it directly assigns the
+type of the RHS to the LHS, hence making inference errors impossible by design.
 
 Keep in mind that implicit conversion does not exist in JASL, as stated in the [Language Reference](./LANGUAGE_REFERENCE.md).
 For more information on conversions, see the language reference.
@@ -300,7 +304,7 @@ For more information on conversions, see the language reference.
 
 Due to the simple style of it, the parser does not:
 
-* Do optimizations
+* Do optimizations (not even constant folding and alike)
 * Do lowering of any kind
 * Generate warnings
 * Detect unreachable paths
@@ -322,7 +326,7 @@ At the end, the Parser has:
 * Validated the structural integrity of the statements
 * Resolved the inferred types
 * Validated the correct structure of stack on each operation
-* And calculated the necessary stack offsets (be it local be it global)
+* And calculated the necessary stack offsets (be it local, be it global)
 
 The include order, hence the parsing order, of the files affect the generated AST ordering. This effect is
 purely structural and guaranteed to be semantically equivalent.
