@@ -28,7 +28,7 @@ supports JIT, JASL will naturally be able to get JIT compiled.
 
 JASL is built on top of my other personal project-complex that I call CSLB (Common Scripting Language Backend), it
 includes an Assembler/Linker/Disassembler complex for the custom IL/Assembly Language for the VM architecture called
-[JASM](https://github.com/ysufender/CSR) and a VM for the bytecode that I mentioned earlier.
+[JASM](https://github.com/ysufender/JASM) and a VM for the bytecode that I mentioned earlier.
 
 ## Installing JASL
 
@@ -49,7 +49,7 @@ of the [Effekt](https://effekt-lang.org/) compiler, the language that JASL compi
 - C++20 and C17 compatible compilers (I used gcc/g++, you might need to tweak the ninja files otherwise)
 - LLVM 15
 
-The Effekt version must be exactly the same for a smooth experience. Since it is a research language I can't promise for any kind
+The Effekt version must be exactly the same for a smooth experience. Since it is a research language I can't guarantee for any kind
 of backwards compatibility.
 
 #### Building
@@ -128,17 +128,15 @@ You can use `install` to create symlinks under any directory that is included in
 
 * [Modules](#modules)
     * [Including Files](#including-files)
-
-</td></tr>
-<tr><td width=33% valign=top>
-
 * [Memory management](#memory-management)
     * [Stack and Heap](#stack-and-heap)
+* [Other JASL Features](#other-v-features)
+    * [Inline Assembly](#inline-assembly)
+    * [Compiler Builtins](#compiler-builtins)
 
+</td></tr>
 </td><td width=33% valign=top>
 
-* [Other JASL Features](#other-v-features)
-    * [Inline assembly](#inline-assembly)
 * [Underlying System](#underlying-system)
 * [Appendices](#appendices)
     * [Keywords](#appendix-i-keywords)
@@ -356,9 +354,9 @@ fn main() -> void {
 }
 ```
 
-Multiple returns are neither structs, nor tuples in JASL. They are a promise to the compiler, stating
+Multiple returns are neither structs, nor tuples in JASL. They are a guarantee to the compiler, stating
 "When I return, the top of the stack will look like this and you MUST bind them to something". So
-you can't discard returns, and you can't assign them to a single variable.
+you can't partially consume multiple returns, and you can't assign them to a single variable.
 
 You can see the colons ':' after the variable names, not followed by a typename, in this
 case the types are inferred from the return types of `foo`.
@@ -525,7 +523,7 @@ and pointers to any of these, including pointers
 ```
 
 There is no implicit conversion in JASL, conversion between types must either be done by
-compiler builtins `ptrcast` and `intcasr`, or by manually writing conversion functions.
+compiler builtins `ptrcast` and `intcast`, or by manually writing conversion functions.
 
 ```rust
 let u := 12u32;
@@ -992,8 +990,11 @@ fn returnTwoFloats() -> (float, float) { ... }
 
 And I want to construct a `Vec` from our previous example from the return values of this function.
 Now, we know that `Vec` is just a compiler `alias` for the layout of two floats on stack, we also
-know that multiple returns are just `promises` to the compiler about the layout left on the stack after
+know that multiple returns are just `guarantees` to the compiler about the layout left on the stack after
 the function returns. So essentially, it is just reinterpreting the memory blob like this or like that.
+
+So essentially, the UFCS is not a method chaining feature, but rather a stack pipeline that is compile-time
+guaranteed to preserve the desired stack layout.
 
 By those definitions, we should be able to do something like:
 
@@ -1143,7 +1144,7 @@ No hidden shenanigans.
 
 ## Other JASL Features
 
-### Inline assembly
+### Inline Assembly
 
 JASL supports directly injecting inline assembly (the assembly here is the IL the backend
 uses) into the code. The stdlib (especially the `memory` module) uses inline assembly extensively.
@@ -1161,6 +1162,28 @@ it has the value `5` instead now.
 
 Assembly blocks are not parsed by the compiler, they are directly injected into the generated IL. That
 means you can freely corrupt your program by messing with the stack. You're welcome.
+
+### Compiler Builtins
+
+There are 9 compiler builtin functions:
+
+(numeric T := T is in [u32, i32, u8, i8, float])
+
+* `fn offset(T*, u32|i32) -> T*`
+* `fn sizeof(any) -> u32`
+* `fn ptrcast(T*, typename U) -> U`
+* `fn intcast(numeric T, numeric U) -> U`
+* `fn deref(T*) -> T`
+* `fn ref(lvalue T) -> T*`
+* `fn set(T*, T) -> T*`
+* `fn assert(bool) -> void`
+* `fn unreachable() -> any`
+
+The function `sizeof` is guaranteed to return a compile-time constant whereas the remaining may or may
+not do so.
+
+The function `offset` takes a `u32` or `i32` as the offset argument. This argument is always in bytes, and never
+depends on the type of the pointer passed.
 
 ## Underlying System
 
@@ -1223,7 +1246,7 @@ this point, apart from its module, visibility and name.
 
 ## Appendix I: Keywords
 
-JASL has 17 reserved keywords (2 of them are literals):
+JASL has 17 reserved keywords (1 of which being a literal):
 
 ```rust
 asm

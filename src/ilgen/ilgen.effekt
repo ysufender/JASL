@@ -691,6 +691,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
         _setUpLeft(expr)
         t match {
             case Type::Custom(name) => {
+                // TODO: Optimization for small layouts
                 do spit("mov " ++ addr.show ++ " &eax")
                 if (not(glob))
                     do spit("add %ui &bp &eax")

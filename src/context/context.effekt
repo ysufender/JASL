@@ -602,7 +602,7 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
 
         FunctionSignature("assert", true, true, None(), [
             VariableSignature("condition", false, false, true, false, 0, Type::Bool())
-        ], [ Type::InternalAny() ]),
+        ], [ Type::Void() ]),
 
         FunctionSignature("unreachable", true, true, None(), [], [ Type::InternalAny() ])
     ]

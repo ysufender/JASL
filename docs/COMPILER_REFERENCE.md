@@ -8,8 +8,8 @@
 The JASL compiler is a simple, two-pass compiler that targets the [JASM IL](https://github.com/ysufender/JASM).
 The compiler does (as for now) no optimizations to the given source file, and does not support incremental builds.
 
-The JASL compiler is mainly written in the [Effekt research language](https://effekt-lang.org/), and depends on LLVM 15
-as a backend. The compiler source includes C and C++ files as well, for JASM IL backend calls and various operations
+The JASL compiler is mainly written in the [Effekt research language](https://effekt-lang.org/).
+The compiler source includes C and C++ files as well, for JASM IL backend calls and various operations
 such as file IO etc.
 
 ## Table of Contents
@@ -27,6 +27,10 @@ such as file IO etc.
             * [Limitations](#limitations)
             * [Notes and Closing](#notes-and-closing)
     * [IL Generation](#il-generation)
+        * [Hidden Symbols](#hidden-symbols)
+        * [Nullptr Check](#nullptr-check)
+* [Errors](#errors)
+* [Further Plans](#further-plans)
 
 ## Compilation Model
 
@@ -74,6 +78,11 @@ The JASL Compiler
 
                 --include <dir_path>    : include the given directory as a search path
 ```
+
+> Note: Currently, since the compiler is still WIP, the flags `--static, --dynamic` and `--release` are not used by the compiler. Their functionalities are to be
+> implemented in future releases, which heavily depend on the state of the backend.
+
+> Note 2: The output file defaults to `./build/out.jef` if none provided.
 
 After the parsing of the given command line structure, JASLC proceeds to detect the JASL stdlib path via the helper executable `jasl_install`, which
 is expected to be on the PATH of your system. See the [README.md](../README.md#building-from-the-source) or the
@@ -266,9 +275,10 @@ The Parse phase is responsible for detecting any semantic error, such as, but no
 * Syntax errors
 
 The only place where a semantic error occurs, except the Parse phase is ILGen phase, during the generation
-of the compiler builtin `ref` function, in case the programmer is trying to get the address of a temporary value.
-This occurrence is due to the implementation of the builtin signatures into the compiler. They are treated no different
-than a normal function during the parsing phase, so the specific condition checking for them happen after the Parse phase.
+of the compiler builtins `ref` and `set` functions, in case the programmer is trying to get the address of a temporary value,
+or trying to set a missmatching value from a pointer. This occurrence is due to the implementation of the builtin signatures
+into the compiler. They are treated no different than a normal function during the parsing phase, so the specific condition
+checking for them happen after the Parse phase.
 
 ##### Scopes
 
@@ -333,4 +343,136 @@ purely structural and guaranteed to be semantically equivalent.
 
 ### IL Generation
 
-Documentation is WIP
+The IL Generation phase (ILGen) operates on the generated AST saved in the compiler context, by the Parser. It
+assumes everything guaranteed to be handled by the parser to be handled correctly (see ["Notes and Closing"](#notes-and-closing)).
+
+ILGen does not do any semantic checks except a check for the compiler builtin `.& (ref)` function, to validate that it
+is not attempting to get the address of a temporary value, and a check for the compiler builtin `set` function, to make
+sure that the type of the underlying type of the pointer is matching with the new value provided, which was stated in the
+[Parse](#parse) section.
+
+Compiler flags that change the behaviour of the ILGen are: `--static, --dynamic` and `--check-nullptr`
+
+> Note: As stated in [this](#entry-phase) section, `--static` and `--dynamic` are not used by the compiler just yet, they are
+> to be implemented.
+
+ILGen requests the saved ASTs from the compiler context, and directly lowers them into JASM IL. Since the backend does not
+have any global data segment, the global data segment is handled by creating a fake entry point, pushing the global variables
+to the start of the stack and then jumping to the main function. The resulting IL will be a single monolithic file, with
+the `.jasm` extension appended to the output file name.
+
+Layouts do not exist at this point, in a semantic sense. Their signatures are still used to lower the `.` field access operations,
+to calculate necessary offsets.
+
+#### Hidden Symbols
+
+While lowering the ASTs, ILGen generates a couple hidden symbols, some of which the execution relies on and some of which
+the execution may rely on. The generated symbols, in the exact order of placement, are:
+
+* `jasl$$internal$$nullptrcallsafeguard`: This symbol resides at the index zero of the ROM, and fills the first 32 bytes
+of the ROM with `nop` followed by a jump to the symbol `jasl$$internal$$nullptrjump` mentioned later in this file. This is
+to ensure a safe page for potential nullptr function pointer jumps with 32 bytes of error margin.
+* `jasl$$internal$$globals`: This symbol is the fake entry point of every generated executable. At this point, the stack pointer
+is guaranteed to point at the index zero of the RAM. Global variables are initialized in the correct stack order and the execution
+continues to the next symbol.
+* `jasl$$internal$$main`: This symbol calls the user defined main function (which is enforced to be `main$$priv$$main` by the compiler)
+by using the `cal` instruction, essentially creating a frame for the function. A jump to the `jasl$$internal$$end$$here`, mentioned later
+in this file, is placed right after the call to ensure correct exit of the program (the backed does not contain an exit instruction).
+* `jasl$$internal$$assert$$fail`: This symbol is the target of all `assert` compiler builtin function calls. After the execution, it jumps
+to the `jasl$$internal$$end$$here` just like the internal main symbol.
+* `jasl$$internal$$unreachable`: This symbol is the target of all `unreachable` compiler builtin function calls. After the execution, it jumps
+to the `jasl$$internal$$end$$here` just like internal main symbol.
+* `jasl$$internal$$nullptrjump`: This symbol is the target of all nullptr jumps (indirectly from the nullptr call guard page) and if `--nullptr-check`
+is passed to the command line, the target of all nullptr read/write/offsettings. The execution flows to the next symbol afterwards.
+* `jasl$$internal$$end$$here`: This symbol is just a marker to mark the end of the generated IL, which is the end of ROM. All
+successful (or handled errors via other hidden symbols) lead to it.
+
+So essentially, the structure of the generated IL is:
+
+```
+This file is generated automatically by the JASL Compiler
+
+.prep
+    org jasl$$internal$$globals
+    sts 256000
+    sth 64000
+.body
+    jasl$$internal$$nullptrcallsafeguard:
+        #32 byte nop followed by a jump to error message function#
+        rom 0 0 0 0 0 0 0 0 ; 
+        jmp jasl$$internal$$nullptrjump
+    
+    jasl$$internal$$globals:
+        rep %s %b 32 0
+    
+    jasl$$internal$$main:
+        mov 0 &bl
+        cal main$$priv$$main
+        jmp jasl$$internal$$end$$here
+
+    #
+        User defined code here
+    #
+
+    jasl$$internal$$assert$$fail:
+        # TODO: rewind callstack, print and exit #
+        mov 0 &sp
+        raw 53 "Assertion failed at runtime. Callstack not available." 0 ;
+        mov 4 &bl sys "CSR_Println"
+        jmp jasl$$internal$$end$$here
+
+    jasl$$internal$$unreachable:
+        # TODO: rewind callstack, print and exit #
+        mov 0 &sp
+        raw 25 "Unreachable code path hit" 0 ;
+        mov 4 &bl sys "CSR_Println"
+        jmp jasl$$internal$$end$$here
+
+    jasl$$internal$$nullptrjump:
+        mov 0 &sp
+        raw 77 "Jump to null pointer detected, check your code for nullptr function pointers." 0 ;
+        #
+            or if --nullptr-check is enabled:
+            raw 60 \"Jump to nullptr or nullptr dereferencing detected. Aborting.\" 0 ;
+        #
+        mov 4 &bl sys "CSR_Println"
+
+    jasl$$internal$$end$$here:
+.end
+
+End of generated IL
+```
+
+#### Nullptr Check
+
+Apart from the small difference in the `jasl$$internal$$nullptrjump` mentioned in the section above, the `--nullptr-check`
+flag changes the generated IL at every single pointer read/write/offsetting. The nullptr function pointer calls are not checked,
+since they are guaranteed to fall into the nullptr jump safeguard given they are within the 32 byte margin.
+
+The generated nullptr check is simple and the same in every check:
+
+```
+dup %ui   #duplicate the pointer on stack#
+stc %ui 0 #push nullptr#
+cnj %ui %equ jasl$$internal$$nullptrjump #jump to error symbol if they are equal#
+```
+
+## Errors
+
+JASLC errors are fatal, the compiler aborts and prints an error message on the first error. No recovery
+or wait for further context is attempted.
+
+## Further Plans
+
+For those of you that have read the reference fully will realize that the compiler is doing a direct compilation.
+That is, it takes the sources and arranges them to generate a 1-to-1 IL, which means there is no optimization
+or clever tricks involved. Also the immature typechecker will probably catch your eyes.
+
+The explanation of all the trade-offs that exist within the compiler is that this compiler is a term project,
+done in approximately two months. The existence of the deadline was a limitation of resources for the advanced features to be implemented.
+
+In its current state, JASLC's goal is to be consistent and predictable, and provide a strong base for the new features
+or completions to build upon it, which will happen over time, and presumably after a whole rewrite of the codebase in another,
+more stable language.
+
+For a last word, in this state, the compiler mostly accomplishes its goal to be a solid base, and is technically usable.
