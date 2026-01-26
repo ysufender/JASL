@@ -1178,12 +1178,17 @@ def handleFunctionDef(): Statement / {Defer, LoopHandler, GlobalVariableRegister
 
     if (signature.returns.compare([Type::Void()]){(a, b) => a == b})
     {
-        // TODO: Do a defer check here
         if (not(do isCovered())) {
             body = body.append([ReturnStmt(Nil(), (do previous()).position)])
         }
 
         do returns([Type::Void()], pos)
+    }
+
+    if (body.reverse is Cons(Block(inside, _, _), res)
+        and inside.reverse is Cons(ret, _)
+        and ret is ReturnStmt(_, _)) {
+        body = Cons(ret, res).reverse
     }
 
     FnDefinition(signature, body, scope, pos)
@@ -1238,9 +1243,9 @@ def handleReturnStatement(): Statement / {Defer, GlobalVariableRegister, Functio
             setUpReturns(returns)
 
             if (tmps is Nil())
-                Block(generated.reverse.append(do getDefers(ReturnDefer())).append([ReturnStmt(returns, pos)]), do createChildContext(), pos)
+                Block(generated.reverse.append(do getDefers(ReturnDefer())).append([ReturnStmt(returns, pos)]), do getCurrentContext(), pos)
             else
-                Block(generated.reverse.append(do getDefers(ReturnDefer())).append([ReturnStmt(tmps, pos)]), do createChildContext(), pos)
+                Block(generated.reverse.append(do getDefers(ReturnDefer())).append([ReturnStmt(tmps, pos)]), do getCurrentContext(), pos)
         }
         case false => ReturnStmt(returns, pos)
     }

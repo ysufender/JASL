@@ -12,16 +12,14 @@ pub layout HeapString {
 //
 // Public API
 //
-pub fn HeapString::new(str: string::String, alloc: allocator::Allocator) -> HeapString {
+pub fn string::String::new(str: string::String, alloc: allocator::Allocator) -> HeapString {
     let strSize := str.string::size();
     let totalSize := strSize+36u32;
     let memory := memory::malloc(totalSize, alloc);
 
     if memory == nullptr { return HeapString(nullptr, 0u32, alloc); }
 
-    let cdata := str.&.ptrcast(void**).*.ptrcast(void);
-
-    if memory::memcpy(cdata, memory, strSize+4u32) {
+    if memory::memcpy(str.data, memory, strSize+4u32) {
         return HeapString(memory, totalSize, alloc);
     }
 

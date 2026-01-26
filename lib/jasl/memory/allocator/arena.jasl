@@ -21,9 +21,11 @@ pub fn ArenaAllocator::new(capacity: u32) -> ArenaAllocator {
 pub fn ArenaAllocator::allocate(this: ArenaAllocator*, size: u32) -> void* {
     let mut mem: void* = nullptr;
 
-    if this.offset.* + size <= this.capacity.* {
-        mem = this.base.*.offset(this.offset.*);
-        this.offset.set(this.offset.* + size);
+    let off := this.offset.*;
+
+    if off + size <= this.capacity.* {
+        mem = this.base.*.offset(off);
+        this.offset.set(off + size);
     }
 
     return mem;
