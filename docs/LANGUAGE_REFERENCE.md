@@ -486,7 +486,7 @@ to call a non-function expression.
 
 In such cases, you can use namespace resolution to refer to the global symbol:
 
-```
+```rust
 module main
 
 include "io"
@@ -576,7 +576,7 @@ let c := 12345u32;
 
 Assigning floating point numbers works the same way pretty much:
 
-```
+```rust
 let a := 1.0; // There is literally a floating point in the literal
 let b := 1f;
 ```
@@ -878,15 +878,15 @@ fn main() -> void {
     let alloc := allocator::default();
 
     // Method 1: C Style
-    let mut heapVec2 :=
+    let mut heapVec :=
         memory::malloc(sizeof(Vec), alloc)
         .ptrcast(Vec);
 
-    heapVec2.x.set(0f);
-    heapVec2.y.set(5f);
+    heapVec.x.set(0f);
+    heapVec.y.set(5f);
 
     // Method 2: `set` operator
-    let heapVec :=
+    let heapVec2 :=
         memory::malloc(sizeof(Vec), alloc)
         .ptrcast(Vec)
         .set(Vec(0f, 5f));
@@ -925,6 +925,9 @@ layout Example {
     pub mut public_mutable: u32;
 }
 ```
+
+Access modifiers does not have any runtime overhead. Everything in JASL is POD-style, which means even though the given layout `Example` has some private fields,
+you can always use a little pointer offsetting to read/write the field. So visibility is just a compiler illusion.
 
 ### Anonymous Structs
 
@@ -1180,7 +1183,7 @@ There are 9 compiler builtin functions:
 * `fn unreachable() -> any`
 
 The function `sizeof` is guaranteed to return a compile-time constant whereas the remaining may or may
-not do so.
+not do so, depending on the parameters.
 
 The function `offset` takes a `u32` or `i32` as the offset argument. This argument is always in bytes, and never
 depends on the type of the pointer passed.
@@ -1197,7 +1200,9 @@ Since JASL is a low-level (at least I marketed it as one) language, a couple que
 
 I have short answers to all of them.  
 
-1- VM RAM is unaligned, everything is packed tightly.  
+1- VM RAM is unaligned, everything is packed tightly. So the user-space code executing on the VM doesn't have
+to worry about alignment. That said, the VM may or may not allocate the RAM at startup with an alignment. Refer
+to the [VM page](https://github.com/ysufender/CSR) about the details.
 
 2- Strictly Left-to-Right, as JASL is read. For example:  
 
@@ -1219,7 +1224,7 @@ value -> function1 -> function2 -> function3
 
 as UFCS is written. This aligns with the postfix `.&` and `.*` operators too.
 
-3- VM enforces a specific endianness, for now it is big endian. Refer to the [VM page](https://github.com/ysufender/CSR)
+3- VM enforces a specific endianness, as for now it is big endian. Refer to the [VM page](https://github.com/ysufender/CSR)
 to be sure, it is not a part of JASL.  
 
 4- Parameters are passed, and returned on the stack. The caller pushes the parameters
@@ -1241,6 +1246,9 @@ modulename$$visibility$$membername
 As you can see it doesn't contain any type information at all, and no overloading rule is
 clear from just by looking at it, because nothing about the signature of this member is known at
 this point, apart from its module, visibility and name.
+
+Note that if I implement generics, this will change. So the name mangling details may vary between
+JASL versions.
 
 # Appendices
 
@@ -1276,15 +1284,18 @@ This list operators is for [primitive types](#primitive-types) only, except for
 the assignment operator.
 
 ```rust
+Arithmetic Operators
 +    sum                    integers, floats
 -    difference             integers, floats
 *    product                integers, floats
 /    quotient               integers, floats
 
+Logic Operators
 !    logical NOT            bools
 &&   logical AND            bools
 ||   logical OR             bools
 
+Comparison Operators
 ==   Equality               all primitives, except void
 !=   Inequality             all primitives, except void
 
@@ -1304,12 +1315,9 @@ Also the logical binary operators are short-circuiting.
 
 ## Appendix III: EBNF Notation
 
-The BNF form given below might not match with the language at any given time, that is because
-compiler is still under development and new features, feature refactorings and rewrites are happening
-day by day, and that the parser as well as the lexer are hand-rolled, so I write this BNF additionally.
-
-Use at your own risk, the valid syntax might not be semantically correct, though I tried my best
-to set up the BNF so that it'll also be semantically correct.
+The EBNF given below was handwritten by me, since the parser is handrolled and doesn't use
+EBNF based generators. Due to my human nature, the EBNF may contain some errors, and may even be
+incomplete. So do not trust the EBNF 100%, take it with a grain of salt.
 
 ```
 File:
