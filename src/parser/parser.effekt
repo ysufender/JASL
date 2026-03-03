@@ -327,7 +327,7 @@ def emptyParserContext(): ParserContext =
     // ParserContext(None(), 0, map::empty[String, FunctionSignature](box strOrder), map::empty[String, VariableSignature](box strOrder), map::empty[String, LayoutSignature](box strOrder))
     ParserContext(None(), 0, map::empty[String, VariableSignature](box strOrder))
 
-def parser_report[T] { prog: () => T / ParserError }: T / {CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
+def parser_report[T] { prog: () => T / ParserError }: T / {Files, Termination, CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
     try { prog() }
     with ParserError { (msg, pos) => {
         val source = openRead(do getWorkingFile())
@@ -346,7 +346,9 @@ def parser_report[T] { prog: () => T / ParserError }: T / {CompilerSettingsRegis
         println("\n        " ++ errLine)
         println(spaces ++ "^")
         println(spaces ++ helpLine)
-        exit(PARSER_ERROR)
+        // exit(PARSER_ERROR)
+        do Termination(native::PARSER_ERROR)
+        <>
     }}
 }
 
@@ -685,7 +687,7 @@ def inferType(vars: List[VariableSignature], expressions: List[Type]): List[Vari
  
 // This will prepass all used files and register their Tokens and names to the CompilerContext
 // also will register all symbols from all modules including module names to the CompilerContext
-def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, InternalError, ParserContextRequest, CompilerContextRequest} = {
+def _prepass(): Unit / {Files, Termination, CompilerSettingsRegister, ParserError, TokenRequest, InternalError, ParserContextRequest, CompilerContextRequest} = {
     if (not(do check(Keyword(Preprocessor(Module()))))) {
         val token = do peek()
         do ParserError("Expected 'module' statement at the beginning of the file. Got '" ++ token.text ++ "' instead.", token.position)
@@ -813,7 +815,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
         do checkReturnOrCrash(Keyword(Layout()))
         handleLayout(public, true)
     }
-    def handleFunction(public: Bool): Unit = {
+    def handleFunction(public: Bool, external: Bool): Unit = {
         var name: String = ""
         val typename: Option[Type] = handleTypeNameNoCrashExceptUndefined()
         if (typename is Some(_)) {
@@ -904,7 +906,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
         if (do is_eof())
             do ParserError("Unterminated function body.", pos)
 
-        do addFunction(FunctionSignature(name, public, false, typename.getBaseType, arguments.reverse, returns.reverse))
+        do addFunction(FunctionSignature(name, public, external, false, typename.getBaseType, arguments.reverse, returns.reverse))
     }
 
     while (not(do is_eof()))
@@ -947,13 +949,15 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
                 case Keyword(Let()) => handleLet(true)
                 case Keyword(Wrapper()) => handleWrapper(true)
                 case Keyword(Layout()) => handleLayout(true, false)
-                case Keyword(Fn()) => handleFunction(true)
+                case Keyword(Fn()) => handleFunction(true, false)
+                case Keyword(Extern()) => handleFunction()
                 case _ => do ParserError("Unexpected token in top-level definition. Expected one of 'let, wrapper, layout, fn'.", (do previous()).position)
             }
-            case Keyword(Fn()) => handleFunction(false)
+            case Keyword(Fn()) => handleFunction(false, false)
             case Keyword(Let()) => handleLet(false)
             case Keyword(Wrapper()) => handleWrapper(false)
             case Keyword(Layout()) => handleLayout(false, false)
+            case Keyword(Extern()) => handleFunction()
             case Keyword(Defer()) => do ParserError("Defer statements are not allowed in top-level contexts.", token.position)
             case EOF() => ()
             case _ => do ParserError("Unexpected token '" ++ token.text ++ "' at top-level.", token.position)
@@ -963,7 +967,7 @@ def _prepass(): Unit / {CompilerSettingsRegister, ParserError, TokenRequest, Int
     // do updateModule(variableSignatures, functionSignatures, layoutSignatures)
 }
 
-def prepass(tokens: List[Token], topLevel: ParserContext): Unit / {CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
+def prepass(tokens: List[Token], topLevel: ParserContext): Unit / {Files, Termination, CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
     with parser_report;
     with tokenHandler(tokens);
     with ignoreDefer;
@@ -2129,7 +2133,7 @@ def parseExpression(): Expression / {GlobalVariableRegister, FunctionOwnership, 
     parseAssignmentExpression()
 }
 
-def parse(tokens: List[Token], topLevel: ParserContext): AST / {CompilerSettingsRegister, GlobalVariableRegister, InternalError, CompilerContextRequest} = {
+def parse(tokens: List[Token], topLevel: ParserContext): AST / {Files, Termination, CompilerSettingsRegister, GlobalVariableRegister, InternalError, CompilerContextRequest} = {
     with parser_report;
     with tokenHandler(tokens);
     with noLoop;

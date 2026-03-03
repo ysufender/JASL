@@ -17,7 +17,7 @@ interface ILGenerator {
 
 effect ILGenError(msg: String, pos: Position): Nothing / CompilerContextRequest
 
-def ilgen_report[T] { prog: () => T / ILGenError }: T / {CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
+def ilgen_report[T] { prog: () => T / ILGenError }: T / {Files, Termination, CompilerSettingsRegister, InternalError, CompilerContextRequest} = {
     try { prog() }
     with ILGenError { (msg, pos) => {
         val source = openRead(do getWorkingFile())
@@ -36,11 +36,13 @@ def ilgen_report[T] { prog: () => T / ILGenError }: T / {CompilerSettingsRegiste
         println("\n        " ++ errLine)
         println(spaces ++ "^")
         println(spaces ++ helpLine)
-        exit(ILGEN_ERROR)
+        // exit(ILGEN_ERROR)
+        do Termination(native::ILGEN_ERROR)
+        <>
     }}
 }
 
-def ilgen[T](target: String) { prog: () => T / ILGenerator }: T / {CompilerSettingsRegister, ILGenError, InternalError} = {
+def ilgen[T](target: String) { prog: () => T / ILGenerator }: T / {Files, CompilerSettingsRegister, ILGenError, InternalError} = {
     with stringBuffer;
     var tab = 0;
 
@@ -163,7 +165,7 @@ def pointingType(ptr: Type) = ptr match {
     }
 }
 
-def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = expr match {
+def expressionGen(expr: Expression): Unit / {Files, Termination, ILGenError, ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = expr match {
     case ExpressionList(inside, _) => {
         inside.foreach{ex => ex.expressionGen}
     }
@@ -183,6 +185,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
     }
     case Identifier(name, pos) => {
         with parser_report;
+
         if (do hasVar(name, true)) {
             val sign = do getVar(name)
 
@@ -714,7 +717,7 @@ def expressionGen(expr: Expression): Unit / {ILGenError, ParserContextRequest, I
     case _ => ()
 }
 
-def statementGen(stmt: Statement): Unit / {ILGenError, ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = stmt match {
+def statementGen(stmt: Statement): Unit / {Files, Termination, ILGenError, ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = stmt match {
     case FnDefinition(sign, body, scope, _) => {
         do spit("")
         do spit(do getWorkingModule() ++ if(sign.public){"$$pub"}else{"$$priv"} ++ "$$" ++ sign.name ++ ":")
@@ -796,7 +799,7 @@ def statementGen(stmt: Statement): Unit / {ILGenError, ParserContextRequest, Int
     case ContinueStmt(id, _) => do spit("jmp jasl$$while_begin_" ++ id.show)
 }
 
-def _gen(stmts: List[Statement]): Unit / {ILGenError, ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = stmts match {
+def _gen(stmts: List[Statement]): Unit / {Files, Termination, ILGenError, ParserContextRequest, InternalError, TokenRequest, ILGenerator, CompilerContextRequest, CompilerSettingsRegister} = stmts match {
     case Cons(stmt, rest) => {
         statementGen(stmt)
         _gen(rest)
@@ -804,7 +807,7 @@ def _gen(stmts: List[Statement]): Unit / {ILGenError, ParserContextRequest, Inte
     case Nil() => ()
 }
 
-def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister, InternalError, CompilerSettingsRegister, InternalError, CompilerContextRequest, CompilerSettingsRegister} = {
+def gen(target: String, topLevel: ParserContext): Unit / {Files, Termination, GlobalVariableRegister, InternalError, CompilerSettingsRegister, InternalError, CompilerContextRequest, CompilerSettingsRegister} = {
     with ilgen_report;
     with ilgen(target);
     with handleTokens(do getLexerOutput());
@@ -843,10 +846,10 @@ def gen(target: String, topLevel: ParserContext): Unit / {GlobalVariableRegister
                         case _ => unreachable(__FILE__, __LINE__)
                     }}
                     .foreach{case (mod, file, stmt) => {
-                    do setWorkingFile(file)
-                    do setWorkingModule(mod)
-                    statementGen(stmt)
-                }}
+                        do setWorkingFile(file)
+                        do setWorkingModule(mod)
+                        statementGen(stmt)
+                    }}
             do endBlock()
             do spit("")
             do spit("jasl$$internal$$main:")

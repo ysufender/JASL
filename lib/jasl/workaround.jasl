@@ -1,0 +1,6 @@
+module wip
+
+pub fn printU32(u: u32) -> void {asm{
+    mov 4 &bl
+    sys "CSR_PrintU32"
+}}

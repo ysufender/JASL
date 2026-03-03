@@ -1,0 +1,94 @@
+ninja_required_version = 1.11
+
+libdir = lib
+etcdir = etc
+effektdir = $libdir/effekt
+sourcedir = src
+debug = true
+basebuild = build
+builddir = $basebuild/test
+
+CC = gcc
+LD = g++
+CFLAGS = -O0 -ggdb
+LFLAGS = -O0 -flto -no-pie
+LLFLAGS = --debugger-tune=gdb -O0 -opaque-pointers
+EFLAGS = -c --backend llvm -o $builddir --includes $builddir --no-optimize
+
+pool cpool
+    depth = 4
+
+pool linkpool
+    depth = 4
+
+pool ppool
+    depth = 4
+
+rule prp
+    pool = ppool
+    command = ./$basebuild/preprocessor $in $out $debug
+
+rule efc
+    pool = cpool
+    command = effekt $in $EFLAGS
+
+rule cc
+    pool = cpool
+    deps = gcc
+    depfile = $out.d
+    command = $CC $CFLAGS $in -c -o $out
+
+rule cxx
+    pool = cpool
+    deps = gcc
+    depfile = $out.d
+    command = $LD $CFLAGS $in -c -o $out
+
+rule ccc
+    pool = cpool
+    deps = gcc
+    depfile = $out.d
+    command = $LD $in -o $out
+
+rule link
+    pool = linkpool
+    command = $LD $in $LFLAGS -o $out -luv -lpthread -ldl
+
+rule lc
+    pool = cpool
+    command = llc $in $LLFLAGS -filetype=obj -o $out
+
+rule las
+    pool = cpool
+    command = llvm-as $in -o $out -opaque-pointers
+
+build $basebuild/preprocessor: ccc $etcdir/preprocessor.cpp
+
+build $builddir/bytearray.o: cc $effektdir/bytearray.c
+build $builddir/main.o: cc $effektdir/main.c
+build $builddir/io.o: cc $effektdir/io.c
+build $builddir/panic.o: cc $effektdir/panic.c
+
+#build $builddir/rts.bs: las $effektdir/rts.ll
+#build $builddir/rts.o: lc $builddir/rts.bs
+
+build $builddir/lexer/lexer.effekt: prp $sourcedir/lexer/lexer.effekt | $basebuild/preprocessor
+build $builddir/parser/parser.effekt: prp $sourcedir/parser/parser.effekt | $basebuild/preprocessor
+build $builddir/context/context.effekt: prp $sourcedir/context/context.effekt | $basebuild/preprocessor
+build $builddir/native/native.effekt: prp $sourcedir/native/native.effekt | $basebuild/preprocessor
+build $builddir/ilgen/ilgen.effekt: prp $sourcedir/ilgen/ilgen.effekt | $basebuild/preprocessor
+build $builddir/test.effekt: prp $sourcedir/test.effekt | $basebuild/preprocessor
+
+build $builddir/test.ll: efc $builddir/test.effekt | $builddir/lexer/lexer.effekt $builddir/parser/parser.effekt $builddir/context/context.effekt $builddir/native/native.effekt $builddir/ilgen/ilgen.effekt
+
+build $builddir/jasl.bs: las $builddir/test.ll
+build $builddir/jasl.o: lc $builddir/jasl.bs
+
+build $builddir/jasm_wrapper.o: cxx $libdir/jasm/jasm.cpp
+    CFLAGS = $CFLAGS -I lib/jasm/include -I lib/effekt -std=c++20
+
+build $builddir/jaslc: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o $builddir/jasm_wrapper.o $libdir/jasm/libjasm.a
+# build $builddir/jasl: link $builddir/jasl.o $builddir/main.o $builddir/io.o $builddir/panic.o $builddir/bytearray.o  $builddir/jasm_wrapper.o
+
+build $basebuild/jasl_install.cpp: prp $etcdir/jasl_install.cpp | $basebuild/preprocessor
+build $basebuild/jasl_install: ccc $basebuild/jasl_install.cpp

@@ -4,6 +4,7 @@ import process
 
 import context/context
 import native/native
+import io/filesystem
 
 def show(t: PreprocessorKeywordType): String = t match {
     case Module() => "module"
@@ -195,7 +196,7 @@ interface Lexer {
 
 effect LexerError(msg: String, pos: Position): Nothing / CompilerContextRequest
 
-def lexer_report[T]() { prog: () => T / {LexerError, InternalError} }: T / {CompilerSettingsRegister, CompilerContextRequest, InternalError} = {
+def lexer_report[T]() { prog: () => T / LexerError }: T / {Files, Termination, CompilerSettingsRegister, CompilerContextRequest, InternalError} = {
     try { prog() }
     with LexerError { (msg, pos) => resume {
         val source: String = openRead(do getWorkingFile())
@@ -214,8 +215,8 @@ def lexer_report[T]() { prog: () => T / {LexerError, InternalError} }: T / {Comp
         println("\n        " ++ errLine)
         println(spaces ++ "^")
         println(spaces ++ helpLine)
-        //println("        " ++ msg)
-        exit(LEXER_ERROR)
+        // exit(LEXER_ERROR)
+        do Termination(native::LEXER_ERROR)
         <>
     }}
 }
@@ -584,7 +585,7 @@ def handleTokenList() { prog: () => Unit / TokenListHandler }: List[Token] = {
     }
 }
 
-def lex(): List[Token] / {CompilerSettingsRegister, CompilerContextRequest, InternalError} = {
+def lex(): List[Token] / {Files, Termination, CompilerSettingsRegister, CompilerContextRequest, InternalError} = {
     with lexer_report;
 
     val source: String = openRead(do getWorkingFile())

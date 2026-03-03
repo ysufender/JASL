@@ -1,10 +1,67 @@
 module src/test
 
-import test
-import src/lib
+import native/native
+import context/context
+import lexer/lexer
+import parser/parser
+import ilgen/ilgen
 
-def main() = mainSuite("lib") {
-  test("Hello world") {
-    assertEqual(helloWorld(), "Hello, world!", "Expected 'Hello World'.") { (a, b) => a == b }
-  }
+import test
+import io/filesystem
+
+def main() = mainSuite("core") {
+    test("Basic Lexer") {
+        with handle_termination;
+        with environment;
+
+        var res: List[Token] = []
+        try { res = lexer::lex() }
+        with Files {
+            def readFile(_) = resume(
+                "test : :: / * - + ! && || Test i32 u32 float bool u8 i8 void void* void**"
+            )
+            def writeFile(_, _) = <>
+        }
+
+        val expected = [
+            TokenType::IdentifierT(),
+            TokenType::Symbol(Colon()),
+            TokenType::Symbol(DoubleColon()),
+            TokenType::Symbol(Divide()),
+            TokenType::Symbol(Asterisk()),
+            TokenType::Symbol(Minus()),
+            TokenType::Symbol(Plus()),
+            TokenType::Symbol(AndSym()),
+            TokenType::Symbol(OrSym()),
+            TokenType::TypeNameT(CustomT("Test")),
+            TokenType::TypeNameT(IntT()),
+            TokenType::TypeNameT(UIntT()),
+            TokenType::TypeNameT(FloatT()),
+            TokenType::TypeNameT(BoolT(None())),
+            TokenType::TypeNameT(UByteT()),
+            TokenType::TypeNameT(ByteT()),
+            TokenType::TypeNameT(VoidT()),
+            TokenType::TypeNameT(PointerT(VoidT())),
+            TokenType::TypeNameT(PointerT(PointerT(VoidT()))),
+        ]
+    }
+}
+
+def handle_termination[T] { prog: () => T / Termination }: Unit / Assertion = {
+    try { prog(); () }
+    with Termination { _ => do assert(false, "") }
+}
+
+def stop_handler[T] { prog: () => T / StopCompiler }: Unit = {
+    try { prog(); () }
+    with StopCompiler { () }
+}
+
+def environment[T] { prog: () => T / {CompilerSettingsRegister, InternalError, Termination, CompilerContextRequest} }: Unit / Termination = {
+    with stop_handler;
+    with settingsHandler;
+    with internalErrorHandler;
+    with compilerContextHandler;
+
+    prog()
 }

@@ -33,13 +33,15 @@ def getHelpLine(): String = try {
     }
 
 effect InternalError(msg: String, file: String, line: String): Nothing
+effect Termination(errc: Int): Unit
 
-def internalErrorHandler[T]{ prog: () => T / InternalError }: T = {
+def internalErrorHandler[T]{ prog: () => T / InternalError }: T / Termination = {
     try { prog() }
     with InternalError { (msg, file, line) => {
         println("[INTERNAL ERROR " ++ file ++ ":" ++ line ++ "] The program ran into an unexpected internal error. Please report this issue to the author.")
         println("        Internal Message: " ++ msg)
-        exit(COMPILER_INTERNAL_ERROR)
+        // exit(COMPILER_INTERNAL_ERROR)
+        do Termination(native::COMPILER_INTERNAL_ERROR)
         <>
     }}
 }
@@ -93,6 +95,7 @@ type Type {
 record FunctionSignature(
     name: String,
     public: Bool,
+    external: Bool,
     comptime: Bool,
     ofType: Option[Type],
     arguments: List[VariableSignature],
@@ -313,11 +316,11 @@ interface CompilerSettingsRegister {
 }
 
 interface CompilerContextRequest {
-    def setWorkingFile(file: String): Unit // sets the current working file to return fi file name request comes.
-    def getWorkingFile(): String // file name request
-    def setWorkingModule(mod: String): Unit // set working module name to mangle function names.
-    def getWorkingModule(): String // module name request.
-    def checkDependency(file: String): Bool // import "file", if it's already processed returns true, if not returns false
+    def setWorkingFile(file: String): Unit
+    def getWorkingFile(): String
+    def setWorkingModule(mod: String): Unit
+    def getWorkingModule(): String
+    def checkDependency(file: String): Bool
     def addFunction(fn: FunctionSignature): Unit / InternalError
     def addLayout(layout: LayoutSignature): Unit / InternalError
     def addVariable(variable: VariableSignature): Unit / InternalError
@@ -413,26 +416,13 @@ def getFile(_file: String): String / {InternalError, CompilerSettingsRegister} =
     file
 }
 
-// fileName, content
-def openRead(file: String): String / {InternalError, CompilerSettingsRegister} = {
-    try { with filesystem; do readFile(file) }
-    with Exception[IOError] {
-        def raise(_, _) = {
-            println("Couldn't open file at path '" ++ file ++ "'.")
-            exit(IO_ERROR)
-        }
-    }
+def openRead(file: String): String / {Files, InternalError, CompilerSettingsRegister} = {
+    do readFile(file)
 }
 
-def openWrite(file: String, content: String): Unit / {InternalError, CompilerSettingsRegister} = {
+def openWrite(file: String, content: String): Unit / {Files, InternalError, CompilerSettingsRegister} = {
     val file = do getWorkingDir() ++ file
-    try { with filesystem; writeFile(file, content) }
-    with Exception[IOError] {
-        def raise(_, _) = {
-            println("Couldn't open file at path '" ++ file ++ "'.")
-            exit(IO_ERROR)
-        }
-    }
+    do writeFile(file, content)
 }
 
 def feed[T] { stream: () => Unit / emit[T] } { prog: (T) => Unit / {CompilerContextRequest, InternalError} }: Unit / {CompilerContextRequest, InternalError} = {
@@ -528,7 +518,7 @@ def emptyModule(name: String): ModuleInfo = ModuleInfo(name, map::empty[String, 
 
 def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {InternalError, StopCompiler, CompilerSettingsRegister} = {
     val _builtIns = [
-        FunctionSignature("offset", true, false, None(), [
+        FunctionSignature("offset", true, false, false, None(), [
             VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny())),
             VariableSignature("off", false, true, false, false, 4, Type::Any([Type::Int(), Type::UInt()])),
         ], [ Type::Depends(box { l => {
@@ -538,11 +528,11 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
                 <>
         }})]),
 
-        FunctionSignature("sizeof", true, true, None(), [
+        FunctionSignature("sizeof", true, false, true, None(), [
             VariableSignature("var", false, true, false, false, 0, Type::InternalAny())
         ], [ Type::UInt() ]),
 
-        FunctionSignature("ptrcast", true, true, None(), [
+        FunctionSignature("ptrcast", true, false, true, None(), [
             VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny())),
             VariableSignature("newType", false, true, false, false, 4, Type::TypeType(Type::InternalAny()))
         ], [ Type::Depends(box { l => {
@@ -555,7 +545,7 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
             else <>
         }})]),
 
-        FunctionSignature("intcast", true, false, None(), [
+        FunctionSignature("intcast", true, false, false, None(), [
             VariableSignature("var", false, true, false, false, 0, Type::Any([
                 Type::Int(), Type::UInt(), Type::Byte(), Type::UByte(), Type::Float()
             ])),
@@ -568,7 +558,7 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
             else <>
         }})]),
 
-        FunctionSignature("deref", true, false, None(), [
+        FunctionSignature("deref", true, false, false, None(), [
             VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny()))
         ], [ Type::Depends(box { l => {
             if (l is Cons(Type::Pointer(returnType), Nil()))
@@ -578,7 +568,7 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
             else <>
         }})]),
 
-        FunctionSignature("ref", true, false, None(), [
+        FunctionSignature("ref", true, false, false, None(), [
             VariableSignature("var", false, true, false, false, 0, Type::InternalAny())
         ], [ Type::Depends(box { l => {
             if (l is Cons(t, Nil()))
@@ -587,7 +577,7 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
         }})]),
 
         // newValue is not type checked in parser, type check at IL generation
-        FunctionSignature("set", true, false, None(), [
+        FunctionSignature("set", true, false, false, None(), [
             VariableSignature("ptr", false, true, false, false, 0, Type::Pointer(Type::InternalAny())),
             VariableSignature("newValue", false, true, false, false, 4, Type::InternalAny())
         ], [ Type::Depends(box { l => {
@@ -600,11 +590,11 @@ def compilerContextHandler[T] { prog: () => T / CompilerContextRequest }: T / {I
             }
         }})]),
 
-        FunctionSignature("assert", true, true, None(), [
+        FunctionSignature("assert", true, false, true, None(), [
             VariableSignature("condition", false, false, true, false, 0, Type::Bool())
         ], [ Type::Void() ]),
 
-        FunctionSignature("unreachable", true, true, None(), [], [ Type::InternalAny() ])
+        FunctionSignature("unreachable", true, false, true, None(), [], [ Type::InternalAny() ])
     ]
     var builtIns: Map[String, FunctionSignature] = map::empty(box strOrder)
 
