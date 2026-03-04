@@ -1,5 +1,6 @@
 const std = @import("std");
 const common = @import("common.zig");
+const util = @import("util.zig");
 
 pub const JASL_VERSION = "0.0.1";
 
@@ -9,10 +10,14 @@ pub const CompilerSettings = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, inputFile: []const u8, workingDir: []const u8) common.CompilerError!Self {
+    pub fn init(
+        allocator: std.mem.Allocator,
+        inputFile: []const u8,
+        workingDir: []const u8
+    ) common.CompilerError!Self {
         var self = Self {
-            .inputFile = allocator.alloc(u8, inputFile.len) catch return error.CLIError,
-            .workingDir = allocator.alloc(u8, workingDir.len) catch return error.CLIError
+            .inputFile = allocator.alloc(u8, inputFile.len) catch return error.InternalError,
+            .workingDir = allocator.alloc(u8, workingDir.len) catch return error.InternalError
         };
 
         @memcpy(self.inputFile, inputFile);
@@ -25,9 +30,20 @@ pub const CompilerSettings = struct {
         allocator.free(self.inputFile);
         allocator.free(self.workingDir);
     }
+
+    pub fn print(self: *const Self, allocator: std.mem.Allocator) void {
+        util.println(
+            allocator,
+            "Compilation settings\n\tInput File: {s}\n\tWorking Dir: {s}",
+            .{self.inputFile, self.workingDir}
+        );
+    }
 };
 
 pub const CompilerError = error {
-    CLIError,
-    UnhandledError,
+    MissingFlag,
+    UnknownFlag,
+    InternalError,
+    NoSourceFile,
+    IOError,
 };
