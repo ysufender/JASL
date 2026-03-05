@@ -1,6 +1,5 @@
 const std = @import("std");
 const common = @import("core/common.zig");
-const util = @import("core/util.zig");
 const lexer = @import("lexer/lexer.zig");
 
 pub fn main() !void {
@@ -14,12 +13,12 @@ pub fn main() !void {
     defer io.deinit();
         
     innerMain(allocator, io.io()) catch |err| {
-        util.println(allocator, "Compiler exited with code {d} <{s}>", .{@intFromError(err), @errorName(err)});
+        std.log.err("Compiler exited with code {d} <{s}>", .{@intFromError(err), @errorName(err)});
         if (err == error.InternalError)
-            util.println(allocator, "\tThis internal error is likely an allocator fail.", .{});
+            std.log.err("\tThis internal error is likely an allocator fail.", .{});
         return;
     };
-    util.println(allocator, "Compiler exited succesfully.", .{});
+    std.log.info("Compiler exited succesfully.", .{});
 }
 
 fn innerMain(allocator: std.mem.Allocator, io: std.Io) common.CompilerError!void {
@@ -28,14 +27,14 @@ fn innerMain(allocator: std.mem.Allocator, io: std.Io) common.CompilerError!void
     defer compilerSettings.deinit(allocator);
 
     // Print Compilation Info
-    compilerSettings.print(allocator);
+    compilerSettings.print();
 
     // Open Source File
     const path = std.fs.realpathAlloc(allocator, compilerSettings.inputFile) catch return error.InternalError;
     defer allocator.free(path);
 
     var sourceFile = std.fs.openFileAbsolute(path, .{.mode = .read_only}) catch {
-        util.println(allocator, "Couldn't open source file '{s}'.", .{compilerSettings.inputFile});
+        std.log.err("Couldn't open source file '{s}'.", .{compilerSettings.inputFile});
         return error.IOError;
     };
     defer sourceFile.close();
@@ -61,15 +60,15 @@ fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.CompilerSe
         const arg = args.next();
 
         switch (hash(arg)) {
-            hash("--help") => printHelp(allocator),
-            hash("--version") => printHeader(allocator),
+            hash("--help") => printHelp(),
+            hash("--version") => printHeader(),
             hash("--working") => {
                 const dir = if (args.next()) |next| next else "*";
 
                 if (std.mem.eql(u8, dir, "*")) return error.MissingFlag;
 
                 std.process.changeCurDir(dir) catch |err| {
-                    util.println(allocator, "Failed to set working directory to '{s}',\n\tProvided information: {s}", .{dir, @errorName(err)});
+                    std.log.err("Failed to set working directory to '{s}',\n\tProvided information: {s}", .{dir, @errorName(err)});
                     return error.IOError;
                 };
 
@@ -80,7 +79,7 @@ fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.CompilerSe
             },
 
             else => if (maybeFile != null) {
-                util.println(allocator, "Unexpected commandline option {s}", .{arg.?});
+                std.log.err("Unexpected commandline option {s}", .{arg.?});
                 return error.UnknownFlag;
             } else {
                 maybeFile = arg;
@@ -91,24 +90,22 @@ fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.CompilerSe
     if (maybeFile) |file| {
         return common.CompilerSettings.init(allocator, file, workingDir);
     } else {
-        util.println(allocator, "jaslc expects an input file.", .{});
+        std.log.info("jaslc expects an input file.", .{});
         return error.NoSourceFile;
     }
 }
 
-fn printHeader(allocator: std.mem.Allocator) void {
-    util.println(
-        allocator,
+fn printHeader() void {
+    std.log.info(
         "The JASL Compiler:" ++
         "\n\tVersion: " ++ common.JASL_VERSION,
         .{}
     );
 }
 
-fn printHelp(allocator: std.mem.Allocator) void {
-    printHeader(allocator);
-    util.println(
-        allocator,
+fn printHelp() void {
+    printHeader();
+    std.log.info(
         "\n\tUsage:\n\tjaslc <input_file> [flags]\n\n\tFlags:" ++
         "\n\t\t --help: Print this help message.",
         .{}

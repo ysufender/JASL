@@ -1,6 +1,5 @@
 const std = @import("std");
 const common = @import("common.zig");
-const util = @import("util.zig");
 
 pub const JASL_VERSION = "0.0.1";
 
@@ -31,9 +30,8 @@ pub const CompilerSettings = struct {
         allocator.free(self.workingDir);
     }
 
-    pub fn print(self: *const Self, allocator: std.mem.Allocator) void {
-        util.println(
-            allocator,
+    pub fn print(self: *const Self) void {
+        std.log.info(
             "Compilation settings\n\tInput File: {s}\n\tWorking Dir: {s}\n",
             .{self.inputFile, self.workingDir}
         );
@@ -47,4 +45,6 @@ pub const CompilerError = error {
     NoSourceFile,
     IOError,
     InvalidToken,
+    UnterminatedComment,
+    UnterminatedStringLiteral,
 };
