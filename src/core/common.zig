@@ -34,7 +34,7 @@ pub const CompilerSettings = struct {
     pub fn print(self: *const Self, allocator: std.mem.Allocator) void {
         util.println(
             allocator,
-            "Compilation settings\n\tInput File: {s}\n\tWorking Dir: {s}",
+            "Compilation settings\n\tInput File: {s}\n\tWorking Dir: {s}\n",
             .{self.inputFile, self.workingDir}
         );
     }
@@ -46,4 +46,5 @@ pub const CompilerError = error {
     InternalError,
     NoSourceFile,
     IOError,
+    InvalidToken,
 };

@@ -3,18 +3,51 @@ const common = @import("core/common.zig");
 const util = @import("core/util.zig");
 const lexer = @import("lexer/lexer.zig");
 
-pub fn main() void {
-    const allocator_t = std.heap.DebugAllocator(.{});
+pub fn main() !void {
+    // Init Allocator
+    const allocator_t = std.heap.DebugAllocator(.{ });
     var alc = allocator_t.init;
     const allocator = alc.allocator();
 
-    var compilerSettings = parseCLI(allocator) catch |err| {
+    // Init IO
+    var io = std.Io.Threaded.init(allocator);
+    defer io.deinit();
+        
+    innerMain(allocator, io.io()) catch |err| {
         util.println(allocator, "Compiler exited with code {d} <{s}>", .{@intFromError(err), @errorName(err)});
+        if (err == error.InternalError)
+            util.println(allocator, "\tThis internal error is likely an allocator fail.", .{});
         return;
     };
+    util.println(allocator, "Compiler exited succesfully.", .{});
+}
+
+fn innerMain(allocator: std.mem.Allocator, io: std.Io) common.CompilerError!void {
+    // Parse CLI
+    var compilerSettings = try parseCLI(allocator);
     defer compilerSettings.deinit(allocator);
 
+    // Print Compilation Info
     compilerSettings.print(allocator);
+
+    // Open Source File
+    const path = std.fs.realpathAlloc(allocator, compilerSettings.inputFile) catch return error.InternalError;
+    defer allocator.free(path);
+
+    var sourceFile = std.fs.openFileAbsolute(path, .{.mode = .read_only}) catch {
+        util.println(allocator, "Couldn't open source file '{s}'.", .{compilerSettings.inputFile});
+        return error.IOError;
+    };
+    defer sourceFile.close();
+
+    var fileReader = sourceFile.reader(io, &.{});
+    const sourceSize = fileReader.getSize() catch return error.InternalError;
+    const source = fileReader.interface.readAlloc(allocator, sourceSize) catch return error.InternalError;
+
+    var scanner = try lexer.Scanner.init(allocator, path, source);
+    defer scanner.deinit(allocator);
+
+    _ = try scanner.scanAll(allocator);
 }
 
 fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.CompilerSettings {
