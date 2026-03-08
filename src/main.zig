@@ -1,24 +1,24 @@
 const std = @import("std");
 const common = @import("core/common.zig");
 const lexer = @import("lexer/lexer.zig");
+const parser = @import("parser/parser.zig");
 
 pub fn main() !void {
     // Init Allocator
-    const allocator_t = std.heap.DebugAllocator(.{ });
-    var alc = allocator_t.init;
-    const allocator = alc.allocator();
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    const allocator = arena.allocator();
 
     // Init IO
     var io = std.Io.Threaded.init(allocator);
     defer io.deinit();
-        
+
     innerMain(allocator, io.io()) catch |err| {
-        std.log.err("Compiler exited with code {d} <{s}>", .{@intFromError(err), @errorName(err)});
+        common.log.err("Compiler exited with code {d} <{s}>", .{@intFromError(err), @errorName(err)});
         if (err == error.InternalError)
-            std.log.err("\tThis internal error is likely an allocator fail.", .{});
+            common.log.err("\tThis internal error is likely an allocator fail.", .{});
         return;
     };
-    std.log.info("Compiler exited succesfully.", .{});
+    common.log.info("Compiler exited succesfully.", .{});
 }
 
 fn innerMain(allocator: std.mem.Allocator, io: std.Io) common.CompilerError!void {
@@ -34,7 +34,7 @@ fn innerMain(allocator: std.mem.Allocator, io: std.Io) common.CompilerError!void
     defer allocator.free(path);
 
     var sourceFile = std.fs.openFileAbsolute(path, .{.mode = .read_only}) catch {
-        std.log.err("Couldn't open source file '{s}'.", .{compilerSettings.inputFile});
+        common.log.err("Couldn't open source file '{s}'.", .{compilerSettings.inputFile});
         return error.IOError;
     };
     defer sourceFile.close();
@@ -43,14 +43,18 @@ fn innerMain(allocator: std.mem.Allocator, io: std.Io) common.CompilerError!void
     const sourceSize = fileReader.getSize() catch return error.InternalError;
     const source = fileReader.interface.readAlloc(allocator, sourceSize) catch return error.InternalError;
 
-    var scanner = try lexer.Scanner.init(allocator, path, source);
+    var scanner = try lexer.Scanner.init(path, source);
     defer scanner.deinit(allocator);
+    const tokenList = try scanner.scanAll(allocator);
 
-    _ = try scanner.scanAll(allocator);
+    var prs = parser.Parser.init(tokenList.items);
+    _ = try prs.parse(allocator);
 }
 
 fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.CompilerSettings {
-    var args = std.process.args();
+    var args = std.process.argsWithAllocator(allocator) catch return error.AllocatorFailure;
+    defer args.deinit();
+
     _ = args.skip();
 
     var maybeFile: ?[]const u8 = null;
@@ -63,12 +67,12 @@ fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.CompilerSe
             hash("--help") => printHelp(),
             hash("--version") => printHeader(),
             hash("--working") => {
-                const dir = if (args.next()) |next| next else "*";
+                const dir = if (args.next()) |next| next else "";
 
-                if (std.mem.eql(u8, dir, "*")) return error.MissingFlag;
+                if (std.mem.eql(u8, dir, "")) return error.MissingFlag;
 
                 std.process.changeCurDir(dir) catch |err| {
-                    std.log.err("Failed to set working directory to '{s}',\n\tProvided information: {s}", .{dir, @errorName(err)});
+                    common.log.err("Failed to set working directory to '{s}',\n\tProvided information: {s}", .{dir, @errorName(err)});
                     return error.IOError;
                 };
 
@@ -79,7 +83,7 @@ fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.CompilerSe
             },
 
             else => if (maybeFile != null) {
-                std.log.err("Unexpected commandline option {s}", .{arg.?});
+                common.log.err("Unexpected commandline option {s}", .{arg.?});
                 return error.UnknownFlag;
             } else {
                 maybeFile = arg;
@@ -90,13 +94,13 @@ fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.CompilerSe
     if (maybeFile) |file| {
         return common.CompilerSettings.init(allocator, file, workingDir);
     } else {
-        std.log.info("jaslc expects an input file.", .{});
+        common.log.info("jaslc expects an input file.", .{});
         return error.NoSourceFile;
     }
 }
 
 fn printHeader() void {
-    std.log.info(
+    common.log.info(
         "The JASL Compiler:" ++
         "\n\tVersion: " ++ common.JASL_VERSION,
         .{}
@@ -105,7 +109,7 @@ fn printHeader() void {
 
 fn printHelp() void {
     printHeader();
-    std.log.info(
+    common.log.info(
         "\n\tUsage:\n\tjaslc <input_file> [flags]\n\n\tFlags:" ++
         "\n\t\t --help: Print this help message.",
         .{}
@@ -123,4 +127,13 @@ fn hash(str: ?[]const u8) usize {
         return 4;
     }
     else return 0;
+}
+
+//
+// Tests
+//
+
+test "All Tests" {
+    _ = lexer.Tests;
+    _ = parser.Tests;
 }

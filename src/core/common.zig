@@ -1,5 +1,7 @@
+const common = @This();
+
 const std = @import("std");
-const common = @import("common.zig");
+const builtin = @import("builtin");
 
 pub const JASL_VERSION = "0.0.1";
 
@@ -31,7 +33,7 @@ pub const CompilerSettings = struct {
     }
 
     pub fn print(self: *const Self) void {
-        std.log.info(
+        common.log.info(
             "Compilation settings\n\tInput File: {s}\n\tWorking Dir: {s}\n",
             .{self.inputFile, self.workingDir}
         );
@@ -47,4 +49,27 @@ pub const CompilerError = error {
     InvalidToken,
     UnterminatedComment,
     UnterminatedStringLiteral,
+    DotPrefixedNumericLiteral,
+    DotPostfixedNumericLiteral,
+    UnexpectedCharacter,
+    AllocatorFailure,
+    MissingBrace,
+    MissingParenthesis,
+    MissingSemicolon,
+    MissingComma,
+    MissingArrow,
+    MissingTypeSpecifier,
+    MissingIdentifier,
+    MissingColon,
+    MissingAssignment,
+    MissingBracket,
+    MissingBranch,
+};
+
+pub const log = struct {
+    pub const info = if (builtin.is_test) emptyLog else std.log.info;
+    pub const warn = if (builtin.is_test) emptyLog else std.log.warn;
+    pub const err = if (builtin.is_test) emptyLog else std.log.err;
+
+    fn emptyLog(comptime _: []const u8, _: anytype) void { }
 };

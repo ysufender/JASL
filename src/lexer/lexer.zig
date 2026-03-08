@@ -3,38 +3,46 @@ const common = @import("../core/common.zig");
 
 pub const TokenList = std.ArrayList(Token);
 
-pub const TokenType = union(enum) {
+pub const TokenType = enum {
     LParen, RParen,
     LBrace, RBrace,
+    LBracket, RBracket,
     Comma, Dot, Colon, DoubleColon, Semicolon,
-    Minus, Plus, Slash, Star,
+    Xor, Tilde, Minus, Plus, Slash, Star,
     Bang, BangEqual,
     Equal, EqualEqual,
     Greater, GreaterEqual,
     Lesser, LesserEqual,
     LeftShift, RightShift,
     Arrow,
-    Pipe, Ampersant,
+    Pipe, Ampersand,
     Include, Namespace,
     If, Else, While,
     Return, Defer, Extern,
+    Break, Continue,
     Fn, Layout, Let, 
+    Asm,
     Pub, Mut,
     And, Or,
     Identifier,
     TypeName,
     String, Integer, Float, False, True, Nullptr,
+    Discard,
     EOF,
 };
 
+/// Position does not own the file
 pub const Position = struct {
     const Self = @This();
 
+
+    file: []const u8,
     line: usize,
     column: usize,
 
-    pub fn init(line: usize, col: usize) Self {
+    pub fn init(file: []const u8, line: usize, col: usize) Self {
         return .{
+            .file = file,
             .line = line,
             .column = col
         };
@@ -49,6 +57,16 @@ pub const Token = struct {
 
     const Self = @This();
 
+    pub const eof: Self = .{
+        .type = .EOF,
+        .lexeme = "",
+        .position = .{
+            .file = "",
+            .line = 0,
+            .column = 0
+        }
+    };
+
     // Token does not own the lexeme
     pub fn init(tokenType: TokenType, lexeme: []const u8, position: Position) Self {
         return .{
@@ -58,15 +76,14 @@ pub const Token = struct {
         };
     }
 
-    /// self.lexeme
-    pub fn toString(self: *const Self)  void {
-        std.log.info(
-            "<{s}:{s}>",
-            .{@tagName(self.type), self.lexeme}
-        );
+    pub fn toString(self: *const Self, allocator: std.mem.Allocator) []const u8 {
+        const length =  @tagName(self.type).len + self.lexeme.len + 4;
+        const buffer = allocator.alloc(u8, length) catch return "";
+        return std.fmt.bufPrint(buffer, "<{s}: {s}>", .{@tagName(self.type), self.lexeme}) catch unreachable;
     }
 };
 
+/// Scanner does not own neither the file, nor the source
 pub const Scanner = struct {
     source: []const u8,
     tokens: TokenList,
@@ -80,15 +97,20 @@ pub const Scanner = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, file: []const u8, source: []const u8) common.CompilerError!Self {
+    //
+    // Public API
+    //
+
+    /// Scanner does not own neither the file, nor the source
+    pub fn init(file: []const u8, source: []const u8) common.CompilerError!Self {
         return .{
             .start = 0,
             .current = 0,
-            .line = 0,
+            .line = 1,
             .col = 0,
             .file = file,
             .source = source,
-            .tokens = TokenList.initCapacity(allocator, 128) catch return error.InternalError,
+            .tokens = TokenList.empty,
         };
     }
 
@@ -106,9 +128,10 @@ pub const Scanner = struct {
         self.tokens.append(
             allocator,
             Token.init(
-                TokenType.EOF,
+                .EOF,
                 "EOF",
                 .{
+                    .file = self.file,
                     .line = self.line,
                     .column = 0
                 }
@@ -119,28 +142,42 @@ pub const Scanner = struct {
         self.tokens = TokenList.empty;
         self.start = 0;
         self.current = 0;
-        self.line = 0;
+        self.line = 1;
+        self.col = 1;
 
         return tokens;
     }
 
+    //
+    // Private Implementation
+    //
+
     fn scanToken(self: *Self, allocator: std.mem.Allocator) common.CompilerError!void {
         return switch (self.advance()) {
             '\n' => { },
-            '(' => self.addToken(TokenType.LParen, allocator),
-            ')' => self.addToken(TokenType.RParen, allocator),
-            '{' => self.addToken(TokenType.LBrace, allocator),
-            '}' => self.addToken(TokenType.RBrace, allocator),
-            ',' => self.addToken(TokenType.Comma, allocator),
-            '.' => self.addToken(TokenType.Dot, allocator),
+            '(' => self.addToken(.LParen, allocator),
+            ')' => self.addToken(.RParen, allocator),
+            '{' => self.addToken(.LBrace, allocator),
+            '}' => self.addToken(.RBrace, allocator),
+            '[' => self.addToken(.LBracket, allocator),
+            ']' => self.addToken(.RBracket, allocator),
+            ',' => self.addToken(.Comma, allocator),
+            '~' => self.addToken(.Tilde, allocator),
+            '^' => self.addToken(.Xor, allocator),
+            '.' => 
+                if (std.ascii.isDigit(self.peek())) {
+                    self.report("Dot (.) prefixed numeric literals are not allowed.", .{});
+                    return error.DotPrefixedNumericLiteral;
+                }
+                else self.addToken(.Dot, allocator),
             ':' =>
-                if (self.match(':')) self.addToken(TokenType.DoubleColon, allocator)
-                else self.addToken(TokenType.Colon, allocator),
-            ';' => self.addToken(TokenType.Semicolon, allocator),
+                if (self.match(':')) self.addToken(.DoubleColon, allocator)
+                else self.addToken(.Colon, allocator),
+            ';' => self.addToken(.Semicolon, allocator),
             '-' => 
-                if (self.match('>')) self.addToken(TokenType.Arrow, allocator)
-                else self.addToken(TokenType.Minus, allocator),
-            '+' => self.addToken(TokenType.Plus, allocator),
+                if (self.match('>')) self.addToken(.Arrow, allocator)
+                else self.addToken(.Minus, allocator),
+            '+' => self.addToken(.Plus, allocator),
             '/' => 
                 if (self.match('/')) {
                     while (self.advance() != '\n') { }
@@ -164,26 +201,26 @@ pub const Scanner = struct {
                         return error.UnterminatedComment;
                     }
                 }
-                else self.addToken(TokenType.Slash, allocator),
-            '*' => self.addToken(TokenType.Star, allocator),
+                else self.addToken(.Slash, allocator),
+            '*' => self.addToken(.Star, allocator),
             '!' =>
-                if (self.match('=')) self.addToken(TokenType.BangEqual, allocator)
-                else self.addToken(TokenType.Bang, allocator),
+                if (self.match('=')) self.addToken(.BangEqual, allocator)
+                else self.addToken(.Bang, allocator),
             '=' =>
-                if (self.match('=')) self.addToken(TokenType.EqualEqual, allocator)
-                else self.addToken(TokenType.Equal, allocator),
+                if (self.match('=')) self.addToken(.EqualEqual, allocator)
+                else self.addToken(.Equal, allocator),
             '>' =>
-                if (self.match('=')) self.addToken(TokenType.GreaterEqual, allocator)
-                else if (self.match('>')) self.addToken(TokenType.RightShift, allocator)
-                else self.addToken(TokenType.Greater, allocator),
+                if (self.match('=')) self.addToken(.GreaterEqual, allocator)
+                else if (self.match('>')) self.addToken(.RightShift, allocator)
+                else self.addToken(.Greater, allocator),
             '<' =>
-                if (self.match('=')) self.addToken(TokenType.LesserEqual, allocator)
-                else if (self.match('<')) self.addToken(TokenType.LeftShift, allocator)
-                else self.addToken(TokenType.Lesser, allocator),
-            '|' => self.addToken(TokenType.Pipe, allocator),
-            '&' => self.addToken(TokenType.Ampersant, allocator),
+                if (self.match('=')) self.addToken(.LesserEqual, allocator)
+                else if (self.match('<')) self.addToken(.LeftShift, allocator)
+                else self.addToken(.Lesser, allocator),
+            '|' => self.addToken(.Pipe, allocator),
+            '&' => self.addToken(.Ampersand, allocator),
             '"' => {
-                while (self.peek() != '"' and !self.isAtEnd()) {
+                while (!self.check('"') and !self.isAtEnd()) {
                     _ = self.advance();
                 }
 
@@ -193,7 +230,7 @@ pub const Scanner = struct {
                 }
 
                 _ = self.advance();
-                try self.addToken(TokenType.String, allocator);
+                try self.addToken(.String, allocator);
             },
             // TODO: character literals
             else => |ch|
@@ -203,41 +240,53 @@ pub const Scanner = struct {
                         _ = self.advance();
                     }
 
-                    if (self.peek() == '.' and std.ascii.isDigit(self.peekn(1))) {
+                    if (self.check('.') and std.ascii.isDigit(self.peekn(1))) {
                         _ = self.advance();
 
                         while (std.ascii.isDigit(self.peek())) {
                             _ = self.advance();
                         }
 
-                        return self.addToken(TokenType.Float, allocator);
+                        return self.addToken(.Float, allocator);
+                    }
+                    else if (self.check('.')) {
+                        _ = self.advance();
+                        self.report("Trailing dots (.) after numeric literals are not allowed.", .{});
+                        return error.DotPostfixedNumericLiteral;
                     }
 
-                    return self.addToken(TokenType.Integer, allocator);
+                    return self.addToken(.Integer, allocator);
                 }
-                else if (std.ascii.isAlphabetic(ch)){
-                    self.current -= 1;
-                    while (std.ascii.isAlphanumeric(self.peek())) {
+                else if (std.ascii.isAlphabetic(ch) or ch == '_'){
+                    while (std.ascii.isAlphanumeric(self.peek()) or self.check('_')) {
                         _ = self.advance();
                     }
 
                     const str = self.source[self.start..self.current];
 
-                    if (!std.ascii.isUpper(str[0])) {
+                    if (getType(str) != .TypeName) {
                         return self.addToken(
                             getType(str),
                             allocator
                         );
                     }
 
-                    while (self.peek() == '*') { _ = self.advance(); }
-                    try self.addToken(TokenType.TypeName, allocator);
+                    try self.addToken(.TypeName, allocator);
                 }
                 else {
                     self.report("Unexpected character {c}", .{ch});
-                    return error.InvalidToken;
+                    return error.UnexpectedCharacter;
                 }
         };
+    }
+
+    //
+    // Helpers
+    //
+
+    fn check(self: *Self, expected: u8) bool {
+        if (self.isAtEnd()) return false;
+        return self.source[self.current] == expected;
     }
 
     fn match(self: *Self, expected: u8) bool {
@@ -260,6 +309,7 @@ pub const Scanner = struct {
 
     fn advance(self: *Self) u8 {
         self.current += 1;
+        self.col += 1;
         switch (self.source[self.current-1]) {
             '\n' => {
                 self.line += 1;
@@ -278,7 +328,7 @@ pub const Scanner = struct {
 
     fn addToken(self: *Self, tokenType: TokenType, allocator: std.mem.Allocator) common.CompilerError!void {
         const str = self.source[self.start..self.current];
-        self.tokens.append(allocator, .init(tokenType, str, .init(self.line, self.col)))
+        self.tokens.append(allocator, .init(tokenType, str, .init(self.file, self.line, self.col)))
             catch return error.InvalidToken;
     }
 
@@ -288,29 +338,48 @@ pub const Scanner = struct {
 
     fn getType(str: []const u8) TokenType {
         return
-            if (std.mem.eql(u8, str, "and")) TokenType.And
-            else if (std.mem.eql(u8, str, "or")) TokenType.Or
-            else if (std.mem.eql(u8, str, "if")) TokenType.If
-            else if (std.mem.eql(u8, str, "else")) TokenType.Else
-            else if (std.mem.eql(u8, str, "while")) TokenType.While
-            else if (std.mem.eql(u8, str, "fn")) TokenType.Fn
-            else if (std.mem.eql(u8, str, "return")) TokenType.Return
-            else if (std.mem.eql(u8, str, "defer")) TokenType.Defer
-            else if (std.mem.eql(u8, str, "extern")) TokenType.Extern
-            else if (std.mem.eql(u8, str, "let")) TokenType.Let
-            else if (std.mem.eql(u8, str, "include")) TokenType.Include
-            else if (std.mem.eql(u8, str, "namespace")) TokenType.Namespace
-            else if (std.mem.eql(u8, str, "false")) TokenType.False
-            else if (std.mem.eql(u8, str, "true")) TokenType.True
-            else if (std.mem.eql(u8, str, "nullptr")) TokenType.Nullptr
-            else if (std.mem.eql(u8, str, "layout")) TokenType.Layout
-            else if (std.mem.eql(u8, str, "pub")) TokenType.Pub
-            else if (std.mem.eql(u8, str, "mut")) TokenType.Mut
-            else TokenType.Identifier;
+            if (std.mem.eql(u8, str, "and")) .And
+            else if (std.mem.eql(u8, str, "or")) .Or
+            else if (std.mem.eql(u8, str, "if")) .If
+            else if (std.mem.eql(u8, str, "else")) .Else
+            else if (std.mem.eql(u8, str, "while")) .While
+            else if (std.mem.eql(u8, str, "fn")) .Fn
+            else if (std.mem.eql(u8, str, "return")) .Return
+            else if (std.mem.eql(u8, str, "defer")) .Defer
+            else if (std.mem.eql(u8, str, "extern")) .Extern
+            else if (std.mem.eql(u8, str, "let")) .Let
+            else if (std.mem.eql(u8, str, "include")) .Include
+            else if (std.mem.eql(u8, str, "namespace")) .Namespace
+            else if (std.mem.eql(u8, str, "false")) .False
+            else if (std.mem.eql(u8, str, "true")) .True
+            else if (std.mem.eql(u8, str, "nullptr")) .Nullptr
+            else if (std.mem.eql(u8, str, "layout")) .Layout
+            else if (std.mem.eql(u8, str, "pub")) .Pub
+            else if (std.mem.eql(u8, str, "mut")) .Mut
+            else if (std.mem.eql(u8, str, "asm")) .Asm
+            else if (std.mem.eql(u8, str, "break")) .Break
+            else if (std.mem.eql(u8, str, "continue")) .Continue
+            else if (std.mem.eql(u8, str, "bool")) .TypeName
+            else if (std.mem.eql(u8, str, "u32")) .TypeName
+            else if (std.mem.eql(u8, str, "i32")) .TypeName
+            else if (std.mem.eql(u8, str, "u8")) .TypeName
+            else if (std.mem.eql(u8, str, "i8")) .TypeName
+            else if (std.mem.eql(u8, str, "float")) .TypeName
+            else if (std.mem.eql(u8, str, "_")) .Discard
+            else if (std.mem.eql(u8, str, "type")) .TypeName
+            else if (std.mem.eql(u8, str, "any")) .TypeName
+            else .Identifier;
     }
 
     fn report(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        std.log.err(fmt, args);
-        std.log.err("\t{s} {d}:{d}\n", .{self.file, self.line, self.col});
+        common.log.err("[LEXER ERROR] ", .{});
+        common.log.err(fmt, args);
+        common.log.err("\t{s} {d}:{d}\n", .{self.file, self.line, self.col});
     }
+};
+
+//
+// Tests
+//
+pub const Tests = struct {
 };
