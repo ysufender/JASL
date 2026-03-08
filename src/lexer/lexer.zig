@@ -114,12 +114,8 @@ pub const Scanner = struct {
         };
     }
 
-    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
-        self.tokens.clearAndFree(allocator);
-    }
-
     /// Releases the ownership of self.tokens
-    pub fn scanAll(self: *Self, allocator: std.mem.Allocator) common.CompilerError!TokenList {
+    pub fn scanAll(self: *Self, allocator: std.mem.Allocator) common.CompilerError![]Token {
         while (!self.isAtEnd()) {
             self.start = self.current;
             try self.scanToken(allocator);
@@ -138,14 +134,12 @@ pub const Scanner = struct {
             )
         ) catch return error.InternalError;
 
-        const tokens = self.tokens;
-        self.tokens = TokenList.empty;
         self.start = 0;
         self.current = 0;
         self.line = 1;
         self.col = 1;
 
-        return tokens;
+        return self.tokens.toOwnedSlice(allocator) catch error.AllocatorFailure;
     }
 
     //

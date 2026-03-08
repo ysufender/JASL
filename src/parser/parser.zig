@@ -7,12 +7,12 @@ const Allocator = std.mem.Allocator;
 
 const ExpressionResult = common.CompilerError!*Expression;
 
-const StatementResult = common.CompilerError!*Statement;
-const StatementList = std.ArrayList(*Statement);
-const VariableSignatureList = std.ArrayList(VariableSignature);
-const TypeList = std.ArrayList(*Expression);
-const IdentifierList = std.ArrayList(lexer.Token);
-const ExpressionList = std.ArrayList(*Expression);
+pub const StatementResult = common.CompilerError!*Statement;
+pub const StatementList = std.ArrayList(*Statement);
+pub const VariableSignatureList = std.ArrayList(VariableSignature);
+pub const TypeList = std.ArrayList(*Expression);
+pub const IdentifierList = std.ArrayList(*const lexer.Token);
+pub const ExpressionList = std.ArrayList(*Expression);
 
 pub const Expression = union(enum) {
     Binary: struct {
@@ -21,13 +21,16 @@ pub const Expression = union(enum) {
         rhs: *Expression,
     },
     Grouping: *Expression,
-    Literal: lexer.Token,
-    Identifier: lexer.Token,
+    Literal: *const lexer.Token,
+    Identifier: *const lexer.Token,
     Unary: struct {
         operator: TokenType,
         rhs: *Expression,
     },
-    LayoutDefinition: VariableSignatureList,
+    LayoutDefinition: struct {
+        variables: VariableSignatureList,
+        functions: StatementList,
+    },
     Call: struct {
         function: *Expression,
         arguments: ExpressionList, 
@@ -46,17 +49,17 @@ pub const Expression = union(enum) {
                 parameters: TypeList,
                 returns: TypeList,
             },
-            Value: lexer.Token,
+            Value: *const lexer.Token,
         },
     },
     Scoping: struct {
         namespace: *Expression,
-        member: lexer.Token,
+        member: *const lexer.Token,
     },
     ExpressionList: ExpressionList,
     Dot: struct {
         lhs: *Expression,
-        rhs: lexer.Token,
+        rhs: *const lexer.Token,
     },
     Indexing: struct {
         lhs: *Expression,
@@ -69,7 +72,7 @@ pub const Statement = union(enum) {
     InlineAssembly: []const u8,
     FunctionDefinition: struct {
         public: bool,
-        name: lexer.Token,
+        name: *const lexer.Token,
         params: VariableSignatureList,
         returnType: TypeList,
         body: *Statement,
@@ -92,13 +95,13 @@ pub const Statement = union(enum) {
     },
     Discard: *Expression,
     Namespace: *Expression,
-    Include: lexer.Token,
+    Include: *const lexer.Token,
 };
 
 pub const VariableSignature = struct {
     public: bool,
-    name: lexer.Token,
-    type: ?*Expression,
+    name: *const lexer.Token,
+    type: *Expression,
 };
 
 pub const Parser = struct {
@@ -639,8 +642,13 @@ pub const Parser = struct {
     }
 
     fn unary(self: *Self, allocator: Allocator) ExpressionResult {
-        while (self.match(&.{.Bang, .Minus, .Plus, .Tilde})) {
+        while (self.match(&.{.Bang, .Minus, .Plus, .Tilde, .Star, .LBracket})) {
             const operator = self.previous().type;
+
+            if (self.previous().type == .LBracket) {
+                _ = try self.consume(.RBracket, error.MissingBracket, "Expected enclosing bracket in type expression.");
+            }
+
             const rhs = try self.unary(allocator);
 
             const expr = allocator.create(Expression) catch return error.AllocatorFailure;
@@ -797,10 +805,81 @@ pub const Parser = struct {
                 };
                 return newExpr;
             },
+            .LBrace => {
+                _ = self.advance();
+                var expressions = ExpressionList.empty;
+
+                while (!self.isAtEnd() and !self.check(.RBrace)) {
+                    expressions.append(allocator, try self.expression(allocator)) catch return error.AllocatorFailure;
+
+                    if (!self.match(&.{.Comma})) {
+                        break;
+                    }
+                }
+                _ = try self.consume(.RBrace, error.MissingBrace, "Expected enclosing brace '}' in expression list.");
+
+                const expr = allocator.create(Expression) catch return error.AllocatorFailure;
+                expr.* = .{
+                    .ExpressionList = expressions,
+                };
+                return expr;
+            },
             .Identifier => {
                 const expr = allocator.create(Expression) catch return error.AllocatorFailure;
                 expr.* = .{
                     .Identifier = self.advance(),
+                };
+                return expr;
+            },
+            .Layout => {
+                _ = self.advance();
+                _ = try self.consume(.LBrace, error.MissingBrace, "Expected layout body.");
+
+                var variables = VariableSignatureList.empty;
+                var functions = StatementList.empty;
+
+                while (!self.isAtEnd() and !self.check(.RBrace)) {
+                    switch (self.peek().type) {
+                        .Pub => {
+                            _ = self.advance();
+                            switch (self.peek().type) {
+                                .Fn => functions.append(allocator, try self.function(allocator, true)) catch return error.AllocatorFailure,
+                                .Identifier => {
+                                    variables.append(allocator, try self.variableSignature(allocator, true, true)) catch return error.AllocatorFailure;
+
+                                    if (!self.match(&.{.Comma}))
+                                        break;
+                                },
+                                else => {
+                                    self.report("Expected a function or a field definition after 'pub' specifier.", .{});
+                                    return error.InvalidToken;
+                                },
+                            }
+                        },
+                        .Fn => {
+                            _ = self.advance();
+                            functions.append(allocator, try self.function(allocator, false)) catch return error.AllocatorFailure;
+                        },
+                        .Identifier => {
+                            variables.append(allocator, try self.variableSignature(allocator, false, true)) catch return error.AllocatorFailure;
+
+                            if (!self.match(&.{.Comma}))
+                                break;
+                        },
+                        else => {
+                            self.report("Expected a function or a field definition in layout definition.", .{});
+                            return error.InvalidToken;
+                        },
+                    }
+                }
+                _ = try self.consume(.RBrace, error.MissingBrace, "Expected enclosing brace after layout definition.");
+
+                const expr = allocator.create(Expression) catch return error.AllocatorFailure;
+                expr.* = .{
+                    .LayoutDefinition = .{
+                        .variables = variables,
+                        .functions = functions,
+                    },
                 };
                 return expr;
             },
@@ -828,47 +907,7 @@ pub const Parser = struct {
             },
         };
 
-        return self.parseTypeSuffixes(allocator, expr);
-    }
-
-    fn parseTypeSuffixes(self: *Self, allocator: Allocator, expr: *Expression) ExpressionResult {
-        var base = expr;
-
-        while (true) {
-            if (self.match(&.{.Star})) {
-                const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-                newExpr.* = .{
-                    .Type = .{
-                        .mutable = base.Type.mutable,
-                        .type = .{
-                            .Pointer = base,
-                        },
-                    },
-                };
-
-                base = newExpr;
-            }
-            else if (self.match(&.{.LBracket})) {
-                _ = try self.consume(.RBracket, error.MissingBracket, "Expected enclosing bracket ']'.");
-
-                const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-                newExpr.* = .{
-                    .Type = .{
-                        .mutable = base.Type.mutable,
-                        .type = .{
-                            .Slice = base,
-                        },
-                    },
-                };
-
-                base = newExpr;
-            }
-            else {
-                break;
-            }
-        }
-
-        return base;
+        return expr;
     }
 
     //
@@ -879,10 +918,27 @@ pub const Parser = struct {
         const name = try self.consume(.Identifier, error.MissingIdentifier, "Expected an identifier at variable signature.");
 
         if (!enforceType and !self.check(.Colon)) {
+            const typename = allocator.create(Expression) catch return error.AllocatorFailure;
+            const typeValue = allocator.create(lexer.Token) catch return error.AllocatorFailure;
+
+            typeValue.* = .{
+                .type = .TypeName,
+                .lexeme = "any",
+                .position = self.previous().position,
+            };
+
+            typename.* = .{
+                .Type = .{
+                    .mutable = true,
+                    .type = .{
+                        .Value = typeValue,
+                    },
+                },
+            };
             return .{
                 .public = public,
                 .name = name,
-                .type = null,
+                .type = typename,
             };
         }
 
@@ -897,27 +953,27 @@ pub const Parser = struct {
         };
     }
 
-    fn consume(self: *Self, tokenType: TokenType, err: common.CompilerError, message: []const u8) common.CompilerError!lexer.Token {
+    fn consume(self: *Self, tokenType: TokenType, err: common.CompilerError, message: []const u8) common.CompilerError!*const lexer.Token {
         if (self.check(tokenType)) return self.advance();
 
         self.report("{s}\n\tExpected {s}, Received {s}", .{message, @tagName(tokenType), @tagName(self.peek().type)});
         return err;
     }
 
-    fn previous(self: *Self) lexer.Token {
-        if (self.current == 0) return lexer.Token.eof;
-        return self.tokens[self.current - 1];
+    fn previous(self: *Self) *const lexer.Token {
+        if (self.current == 0) return &lexer.Token.eof;
+        return &self.tokens[self.current - 1];
     }
 
-    fn peek(self: *Self) lexer.Token {
-        return self.tokens[self.current];
+    fn peek(self: *Self) *const lexer.Token {
+        return &self.tokens[self.current];
     }
 
     fn isAtEnd(self: *Self) bool {
         return self.peek().type == .EOF;
     }
 
-    fn advance(self: *Self) lexer.Token {
+    fn advance(self: *Self) *const lexer.Token {
         if (!self.isAtEnd()) self.current += 1;
         return self.previous();
     }

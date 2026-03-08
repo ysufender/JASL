@@ -2,6 +2,7 @@ const std = @import("std");
 const common = @import("core/common.zig");
 const lexer = @import("lexer/lexer.zig");
 const parser = @import("parser/parser.zig");
+const astPrinter = @import("parser/printer.zig");
 
 pub fn main() !void {
     // Init Allocator
@@ -44,11 +45,15 @@ fn innerMain(allocator: std.mem.Allocator, io: std.Io) common.CompilerError!void
     const source = fileReader.interface.readAlloc(allocator, sourceSize) catch return error.InternalError;
 
     var scanner = try lexer.Scanner.init(path, source);
-    defer scanner.deinit(allocator);
     const tokenList = try scanner.scanAll(allocator);
 
-    var prs = parser.Parser.init(tokenList.items);
-    _ = try prs.parse(allocator);
+    var prs = parser.Parser.init(tokenList);
+    const stmts = try prs.parse(allocator);
+
+    var wbuf: [1024]u8 = undefined;
+    var stdout = std.fs.File.stdout().writer(&wbuf);
+    astPrinter.AstPrinter.printAst(&stdout.interface, stmts) catch unreachable;
+    stdout.interface.flush() catch undefined;
 }
 
 fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.CompilerSettings {
