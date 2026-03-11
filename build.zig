@@ -11,19 +11,20 @@ pub fn build(b: *std.Build) void {
             .major = 0,
             .minor = 0,
             .patch = 1,
-            .pre = "alpha",
         },
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
         }),
+        .linkage = .static
     });
+    exe.linkLibC();
+    b.exe_dir = "build/bin/" ++ (if (builtin.mode == .Debug) "debug" else "release");
     b.installArtifact(exe);
-    b.exe_dir = "build/bin/" ++ if (builtin.mode == .Debug) "debug" else "release";
 
     const tests = b.addTest(.{
-        .name = "Unit Tests",
+        .name = "test",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,

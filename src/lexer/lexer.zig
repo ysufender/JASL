@@ -1,7 +1,8 @@
 const std = @import("std");
 const common = @import("../core/common.zig");
+const platform = @import("../core/platform.zig");
 
-pub const TokenList = std.ArrayList(Token);
+pub const TokenList = std.ArrayListUnmanaged(Token);
 
 pub const TokenType = enum {
     LParen, RParen,
@@ -25,159 +26,190 @@ pub const TokenType = enum {
     Pub, Mut,
     And, Or,
     Identifier,
-    TypeName,
     String, Integer, Float, False, True, Nullptr,
     Discard,
     EOF,
 };
 
-/// Position does not own the file
 pub const Position = struct {
-    const Self = @This();
-
-
-    file: []const u8,
-    line: usize,
-    column: usize,
-
-    pub fn init(file: []const u8, line: usize, col: usize) Self {
-        return .{
-            .file = file,
-            .line = line,
-            .column = col
-        };
-    }
+    line: u32,
+    column: u32,
 };
 
-/// Token does not own the lexeme
 pub const Token = struct {
     type: TokenType,
-    lexeme: []const u8,
-    position: Position,
+    start: u32,
+    end: u32,
 
     const Self = @This();
 
     pub const eof: Self = .{
         .type = .EOF,
-        .lexeme = "",
-        .position = .{
-            .file = "",
-            .line = 0,
-            .column = 0
-        }
+        .start = 0,
+        .end = 0,
     };
 
-    // Token does not own the lexeme
-    pub fn init(tokenType: TokenType, lexeme: []const u8, position: Position) Self {
-        return .{
-            .type = tokenType,
-            .lexeme = lexeme,
-            .position = position
-        };
+    pub fn toString(self: *const Self, allocator: std.mem.Allocator, file: u32) []const u8 {
+        const lex = self.lexeme(file);
+        const length =  @tagName(self.type).len + lex.len + 4;
+        const buffer = allocator.alloc(u8, length) catch return "";
+        return std.fmt.bufPrint(buffer, "<{s}: {s}>", .{@tagName(self.type), lex}) catch unreachable;
     }
 
-    pub fn toString(self: *const Self, allocator: std.mem.Allocator) []const u8 {
-        const length =  @tagName(self.type).len + self.lexeme.len + 4;
-        const buffer = allocator.alloc(u8, length) catch return "";
-        return std.fmt.bufPrint(buffer, "<{s}: {s}>", .{@tagName(self.type), self.lexeme}) catch unreachable;
+    pub fn lexeme(self: *const Self, file: u32) []const u8 {
+        return common.CompilerContext.fileMap[file][self.start..self.end];
+    }
+
+    pub fn position(self: *const Self, file: u32) Position {
+        const source = common.CompilerContext.fileMap[file][0..self.start];
+        var line: u32 = 1;
+        var col: u32 = 0;
+
+        for (source) |ch| {
+            if (ch == '\n') {
+                line += 1;
+                col = 0;
+            }
+
+            col += 1;
+        }
+
+        return .{
+            .line = line,
+            .column = col,
+        };
     }
 };
 
-/// Scanner does not own neither the file, nor the source
 pub const Scanner = struct {
-    source: []const u8,
-    tokens: TokenList,
-
-    file: []const u8,
-
-    start: usize,
-    current: usize,
-    line: usize,
-    col: usize,
-
     const Self = @This();
+    const keywords = std.StaticStringMap(TokenType).initComptime(&.{
+        .{ "and", .And },
+        .{ "or", .Or },
+        .{ "if", .If },
+        .{ "else", .Else },
+        .{ "while", .While },
+        .{ "fn", .Fn },
+        .{ "return", .Return },
+        .{ "defer", .Defer },
+        .{ "extern", .Extern },
+        .{ "let", .Let },
+        .{ "include", .Include },
+        .{ "namespace", .Namespace },
+        .{ "false", .False },
+        .{ "true", .True },
+        .{ "nullptr", .Nullptr },
+        .{ "layout", .Layout },
+        .{ "pub", .Pub },
+        .{ "mut", .Mut },
+        .{ "asm", .Asm },
+        .{ "break", .Break },
+        .{ "continue", .Continue },
+        .{ "_", .Discard },
+    });
+
+    tokens: TokenList,
+    file: u32,
+    source: []const u8,
+
+    start: u32,
+    current: u32,
+    end: u32,
+
+    arena: std.heap.ArenaAllocator,
 
     //
     // Public API
     //
 
-    /// Scanner does not own neither the file, nor the source
-    pub fn init(file: []const u8, source: []const u8) common.CompilerError!Self {
+    pub fn init(base: std.mem.Allocator, file: u32) common.CompilerError!Self {
+        const src = common.CompilerContext.fileMap[file];
+        const len: u32 = @intCast(src.len);
+
+        var arena = std.heap.ArenaAllocator.init(base);
+        var tokens = TokenList.initCapacity(arena.allocator(), len + 2) catch return error.AllocatorFailure;
+
+        tokens.appendAssumeCapacity(.{
+            .type = .Semicolon,
+            .start = file,
+            .end = file,
+        });
+
         return .{
             .start = 0,
             .current = 0,
-            .line = 1,
-            .col = 0,
+            .end = len,
             .file = file,
-            .source = source,
-            .tokens = TokenList.empty,
+            .source = src,
+            .arena = arena,
+            .tokens = tokens,
         };
     }
 
-    /// Releases the ownership of self.tokens
-    pub fn scanAll(self: *Self, allocator: std.mem.Allocator) common.CompilerError![]Token {
+    pub fn scanAll(self: *Self) common.CompilerError!TokenList {
+        self.skipWhitespace();
         while (!self.isAtEnd()) {
             self.start = self.current;
-            try self.scanToken(allocator);
+            try self.scanToken();
+            self.skipWhitespace();
         }
 
         self.tokens.append(
-            allocator,
-            Token.init(
-                .EOF,
-                "EOF",
-                .{
-                    .file = self.file,
-                    .line = self.line,
-                    .column = 0
-                }
-            )
+            self.allocator(),
+            .{
+                .type = .EOF,
+                .start = self.start,
+                .end = self.current,
+            }
         ) catch return error.InternalError;
 
         self.start = 0;
         self.current = 0;
-        self.line = 1;
-        self.col = 1;
 
-        return self.tokens.toOwnedSlice(allocator) catch error.AllocatorFailure;
+        return self.tokens;
     }
 
     //
     // Private Implementation
     //
 
-    fn scanToken(self: *Self, allocator: std.mem.Allocator) common.CompilerError!void {
+    fn scanToken(self: *Self) common.CompilerError!void {
         return switch (self.advance()) {
-            '\n' => { },
-            '(' => self.addToken(.LParen, allocator),
-            ')' => self.addToken(.RParen, allocator),
-            '{' => self.addToken(.LBrace, allocator),
-            '}' => self.addToken(.RBrace, allocator),
-            '[' => self.addToken(.LBracket, allocator),
-            ']' => self.addToken(.RBracket, allocator),
-            ',' => self.addToken(.Comma, allocator),
-            '~' => self.addToken(.Tilde, allocator),
-            '^' => self.addToken(.Xor, allocator),
+            '(' => self.addToken(.LParen),
+            ')' => self.addToken(.RParen),
+            '{' => self.addToken(.LBrace),
+            '}' => self.addToken(.RBrace),
+            '[' => self.addToken(.LBracket),
+            ']' => self.addToken(.RBracket),
+            ',' => self.addToken(.Comma),
+            '~' => self.addToken(.Tilde),
+            '^' => self.addToken(.Xor),
             '.' => 
                 if (std.ascii.isDigit(self.peek())) {
                     self.report("Dot (.) prefixed numeric literals are not allowed.", .{});
                     return error.DotPrefixedNumericLiteral;
                 }
-                else self.addToken(.Dot, allocator),
+                else self.addToken(.Dot),
             ':' =>
-                if (self.match(':')) self.addToken(.DoubleColon, allocator)
-                else self.addToken(.Colon, allocator),
-            ';' => self.addToken(.Semicolon, allocator),
+                if (self.match(':')) self.addToken(.DoubleColon)
+                else self.addToken(.Colon),
+            ';' => self.addToken(.Semicolon),
             '-' => 
-                if (self.match('>')) self.addToken(.Arrow, allocator)
-                else self.addToken(.Minus, allocator),
-            '+' => self.addToken(.Plus, allocator),
+                if (self.match('>')) self.addToken(.Arrow)
+                else self.addToken(.Minus),
+            '+' => self.addToken(.Plus),
             '/' => 
                 if (self.match('/')) {
-                    while (self.advance() != '\n') { }
+                    const index =
+                        if (std.mem.findScalarPos(u8, self.source, self.current, '\n'))
+                            |idx| idx
+                        else
+                            self.end;
+
+                    self.current = @intCast(index);
                 }
                 else if (self.match('*')) {
-                    var ident: usize = 1;
+                    var ident: u32 = 1;
 
                     while (ident > 0 and !self.isAtEnd()) {
                         const ch = self.advance();
@@ -187,7 +219,7 @@ pub const Scanner = struct {
                         }
                         else if (ch == '/' and self.match('*')) {
                             ident += 1;
-                        }
+                       }
                     }
 
                     if (self.isAtEnd()) {
@@ -195,41 +227,44 @@ pub const Scanner = struct {
                         return error.UnterminatedComment;
                     }
                 }
-                else self.addToken(.Slash, allocator),
-            '*' => self.addToken(.Star, allocator),
+                else self.addToken(.Slash),
+            '*' => self.addToken(.Star),
             '!' =>
-                if (self.match('=')) self.addToken(.BangEqual, allocator)
-                else self.addToken(.Bang, allocator),
+                if (self.match('=')) self.addToken(.BangEqual)
+                else self.addToken(.Bang),
             '=' =>
-                if (self.match('=')) self.addToken(.EqualEqual, allocator)
-                else self.addToken(.Equal, allocator),
+                if (self.match('=')) self.addToken(.EqualEqual)
+                else self.addToken(.Equal),
             '>' =>
-                if (self.match('=')) self.addToken(.GreaterEqual, allocator)
-                else if (self.match('>')) self.addToken(.RightShift, allocator)
-                else self.addToken(.Greater, allocator),
+                if (self.match('=')) self.addToken(.GreaterEqual)
+                else if (self.match('>')) self.addToken(.RightShift)
+                else self.addToken(.Greater),
             '<' =>
-                if (self.match('=')) self.addToken(.LesserEqual, allocator)
-                else if (self.match('<')) self.addToken(.LeftShift, allocator)
-                else self.addToken(.Lesser, allocator),
-            '|' => self.addToken(.Pipe, allocator),
-            '&' => self.addToken(.Ampersand, allocator),
+                if (self.match('=')) self.addToken(.LesserEqual)
+                else if (self.match('<')) self.addToken(.LeftShift)
+                else self.addToken(.Lesser),
+            '|' => self.addToken(.Pipe),
+            '&' => self.addToken(.Ampersand),
             '"' => {
-                while (!self.check('"') and !self.isAtEnd()) {
-                    _ = self.advance();
-                }
+                const index =
+                    if (std.mem.findScalarPos(u8, self.source, self.current, '"'))
+                        |idx| idx
+                    else
+                        self.end;
+
+                self.current = @intCast(index);
 
                 if (self.isAtEnd()) {
                     self.report("Unterminated string literal", .{});
                     return error.UnterminatedStringLiteral;
                 }
 
-                _ = self.advance();
-                try self.addToken(.String, allocator);
+                self.start += 1;
+                try self.addToken(.String);
             },
             // TODO: character literals
-            else => |ch|
+            else => |ch| {
                 if (std.ascii.isDigit(ch)) {
-                    // TODO: allow underscore
                     while (std.ascii.isDigit(self.peek())) {
                         _ = self.advance();
                     }
@@ -241,7 +276,7 @@ pub const Scanner = struct {
                             _ = self.advance();
                         }
 
-                        return self.addToken(.Float, allocator);
+                        return self.addToken(.Float);
                     }
                     else if (self.check('.')) {
                         _ = self.advance();
@@ -249,7 +284,7 @@ pub const Scanner = struct {
                         return error.DotPostfixedNumericLiteral;
                     }
 
-                    return self.addToken(.Integer, allocator);
+                    return self.addToken(.Integer);
                 }
                 else if (std.ascii.isAlphabetic(ch) or ch == '_'){
                     while (std.ascii.isAlphanumeric(self.peek()) or self.check('_')) {
@@ -257,26 +292,34 @@ pub const Scanner = struct {
                     }
 
                     const str = self.source[self.start..self.current];
-
-                    if (getType(str) != .TypeName) {
-                        return self.addToken(
-                            getType(str),
-                            allocator
-                        );
-                    }
-
-                    try self.addToken(.TypeName, allocator);
+                    return self.addToken(getType(str));
                 }
                 else {
                     self.report("Unexpected character {c}", .{ch});
                     return error.UnexpectedCharacter;
                 }
+            }
         };
     }
 
     //
     // Helpers
     //
+
+    fn allocator(self: *Self) std.mem.Allocator {
+        return self.arena.allocator();
+    }
+
+    fn skipWhitespace(self: *Self) void {
+        while (self.current < self.end) {
+            switch (self.source[self.current]) {
+                ' ', '\t', '\r', '\n' => {
+                    self.current += 1;
+                },
+                else => return,
+            }
+        }
+    }
 
     fn check(self: *Self, expected: u8) bool {
         if (self.isAtEnd()) return false;
@@ -296,79 +339,48 @@ pub const Scanner = struct {
         return self.source[self.current];
     }
 
-    fn peekn(self: *Self, n: usize) u8 {
+    fn peekn(self: *Self, n: u32) u8 {
         if (self.current + n >= self.source.len) return 0;
         return self.source[self.current + n];
     }
 
     fn advance(self: *Self) u8 {
         self.current += 1;
-        self.col += 1;
-        switch (self.source[self.current-1]) {
-            '\n' => {
-                self.line += 1;
-                self.col = 0;
-                self.start = self.current;
-                return '\n';
-            },
-            ' ', '\t', '\r' => {
-                self.start = self.current;
-            },
-            else => |ch| { return ch; }
-        }
-
-        return self.advance();
+        return self.source[self.current-1];
     }
 
-    fn addToken(self: *Self, tokenType: TokenType, allocator: std.mem.Allocator) common.CompilerError!void {
-        const str = self.source[self.start..self.current];
-        self.tokens.append(allocator, .init(tokenType, str, .init(self.file, self.line, self.col)))
-            catch return error.InvalidToken;
+    fn addToken(self: *Self, tokenType: TokenType) common.CompilerError!void {
+        self.tokens.append(self.allocator(), .{
+            .type = tokenType,
+            .start = self.start,
+            .end = self.current,
+        }) catch return error.InvalidToken;
+
+        if (tokenType == .String)
+            _ = self.advance();
     }
 
     fn isAtEnd(self: *Self) bool {
-        return self.current >= self.source.len;
+        return self.current >= self.end;
     }
 
     fn getType(str: []const u8) TokenType {
         return
-            if (std.mem.eql(u8, str, "and")) .And
-            else if (std.mem.eql(u8, str, "or")) .Or
-            else if (std.mem.eql(u8, str, "if")) .If
-            else if (std.mem.eql(u8, str, "else")) .Else
-            else if (std.mem.eql(u8, str, "while")) .While
-            else if (std.mem.eql(u8, str, "fn")) .Fn
-            else if (std.mem.eql(u8, str, "return")) .Return
-            else if (std.mem.eql(u8, str, "defer")) .Defer
-            else if (std.mem.eql(u8, str, "extern")) .Extern
-            else if (std.mem.eql(u8, str, "let")) .Let
-            else if (std.mem.eql(u8, str, "include")) .Include
-            else if (std.mem.eql(u8, str, "namespace")) .Namespace
-            else if (std.mem.eql(u8, str, "false")) .False
-            else if (std.mem.eql(u8, str, "true")) .True
-            else if (std.mem.eql(u8, str, "nullptr")) .Nullptr
-            else if (std.mem.eql(u8, str, "layout")) .Layout
-            else if (std.mem.eql(u8, str, "pub")) .Pub
-            else if (std.mem.eql(u8, str, "mut")) .Mut
-            else if (std.mem.eql(u8, str, "asm")) .Asm
-            else if (std.mem.eql(u8, str, "break")) .Break
-            else if (std.mem.eql(u8, str, "continue")) .Continue
-            else if (std.mem.eql(u8, str, "bool")) .TypeName
-            else if (std.mem.eql(u8, str, "u32")) .TypeName
-            else if (std.mem.eql(u8, str, "i32")) .TypeName
-            else if (std.mem.eql(u8, str, "u8")) .TypeName
-            else if (std.mem.eql(u8, str, "i8")) .TypeName
-            else if (std.mem.eql(u8, str, "float")) .TypeName
-            else if (std.mem.eql(u8, str, "_")) .Discard
-            else if (std.mem.eql(u8, str, "type")) .TypeName
-            else if (std.mem.eql(u8, str, "any")) .TypeName
+            if (keywords.get(str)) |keyword| keyword 
             else .Identifier;
     }
 
     fn report(self: *Self, comptime fmt: []const u8, args: anytype) void {
+        const errToken = Token {
+            .type = .EOF,
+            .start = self.start,
+            .end = self.start + 1,
+        };
+        const pos = errToken.position(self.file);
+
         common.log.err("[LEXER ERROR] ", .{});
         common.log.err(fmt, args);
-        common.log.err("\t{s} {d}:{d}\n", .{self.file, self.line, self.col});
+        common.log.err("\t{s} {d}:{d}\n", .{common.CompilerContext.filenameMap[self.file], pos.line, pos.column});
     }
 };
 

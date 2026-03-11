@@ -4,366 +4,375 @@ const lexer = @import("../lexer/lexer.zig");
 
 const TokenType = lexer.TokenType;
 const Allocator = std.mem.Allocator;
+const ExpressionResult = common.CompilerError!ExpressionPtr;
 
-const ExpressionResult = common.CompilerError!*Expression;
+const TokenRef = struct {
+    ptr: *const lexer.Token,
+    index: u32,
+};
 
-pub const StatementResult = common.CompilerError!*Statement;
-pub const StatementList = std.ArrayList(*Statement);
-pub const VariableSignatureList = std.ArrayList(VariableSignature);
-pub const TypeList = std.ArrayList(*Expression);
-pub const IdentifierList = std.ArrayList(*const lexer.Token);
-pub const ExpressionList = std.ArrayList(*Expression);
+pub const StatementResult = common.CompilerError!StatementPtr;
+
+const NodeList = Range;
+const NodePtr = u32;
+
+const ExpressionPtr = u32;
+const StatementPtr = u32;
+const TokenPtr = u32;
+
+pub const VariableSignatureMap = std.MultiArrayList(VariableSignature);
+pub const ExpressionMap = std.MultiArrayList(Expression);
+pub const StatementMap = std.MultiArrayList(Statement);
+
+pub const Range = struct {
+    start: u32,
+    end: u32,
+};
 
 pub const Expression = union(enum) {
-    Binary: struct {
-        lhs: *Expression,
-        operator: TokenType,
-        rhs: *Expression,
-    },
-    Grouping: *Expression,
-    Literal: *const lexer.Token,
-    Identifier: *const lexer.Token,
-    Unary: struct {
-        operator: TokenType,
-        rhs: *Expression,
-    },
-    LayoutDefinition: struct {
-        variables: VariableSignatureList,
-        functions: StatementList,
-    },
-    Call: struct {
-        function: *Expression,
-        arguments: ExpressionList, 
-    },
-    Conditional: struct {
-        condition: *Expression,
-        then: *Expression,
-        otherwise: *Expression,
-    },
-    Type: struct {
-        mutable: bool,
-        type: union(enum) {
-            Pointer: *Expression,
-            Slice: *Expression,
-            Function: struct {
-                parameters: TypeList,
-                returns: TypeList,
-            },
-            Value: *const lexer.Token,
-        },
-    },
-    Scoping: struct {
-        namespace: *Expression,
-        member: *const lexer.Token,
-    },
-    ExpressionList: ExpressionList,
-    Dot: struct {
-        lhs: *Expression,
-        rhs: *const lexer.Token,
-    },
-    Indexing: struct {
-        lhs: *Expression,
-        index: *Expression,
-    },
+    Binary: NodePtr,
+    Grouping: ExpressionPtr,
+    Literal: TokenPtr,
+    Identifier: TokenPtr,
+    Unary: NodePtr,
+    LayoutDefinition: NodePtr,
+    Call: NodePtr,
+    Conditional: NodePtr,
+    Mutable: ExpressionPtr,
+    Pointer: ExpressionPtr,
+    Slice: ExpressionPtr,
+    Function: NodePtr,
+    Value: NodePtr,
+    Scoping: NodePtr,
+    ExpressionList: NodeList,
+    Dot: NodePtr,
+    Indexing: NodePtr,
 };
 
 pub const Statement = union(enum) {
-    Block: StatementList,
-    InlineAssembly: []const u8,
-    FunctionDefinition: struct {
-        public: bool,
-        name: *const lexer.Token,
-        params: VariableSignatureList,
-        returnType: TypeList,
-        body: *Statement,
-    },
-    Return: *Expression,
-    Conditional: struct {
-        condition: *Expression,
-        body: *Statement,
-        otherwise: ?*Statement,
-    },
-    While: struct {
-        condition: *Expression,
-        body: *Statement,
-    },
+    Block: NodePtr,
+    InlineAssembly: TokenPtr,
+    FunctionDefinition: NodePtr,
+    Return: ExpressionPtr,
+    Conditional: NodePtr,
+    While: NodePtr,
     Break,
     Continue,
-    VariableDefinition: struct {
-        signatures: VariableSignatureList,
-        initializer: *Expression,
-    },
-    Discard: *Expression,
-    Namespace: *Expression,
-    Include: *const lexer.Token,
+    VariableDefinition: NodePtr,
+    Discard: ExpressionPtr,
+    Namespace: ExpressionPtr,
+    Include: TokenPtr,
 };
 
 pub const VariableSignature = struct {
     public: bool,
-    name: *const lexer.Token,
-    type: *Expression,
+    name: u32,
+    type: u32,
 };
 
 pub const Parser = struct {
     const Self = @This();
 
+    pub const Table = struct {
+        expressions: ExpressionMap.Slice,
+        statements: StatementMap.Slice,
+    };
+
     tokens: []const lexer.Token,
-    current: usize,
+    current: u32,
+    arena: std.heap.ArenaAllocator,
 
-    //
-    // Public API
-    //
+    expressionMap: ExpressionMap,
+    statementMap: StatementMap,
+    signaturePool: VariableSignatureMap,
 
-    pub fn init(tokens: []const lexer.Token) Parser {
-        return .{
+    extra: std.ArrayListUnmanaged(u32),
+    scratch: std.ArrayListUnmanaged(u32),
+
+    file: u32,
+
+    pub fn init(tokens: []const lexer.Token, base: Allocator) common.CompilerError!Parser {
+        const arena = std.heap.ArenaAllocator.init(base);
+        var self = Self{
+            .signaturePool = VariableSignatureMap.empty,
+            .expressionMap = ExpressionMap.empty,
+            .statementMap = StatementMap.empty,
+            .file = tokens[0].start,
             .tokens = tokens,
-            .current = 0,
+            .current = 1,
+            .arena = arena,
+            .extra = .empty,
+            .scratch = .empty,
         };
+        
+        self.expressionMap.ensureTotalCapacity(self.allocator(), tokens.len / 2) catch return error.AllocatorFailure;
+        self.statementMap.ensureTotalCapacity(self.allocator(), tokens.len / 4) catch return error.AllocatorFailure;
+        self.signaturePool.ensureTotalCapacity(self.allocator(), tokens.len / 2) catch return error.AllocatorFailure;
+        self.extra.ensureTotalCapacity(self.allocator(), tokens.len) catch return error.AllocatorFailure;
+        self.scratch.ensureTotalCapacity(self.allocator(), 128) catch return error.AllocatorFailure;
+
+        return self;
     }
 
-    pub fn parse(self: *Self, allocator: Allocator) common.CompilerError!StatementList {
-        var list = StatementList.empty;
+    pub fn parse(self: *Self) common.CompilerError!void {
+        var errCount: u32 = 0;
+        var lastErr: common.CompilerError = undefined;
 
         while (!self.isAtEnd()) {
-            list.append(allocator, try self.statement(allocator)) catch return error.AllocatorFailure;
+            _ = self.statement() catch |err| {
+                errCount += 1;
+                lastErr = err;
+                common.log.err("Error: {d} <{s}>\n", .{ @intFromError(err), @errorName(err) });
+                self.synchronize();
+                if (errCount == common.CompilerSettings.settings.maxErr) {
+                    common.log.err("Too many errors, aborting compilation.", .{});
+                    return err;
+                }
+            };
         }
 
-        return list;
-    }
+        if (errCount > 1) {
+            lastErr = error.MultipleErrors;
+        }
+        else if (errCount > 0) {
+            return lastErr;
+        }
 
-    //
-    // Private Implementation
-    //
+        return;
+    }
 
     //
     // Statements
     //
 
-    fn statement(self: *Self, allocator: Allocator) StatementResult {
-        return switch (self.advance().type) {
-            .LBrace => self.block(allocator),
-            .Asm => self.inlineAssembly(allocator),
-            .If => self.conditional(allocator),
-            .While => self.whileStatement(allocator),
-            .Return => self.returnStatement(allocator),
-            .Break => self.breakStatement(allocator),
-            .Continue => self.continueStatement(allocator),
-            .Pub => switch (self.advance().type) {
-                .Fn => self.function(allocator, true),
-                .Let => self.variable(allocator, true),
+    fn statement(self: *Self) StatementResult {
+        return switch (self.advance().ptr.type) {
+            .LBrace => self.block(),
+            .Asm => self.inlineAssembly(),
+            .If => self.conditional(),
+            .While => self.whileStatement(),
+            .Return => self.returnStatement(),
+            .Break => self.breakStatement(),
+            .Continue => self.continueStatement(),
+            .Pub => switch (self.advance().ptr.type) {
+                .Fn => self.function(true),
+                .Let => self.variable(true),
                 else => {
                     self.report("Expected a function or a variable definition after 'pub' specifier.", .{});
                     return error.InvalidToken;
                 },
             },
-            .Fn => self.function(allocator, false),
-            .Let => self.variable(allocator, false),
-            .Discard => self.discard(allocator),
-            .Namespace => self.namespace(allocator), 
-            .Include => self.include(allocator), 
-            else => unreachable,
+            .Fn => self.function(false),
+            .Let => self.variable(false),
+            .Discard => self.discard(),
+            .Namespace => self.namespace(),
+            .Include => self.include(),
+            .Semicolon => self.statement(),
+            else => {
+                self.report("Expected statement.", .{});
+                return error.MissingStatement;
+            },
         };
     }
 
-    fn block(self: *Self, allocator: Allocator) StatementResult {
-        var statements = StatementList.empty;
-
-        while (!self.isAtEnd() and !self.check(.RBrace)) {
-            statements.append(allocator, try self.statement(allocator)) catch return error.AllocatorFailure;
+    fn block(self: *Self) StatementResult {
+        const scratchStart = self.scratch.items.len;
+        while (!self.check(.RBrace)) {
+            self.scratch.append(self.allocator(), try self.statement()) catch return error.AllocatorFailure;
         }
 
         _ = try self.consume(.RBrace, error.MissingBrace, "Missing enclosing brace '}' after block.");
+        const stmts = try self.commitList(scratchStart);
 
-        const result = allocator.create(Statement) catch return error.AllocatorFailure;
-        result.* = .{
-            .Block = statements
-        };
+        const start: u32 = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), stmts.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), stmts.end) catch return error.AllocatorFailure;
+
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{
+            .Block = start,
+        });
+
         return result;
     }
 
-    fn inlineAssembly(self: *Self, allocator: Allocator) StatementResult {
-        _ = try self.consume(.LBrace, error.MissingBrace, "Expected block after 'asm' statement.");
-        var str = std.ArrayList(u8).empty;
+    fn inlineAssembly(self: *Self) StatementResult {
+        const asmly = (try self.consume(.String, error.MissingBrace, "Expected block after 'asm' statement.")).index;
+        std.log.info("{s}", .{self.tokens[asmly].lexeme(self.file)});
 
-        while (!self.isAtEnd() and !self.check(.RBrace)) {
-            str.appendSlice(allocator, self.advance().lexeme) catch return error.AllocatorFailure;
-        }
-
-        _ = try self.consume(.RBrace, error.MissingBrace, "Missing enclosing brace '}' after 'asm' statement.");
-
-        const result = allocator.create(Statement) catch return error.AllocatorFailure;
-        result.* = .{
-            .InlineAssembly = str.items
-        };
-        return result;
-    }
-
-    fn returnStatement(self: *Self, allocator: Allocator) StatementResult {
-        const expr = try self.expression(allocator);
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{
+            .InlineAssembly = asmly,
+        });
 
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
-        const result = allocator.create(Statement) catch return error.AllocatorFailure;
-        result.* = .{
-            .Return = expr
-        };
         return result;
     }
 
-    fn conditional(self: *Self, allocator: Allocator) StatementResult {
-        const condition = try self.expression(allocator);
-        const body = try self.statement(allocator);
-        var otherwise: ?*Statement = null;
+    fn returnStatement(self: *Self) StatementResult {
+        const expr = try self.expression();
+        _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
+        
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{ .Return = expr });
+        
+        return result;
+    }
 
+    fn conditional(self: *Self) StatementResult {
+        const condition = try self.expression();
+        const body = try self.statement();
+
+        var otherwise: ?u32 = null;
         if (self.match(&.{.Else})) {
-            otherwise.? = try self.statement(allocator);
+            otherwise.? = try self.statement();
         }
 
-        const result = allocator.create(Statement) catch return error.AllocatorFailure;
-        result.* = .{
-            .Conditional = .{
-                .condition = condition,
-                .body = body,
-                .otherwise = otherwise
-            }
-        };
+        const start: u32 = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), condition) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), body) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), if (otherwise) |_| 1 else 0) catch return error.AllocatorFailure;
+        if (otherwise) |val| {
+            self.extra.append(self.allocator(), val) catch return error.AllocatorFailure;
+        }
+
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{
+            .Conditional = start,
+        });
+
         return result;
     }
 
-    fn whileStatement(self: *Self, allocator: Allocator) StatementResult {
-        const condition = try self.expression(allocator);
-        const body = try self.statement(allocator);
+    fn whileStatement(self: *Self) StatementResult {
+        const condition = try self.expression();
+        const body = try self.statement();
 
-        const result = allocator.create(Statement) catch return error.AllocatorFailure;
-        result.* = .{
-            .While = .{
-                .condition = condition,
-                .body = body
-            }
-        };
+        const start: u32 = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), condition) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), body) catch return error.AllocatorFailure;
+        
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{
+            .While = start,
+        });
+        
         return result;
     }
-    
-    fn breakStatement(self: *Self, allocator: Allocator) StatementResult {
+
+    fn breakStatement(self: *Self) StatementResult {
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
-
-        const result = allocator.create(Statement) catch return error.AllocatorFailure;
-        result.* = .{
-            .Break = {},
-        };
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{ .Break = {} });
         return result;
     }
 
-    fn continueStatement(self: *Self, allocator: Allocator) StatementResult {
+    fn continueStatement(self: *Self) StatementResult {
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
-
-        const result = allocator.create(Statement) catch return error.AllocatorFailure;
-        result.* = .{
-            .Continue = {},
-        };
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{ .Continue = {} });
         return result;
     }
 
-    fn function(self: *Self, allocator: Allocator, public: bool) StatementResult {
+    fn function(self: *Self, public: bool) StatementResult {
         const name = try self.consume(.Identifier, error.MissingIdentifier, "Expected a function name.");
         _ = try self.consume(.LParen, error.MissingParenthesis, "Expected parenthesis '(' after function name.");
 
-        var vars = VariableSignatureList.empty;
-        while (!self.isAtEnd() and !self.check(.RParen)) {
-            vars.append(allocator, try self.variableSignature(allocator, false, true)) catch return error.AllocatorFailure;
-
-            if (!self.match(&.{.Comma}))
-                break;
+        const paramsStart = self.scratch.items.len;
+        while (!self.check(.RParen)) {
+            self.scratch.append(self.allocator(), try self.variableSignature(false, true)) catch return error.AllocatorFailure;
+            if (!self.match(&.{.Comma})) break;
         }
         _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' after parameter list.");
+        const params = try self.commitList(paramsStart);
+
         _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
 
-        var returns = TypeList.empty;
+        const returnsStart = self.scratch.items.len;
         while (!self.isAtEnd()) {
-            returns.append(allocator, try self.expression(allocator)) catch return error.AllocatorFailure;
-
-            if (self.check(.LBrace))
-                break;
-
+            self.scratch.append(self.allocator(), try self.primary()) catch return error.AllocatorFailure;
+            if (self.check(.LBrace)) break;
             _ = try self.consume(.Comma, error.MissingComma, "Expected comma in return type list.");
         }
+        const returns = try self.commitList(returnsStart);
+
         _ = try self.consume(.LBrace, error.MissingBrace, "Expected function body after return type list.");
         self.current -= 1;
 
-        const body = try self.statement(allocator);
+        const body = try self.statement();
 
-        const result = allocator.create(Statement) catch return error.AllocatorFailure;
-        result.* = .{
-            .FunctionDefinition = .{
-                .public = public,
-                .name = name,
-                .params = vars,
-                .returnType = returns,
-                .body = body,
-            },
-        };
-        return result;
-    }
+        const start: u32 = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), @intFromBool(public)) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), name.index) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), returns.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), returns.end) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), body) catch return error.AllocatorFailure;
 
-    fn variable(self: *Self, allocator: Allocator, public: bool) StatementResult {
-        var signatures = VariableSignatureList.empty;
-
-        while (!self.isAtEnd() and !self.check(.Equal)) {
-            signatures.append(allocator, try self.variableSignature(allocator, public, false)) catch return error.AllocatorFailure;
-
-            if (!self.match(&.{.Comma}))
-                break;
-        }
-        _ = try self.consume(.Equal, error.MissingAssignment, "Expected assignment in variable definition.");
-
-        const expr = try self.expression(allocator);
-
-        _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
-
-        const result = allocator.create(Statement) catch return error.AllocatorFailure;
-        result.* = .{
-            .VariableDefinition = .{
-                .signatures = signatures,
-                .initializer = expr,
-            },
-        };
-        return result;
-    }
-
-    fn discard(self: *Self, allocator: Allocator) StatementResult {
-        _ = try self.consume(.Equal, error.MissingAssignment, "Expected an assignment after discard.");
-
-        const expr = try self.expression(allocator);
-
-        _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
+        const result = try self.alloc(Statement);
         
-        const result = allocator.create(Statement) catch return error.AllocatorFailure;
-        result.* = .{
-            .Discard = expr,
-        };
+        self.statementMap.set(result, .{
+            .FunctionDefinition = start,
+        });
+
         return result;
     }
 
-    fn namespace(self: *Self, allocator: Allocator) StatementResult {
-        const expr = try self.scoping(allocator);
+    fn variable(self: *Self, public: bool) StatementResult {
+        const sigsStart = self.scratch.items.len;
+        while (!self.check(.Equal)) {
+            self.scratch.append(self.allocator(), try self.variableSignature(public, false)) catch return error.AllocatorFailure;
+            if (!self.match(&.{.Comma})) break;
+        }
+        const signatures = try self.commitList(sigsStart);
 
+        _ = try self.consume(.Equal, error.MissingAssignment, "Expected assignment in variable definition.");
+        const expr = try self.expression();
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
-        const result = allocator.create(Statement) catch return error.AllocatorFailure;
-        result.* = .{
-            .Namespace = expr,
-        };
+        const start: u32 = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), signatures.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), signatures.end) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{
+            .VariableDefinition = start,
+        });
+
         return result;
     }
 
-    fn include(self: *Self, allocator: Allocator) StatementResult {
+    fn discard(self: *Self) StatementResult {
+        _ = try self.consume(.Equal, error.MissingAssignment, "Expected an assignment after discard.");
+        const expr = try self.expression();
+        _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
+
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{ .Discard = expr });
+        
+        return result;
+    }
+
+    fn namespace(self: *Self) StatementResult {
+        const expr = try self.scoping();
+        _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
+
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{ .Namespace = expr });
+
+        return result;
+    }
+
+    fn include(self: *Self) StatementResult {
         const file = try self.consume(.String, error.InvalidToken, "Expected file path in include statement.");
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
-        const result = allocator.create(Statement) catch return error.AllocatorFailure;
-        result.* = .{
-            .Include = file,
-        };
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{ .Include = file.index });
+
         return result;
     }
 
@@ -371,377 +380,242 @@ pub const Parser = struct {
     // Expressions
     //
 
-    fn expression(self: *Self, allocator: Allocator) ExpressionResult {
-        return self.assignment(allocator);
+    fn expression(self: *Self) ExpressionResult {
+        return self.assignment();
     }
 
-    fn assignment(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.ifExpression(allocator);
+    fn assignment(self: *Self) ExpressionResult {
+        var expr = try self.ifExpression();
 
-        while (self.match(&.{.Equal})) {
-            const operator = self.previous().type;
-            const rhs = try self.assignment(allocator);
-
-            const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-            newExpr.* = .{
-                .Binary = .{
-                    .lhs = expr,
-                    .operator = operator,
-                    .rhs = rhs,
-                },
-            };
-
-            expr = newExpr;
+        if (self.match(&.{.Equal})) {
+            expr = try self.commonBinary(expr, Self.assignment);
         }
 
         return expr;
     }
 
-    fn ifExpression(self: *Self, allocator: Allocator) ExpressionResult {
+    fn ifExpression(self: *Self) ExpressionResult {
         if (!self.match(&.{.If})) {
-            return self.logicalOr(allocator);
+            return self.logicalOr();
         }
 
-        const condition = try self.expression(allocator);
-        const then = try self.expression(allocator);
+        const condition = try self.expression();
+        const then = try self.expression();
 
         _ = try self.consume(.Else, error.MissingBranch, "Expected an 'else' branch in conditional expression.");
+        const otherwise = try self.expression();
 
-        const otherwise = try self.expression(allocator);
+        const start: u32 = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), condition) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), then) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), otherwise) catch return error.AllocatorFailure;
 
-        const expr = allocator.create(Expression) catch return error.AllocatorFailure;
-        expr.* = .{
-            .Conditional = .{
-                .condition = condition,
-                .then = then,
-                .otherwise = otherwise,
-            },
-        };
+        const expr = try self.alloc(Expression);
+        self.expressionMap.set(expr, .{
+            .Conditional = start,
+        });
 
         return expr;
     }
 
-    fn logicalOr(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.logicalAnd(allocator);
+    fn logicalOr(self: *Self) ExpressionResult {
+        var expr = try self.logicalAnd();
 
         while (self.match(&.{.Or})) {
-            const operator = self.previous().type;
-            const rhs = try self.logicalAnd(allocator);
-
-            const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-            newExpr.* = .{
-                .Binary = .{
-                    .lhs = expr,
-                    .operator = operator,
-                    .rhs = rhs,
-                },
-            };
-
-            expr = newExpr;
+            expr = try self.commonBinary(expr, Self.logicalAnd);
         }
 
         return expr;
     }
 
-    fn logicalAnd(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.equality(allocator);
+    fn logicalAnd(self: *Self) ExpressionResult {
+        var expr = try self.equality();
 
         while (self.match(&.{.And})) {
-            const operator = self.previous().type;
-            const rhs = try self.equality(allocator);
-
-            const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-            newExpr.* = .{
-                .Binary = .{
-                    .lhs = expr,
-                    .operator = operator,
-                    .rhs = rhs,
-                },
-            };
-
-            expr = newExpr;
+            expr = try self.commonBinary(expr, Self.equality);
         }
 
         return expr;
     }
 
-    fn equality(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.bitwiseOr(allocator);
+    fn equality(self: *Self) ExpressionResult {
+        var expr = try self.bitwiseOr();
 
         while (self.match(&.{.EqualEqual, .BangEqual})) {
-            const operator = self.previous().type;
-            const rhs = try self.bitwiseOr(allocator);
-
-            const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-            newExpr.* = .{
-                .Binary = .{
-                    .lhs = expr,
-                    .operator = operator,
-                    .rhs = rhs,
-                },
-            };
-
-            expr = newExpr;
+            expr = try self.commonBinary(expr, Self.bitwiseOr);
         }
 
         return expr;
     }
 
-    fn bitwiseOr(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.bitwiseXor(allocator);
+    fn bitwiseOr(self: *Self) ExpressionResult {
+        var expr = try self.bitwiseXor();
 
         while (self.match(&.{.Pipe})) {
-            const operator = self.previous().type;
-            const rhs = try self.bitwiseXor(allocator);
-
-            const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-            newExpr.* = .{
-                .Binary = .{
-                    .lhs = expr,
-                    .operator = operator,
-                    .rhs = rhs,
-                },
-            };
-
-            expr = newExpr;
+            expr = try self.commonBinary(expr, Self.bitwiseXor);
         }
 
         return expr;
     }
 
-    fn bitwiseXor(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.bitwiseAnd(allocator);
+    fn bitwiseXor(self: *Self) ExpressionResult {
+        var expr = try self.bitwiseAnd();
 
         while (self.match(&.{.Xor})) {
-            const operator = self.previous().type;
-            const rhs = try self.bitwiseAnd(allocator);
-
-            const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-            newExpr.* = .{
-                .Binary = .{
-                    .lhs = expr,
-                    .operator = operator,
-                    .rhs = rhs,
-                },
-            };
-
-            expr = newExpr;
+            expr = try self.commonBinary(expr, Self.bitwiseAnd);
         }
 
         return expr;
     }
 
-    fn bitwiseAnd(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.comparison(allocator);
+    fn bitwiseAnd(self: *Self) ExpressionResult {
+        var expr = try self.comparison();
 
         while (self.match(&.{.Ampersand})) {
-            const operator = self.previous().type;
-            const rhs = try self.comparison(allocator);
-
-            const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-            newExpr.* = .{
-                .Binary = .{
-                    .lhs = expr,
-                    .operator = operator,
-                    .rhs = rhs,
-                },
-            };
-
-            expr = newExpr;
+            expr = try self.commonBinary(expr, Self.comparison);
         }
 
         return expr;
     }
-    
-    fn comparison(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.shift(allocator);
+
+    fn comparison(self: *Self) ExpressionResult {
+        var expr = try self.shift();
 
         while (self.match(&.{.Lesser, .LesserEqual, .Greater, .GreaterEqual})) {
-            const operator = self.previous().type;
-            const rhs = try self.shift(allocator);
-
-            const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-            newExpr.* = .{
-                .Binary = .{
-                    .lhs = expr,
-                    .operator = operator,
-                    .rhs = rhs,
-                },
-            };
-
-            expr = newExpr;
+            expr = try self.commonBinary(expr, Self.shift);
         }
 
         return expr;
     }
 
-    fn shift(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.term(allocator);
+    fn shift(self: *Self) ExpressionResult {
+        var expr = try self.term();
 
         while (self.match(&.{.RightShift, .LeftShift})) {
-            const operator = self.previous().type;
-            const rhs = try self.term(allocator);
-
-            const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-            newExpr.* = .{
-                .Binary = .{
-                    .lhs = expr,
-                    .operator = operator,
-                    .rhs = rhs,
-                },
-            };
-
-            expr = newExpr;
+            expr = try self.commonBinary(expr, Self.term);
         }
 
         return expr;
     }
 
-    fn term(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.factor(allocator);
+    fn term(self: *Self) ExpressionResult {
+        var expr = try self.factor();
 
         while (self.match(&.{.Plus, .Minus})) {
-            const operator = self.previous().type;
-            const rhs = try self.factor(allocator);
-
-            const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-            newExpr.* = .{
-                .Binary = .{
-                    .lhs = expr,
-                    .operator = operator,
-                    .rhs = rhs,
-                },
-            };
-
-            expr = newExpr;
+            expr = try self.commonBinary(expr, Self.factor);
         }
 
         return expr;
     }
 
-    fn factor(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.unary(allocator);
+    fn factor(self: *Self) ExpressionResult {
+        var expr = try self.unary();
 
         while (self.match(&.{.Slash, .Star})) {
-            const operator = self.previous().type;
-            const rhs = try self.unary(allocator);
-
-            const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-            newExpr.* = .{
-                .Binary = .{
-                    .lhs = expr,
-                    .operator = operator,
-                    .rhs = rhs,
-                },
-            };
-
-            expr = newExpr;
+            expr = try self.commonBinary(expr, Self.unary);
         }
 
         return expr;
     }
 
-    fn unary(self: *Self, allocator: Allocator) ExpressionResult {
-        while (self.match(&.{.Bang, .Minus, .Plus, .Tilde, .Star, .LBracket})) {
-            const operator = self.previous().type;
+    fn unary(self: *Self) ExpressionResult {
+        if (self.match(&.{.Bang, .Minus, .Plus, .Tilde})) {
+            const operator = self.previous().ptr.type;
 
-            if (self.previous().type == .LBracket) {
-                _ = try self.consume(.RBracket, error.MissingBracket, "Expected enclosing bracket in type expression.");
-            }
+            const rhs = try self.unary();
+            const expr = try self.alloc(Expression);
 
-            const rhs = try self.unary(allocator);
+            const start: u32 = @intCast(self.extra.items.len);
+            self.extra.append(self.allocator(), @intFromEnum(operator)) catch return error.AllocatorFailure;
+            self.extra.append(self.allocator(), rhs) catch return error.AllocatorFailure;
 
-            const expr = allocator.create(Expression) catch return error.AllocatorFailure;
-            expr.* = .{
-                .Unary = .{
-                    .operator = operator,
-                    .rhs = rhs,
-                },
-            };
+            self.expressionMap.set(expr, .{
+                .Unary = start,
+            });
+
             return expr;
         }
 
-        return self.postfix(allocator);
+        return self.postfix();
     }
 
-    fn postfix(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.primary(allocator);
+    fn postfix(self: *Self) ExpressionResult {
+        var expr = try self.primary();
 
         while (true) {
             if (self.match(&.{.LParen})) {
-                var arguments = ExpressionList.empty;
-
-                while (!self.isAtEnd() and !self.check(.RParen)) {
-                    arguments.append(allocator, try self.expression(allocator)) catch return error.AllocatorFailure;
-
+                const argsStart = self.scratch.items.len;
+                while (!self.check(.RParen)) {
+                    self.scratch.append(self.allocator(), try self.expression()) catch return error.AllocatorFailure;
                     if (!self.match(&.{.Comma})) {
                         break;
                     }
                 }
                 _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' in function call.");
+                const args = try self.commitList(argsStart);
 
-                const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-                newExpr.* = .{
-                    .Call = .{
-                        .function = expr,
-                        .arguments = arguments,
-                    },
-                };
-                
+                const start: u32 = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), args.start) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), args.end) catch return error.AllocatorFailure;
+
+                const newExpr = try self.alloc(Expression);
+                self.expressionMap.set(newExpr, .{
+                    .Call = start,
+                });
                 expr = newExpr;
-            }
-            else if (self.match(&.{.Dot})) {
+            } else if (self.match(&.{.Dot})) {
                 if (!self.match(&.{.Identifier, .Ampersand, .Star})) {
+                    _ = self.advance();
                     self.report("Expected a function name or a member name in dot expression.", .{});
                     return error.MissingIdentifier;
                 }
 
                 const member = self.previous();
+                const newExpr = try self.alloc(Expression);
 
-                const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-                newExpr.* = .{
-                    .Dot = .{
-                        .lhs = expr,
-                        .rhs = member,
-                    },
-                };
+                const start: u32 = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), member.index) catch return error.AllocatorFailure;
+
+                self.expressionMap.set(newExpr, .{
+                    .Dot = start,
+                });
                 expr = newExpr;
-            }
-            else if (self.match(&.{.LBracket})) {
-                const index = try self.expression(allocator);
-
+            } else if (self.match(&.{.LBracket})) {
+                const index = try self.expression();
                 _ = try self.consume(.RBracket, error.MissingBracket, "Expected closing bracket ']'.");
 
-                const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-                newExpr.* = .{
-                    .Indexing = .{
-                        .lhs = expr,
-                        .index = index,
-                    },
-                };
+                const start: u32 = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), index) catch return error.AllocatorFailure;
+
+                const newExpr = try self.alloc(Expression);
+                self.expressionMap.set(newExpr, .{
+                    .Indexing = start,
+                });
                 expr = newExpr;
-            }
-            else if (self.match(&.{.DoubleColon})) {
-                switch (expr.*) {
-                    .Identifier, .Scoping, .Dot => { },
+            } else if (self.match(&.{.DoubleColon})) {
+                switch (self.expressionMap.get(expr)) {
+                    .Identifier, .Scoping, .Dot => {},
                     else => {
                         self.report("Expected a identifier name in scoping expression.", .{});
                         return error.MissingIdentifier;
-                    }
-                }
-                const member = try self.consume(.Identifier, error.MissingIdentifier, "Expected member name in scope resolution.");
-
-                const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-                newExpr.* = .{
-                    .Scoping = .{
-                        .namespace = expr,
-                        .member = member,
                     },
-                };
+                }
 
+                const member = try self.consume(.Identifier, error.MissingIdentifier, "Expected member name in scope resolution.");
+                const newExpr = try self.alloc(Expression);
+
+                const start: u32 = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), member.index) catch return error.AllocatorFailure;
+
+                self.expressionMap.set(newExpr, .{
+                    .Scoping = start,
+                });
                 expr = newExpr;
-            }
-            else {
+            } else {
                 break;
             }
         }
@@ -749,108 +623,173 @@ pub const Parser = struct {
         return expr;
     }
 
-    fn scoping(self: *Self, allocator: Allocator) ExpressionResult {
-        var expr = try self.primary(allocator);
+    fn scoping(self: *Self) ExpressionResult {
+        var expr = try self.primary();
 
         while (self.match(&.{.DoubleColon})) {
-            switch (expr.*) {
-                .Identifier, .Scoping => { },
+            switch (self.expressionMap.get(expr)) {
+                .Identifier, .Scoping => {},
                 else => {
                     self.report("Expected a namespace name in scoping expression.", .{});
                     return error.MissingIdentifier;
-                }
-            }
-            const member = try self.consume(.Identifier, error.MissingIdentifier, "Expected member name in scope resolution.");
-
-            const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-            newExpr.* = .{
-                .Scoping = .{
-                    .namespace = expr,
-                    .member = member,
                 },
-            };
+            }
 
+            const member = try self.consume(.Identifier, error.MissingIdentifier, "Expected member name in scope resolution.");
+            const newExpr = try self.alloc(Expression);
+
+            const start: u32 = @intCast(self.extra.items.len);
+            self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+            self.extra.append(self.allocator(), member.index) catch return error.AllocatorFailure;
+
+            self.expressionMap.set(newExpr, .{
+                .Scoping = start,
+            });
             expr = newExpr;
         }
 
         return expr;
     }
 
-    fn primary(self: *Self, allocator: Allocator) ExpressionResult {
-        switch (self.peek().type) {
-            .False,
-            .True,
-            .Nullptr,
-            .Integer,
-            .Float,
-            .String => {
-                const expr = allocator.create(Expression) catch return error.AllocatorFailure;
-                expr.* = .{
-                    .Literal = self.advance(), 
-                };
+    fn primary(self: *Self) ExpressionResult {
+        switch (self.peek().ptr.type) {
+            .False, .True, .Nullptr, .Integer, .Float, .String => {
+                const expr = try self.alloc(Expression);
+                self.expressionMap.set(expr, .{
+                    .Literal = self.advance().index,
+                });
                 return expr;
             },
-            .TypeName => return self.typeExpression(allocator, false),
-            .Mut => {
-                _ = self.advance();
-                return self.typeExpression(allocator, true);
-            },
+            .Fn, .Mut, .Layout, .Star, .LBracket => return self.typeExpression(),
             .LParen => {
                 _ = self.advance();
-                const expr = try self.expression(allocator);
+                const inner = try self.expression();
                 _ = try self.consume(.RParen, error.MissingParenthesis, "Expected an enclosing ')' after expression.");
-                const newExpr = allocator.create(Expression) catch return error.AllocatorFailure;
-                newExpr.* = .{
-                    .Grouping = expr
-                };
-                return newExpr;
+
+                const expr = try self.alloc(Expression);
+                self.expressionMap.set(expr, .{
+                    .Grouping = inner,
+                });
+                return expr;
             },
             .LBrace => {
                 _ = self.advance();
-                var expressions = ExpressionList.empty;
+                const exprsStart = self.scratch.items.len;
 
-                while (!self.isAtEnd() and !self.check(.RBrace)) {
-                    expressions.append(allocator, try self.expression(allocator)) catch return error.AllocatorFailure;
-
+                while (!self.check(.RBrace)) {
+                    self.scratch.append(self.allocator(), try self.expression()) catch return error.AllocatorFailure;
                     if (!self.match(&.{.Comma})) {
                         break;
                     }
                 }
-                _ = try self.consume(.RBrace, error.MissingBrace, "Expected enclosing brace '}' in expression list.");
 
-                const expr = allocator.create(Expression) catch return error.AllocatorFailure;
-                expr.* = .{
+                _ = try self.consume(.RBrace, error.MissingBrace, "Expected enclosing brace '}' in expression list.");
+                const expressions = try self.commitList(exprsStart);
+
+                const expr = try self.alloc(Expression);
+                self.expressionMap.set(expr, .{
                     .ExpressionList = expressions,
-                };
+                });
                 return expr;
             },
             .Identifier => {
-                const expr = allocator.create(Expression) catch return error.AllocatorFailure;
-                expr.* = .{
-                    .Identifier = self.advance(),
-                };
+                const expr = try self.alloc(Expression);
+                self.expressionMap.set(expr, .{
+                    .Identifier = self.advance().index,
+                });
                 return expr;
             },
+            else => {
+                self.report("Expected a primary expression, got '{s}' instead.", .{self.advance().ptr.lexeme(self.file)});
+                return error.InvalidToken;
+            },
+        }
+    }
+
+    fn typeExpression(self: *Self) ExpressionResult {
+        const expr = try self.alloc(Expression);
+
+        switch (self.advance().ptr.type) {
+            .Star => {
+                const res = try self.expression();
+                self.expressionMap.set(expr, .{
+                    .Pointer = res,
+                });
+            },
+            .LBracket => {
+                _ = try self.consume(.RBracket, error.MissingBracket, "Expected enclosing bracket in slice type.");
+                const res = try self.expression();
+                self.expressionMap.set(expr, .{
+                    .Slice = res,
+                });
+            },
+            .Fn => {
+                _ = try self.consume(.LParen, error.MissingParenthesis, "Expected a type list in function pointer type expression.");
+                
+                const paramsStart = self.scratch.items.len;
+                while (!self.check(.RParen)) {
+                    self.scratch.append(self.allocator(), try self.expression()) catch return error.AllocatorFailure;
+                    if (!self.match(&.{.Comma})) {
+                        break;
+                    }
+                }
+                _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' after parameter list.");
+                const params = try self.commitList(paramsStart);
+
+                _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
+                const returnsStart = self.scratch.items.len;
+                if (self.match(&.{.LParen})) {
+                    while (!self.check(.RParen)) {
+                        self.scratch.append(self.allocator(), try self.expression()) catch return error.AllocatorFailure;
+                        if (!self.match(&.{.Comma})) {
+                            break;
+                        }
+                    }
+                    _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' after parameter list.");
+                }
+                else {
+                    self.scratch.append(self.allocator(), try self.expression()) catch return error.AllocatorFailure;
+                }
+                const returns = try self.commitList(returnsStart);
+
+                const start: u32 = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), returns.start) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), returns.end) catch return error.AllocatorFailure;
+
+                self.expressionMap.set(expr, .{
+                    .Function = start,
+                });
+            },
+            .Mut => {
+                const res = try self.expression();
+
+                self.expressionMap.set(expr, .{
+                    .Mutable = res,
+                });
+            },
             .Layout => {
-                _ = self.advance();
                 _ = try self.consume(.LBrace, error.MissingBrace, "Expected layout body.");
 
-                var variables = VariableSignatureList.empty;
-                var functions = StatementList.empty;
+                var variablesTmp = std.ArrayListUnmanaged(u32).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+                var functionsTmp = std.ArrayListUnmanaged(u32).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
 
-                while (!self.isAtEnd() and !self.check(.RBrace)) {
-                    switch (self.peek().type) {
+                while (!self.check(.RBrace)) {
+                    switch (self.peek().ptr.type) {
                         .Pub => {
                             _ = self.advance();
-                            switch (self.peek().type) {
-                                .Fn => functions.append(allocator, try self.function(allocator, true)) catch return error.AllocatorFailure,
+                            switch (self.peek().ptr.type) {
+                                .Fn => {
+                                    _ = self.advance();
+                                    functionsTmp.append(self.allocator(), try self.function(true)) catch return error.AllocatorFailure;
+                                },
                                 .Identifier => {
-                                    variables.append(allocator, try self.variableSignature(allocator, true, true)) catch return error.AllocatorFailure;
-
-                                    if (!self.match(&.{.Comma}))
-                                        break;
+                                    variablesTmp.append(self.allocator(), try self.variableSignature(true, true)) catch return error.AllocatorFailure;
+                                    if (!self.match(&.{.Comma})) break;
                                 },
                                 else => {
+                                    _ = self.advance();
                                     self.report("Expected a function or a field definition after 'pub' specifier.", .{});
                                     return error.InvalidToken;
                                 },
@@ -858,54 +797,50 @@ pub const Parser = struct {
                         },
                         .Fn => {
                             _ = self.advance();
-                            functions.append(allocator, try self.function(allocator, false)) catch return error.AllocatorFailure;
+                            functionsTmp.append(self.allocator(), try self.function(false)) catch return error.AllocatorFailure;
                         },
                         .Identifier => {
-                            variables.append(allocator, try self.variableSignature(allocator, false, true)) catch return error.AllocatorFailure;
-
-                            if (!self.match(&.{.Comma}))
-                                break;
+                            variablesTmp.append(self.allocator(), try self.variableSignature(false, true)) catch return error.AllocatorFailure;
+                            if (!self.match(&.{.Comma})) break;
                         },
                         else => {
+                            _ = self.advance();
                             self.report("Expected a function or a field definition in layout definition.", .{});
                             return error.InvalidToken;
                         },
                     }
                 }
+
                 _ = try self.consume(.RBrace, error.MissingBrace, "Expected enclosing brace after layout definition.");
 
-                const expr = allocator.create(Expression) catch return error.AllocatorFailure;
-                expr.* = .{
-                    .LayoutDefinition = .{
-                        .variables = variables,
-                        .functions = functions,
-                    },
-                };
-                return expr;
+                const variables = try self.commitFromSlice(variablesTmp.items);
+                const functions = try self.commitFromSlice(functionsTmp.items);
+
+                const start: u32 = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), variables.start) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), variables.end) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), functions.start) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), functions.end) catch return error.AllocatorFailure;
+
+                self.expressionMap.set(expr, .{
+                    .LayoutDefinition = start,
+                });
             },
+            .Identifier => {
+                const start: u32 = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), @intFromBool(true)) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), self.previous().index) catch return error.AllocatorFailure;
+
+                self.expressionMap.set(expr, .{
+                    .Value = start,
+                });
+            },
+
             else => {
-                self.report("Expected a primary expression, got '{s}' instead.", .{self.advance().lexeme});
-                return error.InvalidToken;
+                self.current -= 1;
+                _ = try self.consume(.Identifier, error.MissingTypeSpecifier, "Expected type name.");
             }
         }
-    }
-
-    fn typeExpression(self: *Self, allocator: Allocator, mutable: bool) ExpressionResult {
-        if (!self.check(.Identifier) and !self.check(.TypeName)) {
-            self.report("Expected type name.", .{});
-            return error.MissingTypeSpecifier;
-        }
-
-        const expr = allocator.create(Expression) catch return error.AllocatorFailure;
-
-        expr.* = .{
-            .Type = .{
-                .mutable = mutable,
-                .type = .{
-                    .Value = self.advance(),
-                },
-            },
-        };
 
         return expr;
     }
@@ -914,91 +849,150 @@ pub const Parser = struct {
     // Helpers
     //
 
-    fn variableSignature(self: *Self, allocator: Allocator, public: bool, enforceType: bool) common.CompilerError!VariableSignature {
-        const name = try self.consume(.Identifier, error.MissingIdentifier, "Expected an identifier at variable signature.");
-
-        if (!enforceType and !self.check(.Colon)) {
-            const typename = allocator.create(Expression) catch return error.AllocatorFailure;
-            const typeValue = allocator.create(lexer.Token) catch return error.AllocatorFailure;
-
-            typeValue.* = .{
-                .type = .TypeName,
-                .lexeme = "any",
-                .position = self.previous().position,
-            };
-
-            typename.* = .{
-                .Type = .{
-                    .mutable = true,
-                    .type = .{
-                        .Value = typeValue,
-                    },
-                },
-            };
-            return .{
-                .public = public,
-                .name = name,
-                .type = typename,
-            };
-        }
-
-        _ = try self.consume(.Colon, error.MissingColon, "Expected a separator colon ':' after identifier.");
-        
-        const typename = try self.expression(allocator);
-        
-        return .{
-            .public = public,
-            .name = name,
-            .type = typename,
-        };
+    fn allocator(self: *Self) Allocator {
+        return self.arena.allocator();
     }
 
-    fn consume(self: *Self, tokenType: TokenType, err: common.CompilerError, message: []const u8) common.CompilerError!*const lexer.Token {
+    fn commonBinary(self: *Self, expr: u32, comptime next: anytype) ExpressionResult {
+        const operator = self.previous().ptr.type;
+        const rhs = try next(self);
+        const newExpr = try self.alloc(Expression);
+
+        const binaryStart: u32 = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), @intFromEnum(operator)) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), rhs) catch return error.AllocatorFailure;
+
+        self.expressionMap.set(newExpr, .{
+            .Binary = binaryStart,
+        });
+
+        return newExpr;
+    }
+
+    fn synchronize(self: *Self) void {
+        while (!self.isAtEnd()) {
+            if (self.previous().ptr.type == .Semicolon) {
+                return;
+            }
+
+            switch (self.peek().ptr.type) {
+                .Fn, .Let, .Pub, .While, .If, .Asm, .Continue, .Return, .Include, .Namespace, .Defer, .Extern, .Discard, .Break => {
+                    return;
+                },
+                else => {},
+            }
+
+            _ = self.advance();
+        }
+    }
+
+    fn commitFromSlice(self: *Self, items: []const u32) common.CompilerError!Range {
+        const start: u32 = @intCast(self.extra.items.len);
+        self.extra.appendSlice(self.allocator(), items) catch return error.AllocatorFailure;
+        return Range{ .start = start, .end = @intCast(self.extra.items.len) };
+    }
+
+    fn commitList(self: *Self, scratchStart: usize) common.CompilerError!Range {
+        const span = try self.commitFromSlice(self.scratch.items[scratchStart..]);
+        self.scratch.shrinkRetainingCapacity(scratchStart);
+        return span;
+    }
+
+    fn alloc(self: *Self, comptime T: type) common.CompilerError!u32 {
+        if (comptime T == Expression) {
+            return @intCast(self.expressionMap.addOne(self.allocator()) catch return error.AllocatorFailure);
+        } else if (comptime T == Statement) {
+            return @intCast(self.statementMap.addOne(self.allocator()) catch return error.AllocatorFailure);
+        } else if (comptime T == VariableSignature) {
+            return @intCast(self.signaturePool.addOne(self.allocator()) catch return error.AllocatorFailure);
+        } else {
+            @compileError("Unsupported type.");
+        }
+    }
+
+    fn variableSignature(self: *Self, public: bool, enforceType: bool) common.CompilerError!u32 {
+        const name = try self.consume(.Identifier, error.MissingIdentifier, "Expected an identifier at variable signature.");
+        var typename: u32 = undefined;
+
+        if (!enforceType and !self.check(.Colon)) {
+            const start: u32 = @intCast(self.extra.items.len);
+            self.extra.append(self.allocator(), @intFromBool(false)) catch return error.AllocatorFailure;
+
+            typename = try self.alloc(Expression);
+            self.expressionMap.set(typename, .{
+                .Value = start,
+            });
+        } else {
+            _ = try self.consume(.Colon, error.MissingColon, "Expected a separator colon ':' after identifier.");
+            typename = try self.ifExpression();
+        }
+
+        const signature = try self.alloc(VariableSignature);
+        self.signaturePool.set(signature, .{
+            .public = public,
+            .name = name.index,
+            .type = typename,
+        });
+
+        return signature;
+    }
+
+    fn consume(self: *Self, tokenType: TokenType, err: common.CompilerError, message: []const u8) common.CompilerError!TokenRef {
         if (self.check(tokenType)) return self.advance();
 
-        self.report("{s}\n\tExpected {s}, Received {s}", .{message, @tagName(tokenType), @tagName(self.peek().type)});
+        self.report("{s}\n\tExpected {s}, Received {s}", .{ message, @tagName(tokenType), @tagName(self.peek().ptr.type) });
         return err;
     }
 
-    fn previous(self: *Self) *const lexer.Token {
-        if (self.current == 0) return &lexer.Token.eof;
-        return &self.tokens[self.current - 1];
+    fn previous(self: *Self) TokenRef {
+        if (self.current == 0) return .{
+            .ptr = &lexer.Token.eof,
+            .index = 0,
+        };
+        return .{
+            .ptr = &self.tokens[self.current - 1],
+            .index = self.current - 1,
+        };
     }
 
-    fn peek(self: *Self) *const lexer.Token {
-        return &self.tokens[self.current];
+    fn peek(self: *Self) TokenRef {
+        return .{
+            .ptr = &self.tokens[self.current],
+            .index = self.current,
+        };
     }
 
     fn isAtEnd(self: *Self) bool {
-        return self.peek().type == .EOF;
+        return self.peek().ptr.type == .EOF;
     }
 
-    fn advance(self: *Self) *const lexer.Token {
+    fn advance(self: *Self) TokenRef {
         if (!self.isAtEnd()) self.current += 1;
         return self.previous();
     }
 
     fn check(self: *Self, tokenType: TokenType) bool {
         if (self.isAtEnd()) return false;
-        return self.peek().type == tokenType;
+        return self.peek().ptr.type == tokenType;
     }
 
-    fn match(self: *Self, args: []const TokenType) bool {
-        for (args) |arg| {
-            if (self.check(arg)) {
+    fn match(self: *Self, comptime args: []const TokenType) bool {
+        const t = self.peek().ptr.type;
+        inline for (args) |arg| {
+            if (t == arg) {
                 _ = self.advance();
                 return true;
             }
         }
-
         return false;
     }
 
     fn report(self: *Self, comptime fmt: []const u8, args: anytype) void {
-        common.log.err("[PARSER ERROR]", .{});
         common.log.err(fmt, args);
-        const token = self.previous();
-        common.log.err("\t{s} {d}:{d}\n", .{token.position.file, token.position.line, token.position.column});
+        const token = self.previous().ptr;
+        const position = token.position(self.file);
+        common.log.err("\t{s} {d}:{d}", .{ common.CompilerContext.filenameMap[self.file], position.line, position.column});
     }
 };
 
@@ -1006,5 +1000,4 @@ pub const Parser = struct {
 // Tests
 //
 
-pub const Tests = struct {
-};
+pub const Tests = struct {};

@@ -1,316 +1,345 @@
 const std = @import("std");
 const lexer = @import("../lexer/lexer.zig");
-const parser = @import("parser.zig");
+const Parser = @import("parser.zig").Parser;
+const common = @import("../core/common.zig");
+const TokenType = lexer.TokenType;
 
-pub const AstPrinter = struct {
-    indentLevel: usize = 0,
+pub const PrettyPrinter = struct {
+    parser: *const Parser,
+    writer: std.Io.Writer,
+    indent_level: usize = 0,
 
-    pub fn printAst(writer: anytype, list: parser.StatementList) !void {
-        var self = AstPrinter{
-            .indentLevel = 0,
+    const Self = @This();
+
+    pub fn init(parser: *const Parser, writer: std.Io.Writer) Self {
+        return .{
+            .parser = parser,
+            .writer = writer,
         };
-
-        for (list.items) |stmt| {
-            try self.printStatement(writer, stmt);
-            try writer.writeAll("\n");
-        }
     }
 
-    fn indent(self: *AstPrinter, writer: anytype) !void {
+    fn indent(self: *Self) common.CompilerError!void {
         var i: usize = 0;
-        while (i < self.indentLevel) : (i += 1) {
-            try writer.writeAll("  ");
+        while (i < self.indent_level) : (i += 1) {
+            self.writer.writeAll("    ") catch return error.InternalError;
         }
     }
 
-    pub fn printStatement(self: *AstPrinter, writer: anytype, stmt: *const parser.Statement) anyerror!void {
-        try self.indent(writer);
-        switch (stmt.*) {
-            .Block => |statements| {
-                try writer.writeAll("Block:\n");
-                self.indentLevel += 1;
-                for (statements.items) |s| {
-                    try self.printStatement(writer, s);
-                }
-                self.indentLevel -= 1;
-            },
-            .InlineAssembly => |asm_str| {
-                try writer.print("InlineAssembly: {s}\n", .{asm_str});
-            },
-            .FunctionDefinition => |f| {
-                try writer.print("FunctionDefinition: '{s}' (pub: {any})\n", .{ f.name.lexeme, f.public });
-                self.indentLevel += 1;
+    pub fn printAll(self: *Self) common.CompilerError!void {
+        for (0..self.parser.statementMap.len) |i| {
+            try self.printStatement(@intCast(i));
+            self.writer.writeAll("\n") catch return error.InternalError;
+        }
+    }
 
-                try self.indent(writer);
-                try writer.writeAll("Params:\n");
-                self.indentLevel += 1;
-                for (f.params.items) |p| {
-                    try self.printVariableSignature(writer, p);
-                }
-                self.indentLevel -= 1;
-
-                try self.indent(writer);
-                try writer.writeAll("Returns:\n");
-                self.indentLevel += 1;
-                for (f.returnType.items) |r| {
-                    try self.printExpression(writer, r);
-                }
-                self.indentLevel -= 1;
-
-                try self.indent(writer);
-                try writer.writeAll("Body:\n");
-                self.indentLevel += 1;
-                try self.printStatement(writer, f.body);
-                self.indentLevel -= 1;
-
-                self.indentLevel -= 1;
-            },
-            .Return => |expr| {
-                try writer.writeAll("Return:\n");
-                self.indentLevel += 1;
-                try self.printExpression(writer, expr);
-                self.indentLevel -= 1;
-            },
-            .Conditional => |c| {
-                try writer.writeAll("If:\n");
-                self.indentLevel += 1;
-                try self.printExpression(writer, c.condition);
-                self.indentLevel -= 1;
-
-                try self.indent(writer);
-                try writer.writeAll("Then:\n");
-                self.indentLevel += 1;
-                try self.printStatement(writer, c.body);
-                self.indentLevel -= 1;
-
-                if (c.otherwise) |otherwise| {
-                    try self.indent(writer);
-                    try writer.writeAll("Else:\n");
-                    self.indentLevel += 1;
-                    try self.printStatement(writer, otherwise);
-                    self.indentLevel -= 1;
-                }
-            },
-            .While => |w| {
-                try writer.writeAll("While:\n");
-                self.indentLevel += 1;
-                try self.printExpression(writer, w.condition);
-                try self.printStatement(writer, w.body);
-                self.indentLevel -= 1;
-            },
-            .Break => {
-                try writer.writeAll("Break\n");
-            },
-            .Continue => {
-                try writer.writeAll("Continue\n");
-            },
-            .VariableDefinition => |v| {
-                try writer.writeAll("VariableDefinition:\n");
-                self.indentLevel += 1;
+    pub fn printStatement(self: *Self, ptr: u32) common.CompilerError!void {
+        const stmt = self.parser.statementMap.get(ptr);
+        switch (stmt) {
+            .Block => |start| {
+                const block_start = self.parser.extra.items[start];
+                const block_end = self.parser.extra.items[start + 1];
                 
-                try self.indent(writer);
-                try writer.writeAll("Signatures:\n");
-                self.indentLevel += 1;
-                for (v.signatures.items) |sig| {
-                    try self.printVariableSignature(writer, sig);
+                self.writer.writeAll("{\n") catch return error.InternalError;
+                self.indent_level += 1;
+                for (block_start..block_end) |i| {
+                    try self.indent();
+                    // Read the actual statement pointer from the extra buffer
+                    try self.printStatement(self.parser.extra.items[i]);
+                    self.writer.writeAll("\n") catch return error.InternalError;
                 }
-                self.indentLevel -= 1;
+                self.indent_level -= 1;
+                try self.indent();
+                self.writer.writeAll("}") catch return error.InternalError;
+            },
+            .InlineAssembly => |token_ptr| {
+                self.writer.print("asm \"{s}\";", .{self.getTokenLexeme(token_ptr)}) catch return error.InternalError;
+            },
+            .FunctionDefinition => |start| {
+                const is_public = self.parser.extra.items[start] == 1;
+                const name_idx = self.parser.extra.items[start + 1];
+                const params_start = self.parser.extra.items[start + 2];
+                const params_end = self.parser.extra.items[start + 3];
+                const returns_start = self.parser.extra.items[start + 4];
+                const returns_end = self.parser.extra.items[start + 5];
+                const body_ptr = self.parser.extra.items[start + 6];
+
+                if (is_public) self.writer.writeAll("pub ") catch return error.InternalError;
+                self.writer.print("fn {s}(", .{self.getTokenLexeme(name_idx)}) catch return error.InternalError;
                 
-                try self.indent(writer);
-                try writer.writeAll("Initializer:\n");
-                self.indentLevel += 1;
-                try self.printExpression(writer, v.initializer);
-                self.indentLevel -= 1;
+                for (params_start..params_end, 0..) |i, count| {
+                    if (count > 0) self.writer.writeAll(", ") catch return error.InternalError;
+                    try self.printVariableSignature(self.parser.extra.items[i]);
+                }
+                self.writer.writeAll(") -> ") catch return error.InternalError;
                 
-                self.indentLevel -= 1;
+                for (returns_start..returns_end, 0..) |i, count| {
+                    if (count > 0) self.writer.writeAll(", ") catch return error.InternalError;
+                    try self.printExpression(self.parser.extra.items[i]);
+                }
+                self.writer.writeAll(" ") catch return error.InternalError;
+                try self.printStatement(body_ptr);
             },
-            .Discard => |expr| {
-                try writer.writeAll("Discard:\n");
-                self.indentLevel += 1;
-                try self.printExpression(writer, expr);
-                self.indentLevel -= 1;
+            .Return => |expr_ptr| {
+                self.writer.writeAll("return ") catch return error.InternalError;
+                try self.printExpression(expr_ptr);
+                self.writer.writeAll(";") catch return error.InternalError;
             },
-            .Namespace => |expr| {
-                try writer.writeAll("Namespace:\n");
-                self.indentLevel += 1;
-                try self.printExpression(writer, expr);
-                self.indentLevel -= 1;
+            .Conditional => |start| {
+                const condition = self.parser.extra.items[start];
+                const body = self.parser.extra.items[start + 1];
+                const has_otherwise = self.parser.extra.items[start + 2] == 1;
+
+                self.writer.writeAll("if ") catch return error.InternalError;
+                try self.printExpression(condition);
+                self.writer.writeAll(" ") catch return error.InternalError;
+                try self.printStatement(body);
+                
+                if (has_otherwise) {
+                    const otherwise = self.parser.extra.items[start + 3];
+                    self.writer.writeAll(" else ") catch return error.InternalError;
+                    try self.printStatement(otherwise);
+                }
             },
-            .Include => |token| {
-                try writer.print("Include: '{s}'\n", .{token.lexeme});
+            .While => |start| {
+                const condition = self.parser.extra.items[start];
+                const body = self.parser.extra.items[start + 1];
+
+                self.writer.writeAll("while ") catch return error.InternalError;
+                try self.printExpression(condition);
+                self.writer.writeAll(" ") catch return error.InternalError;
+                try self.printStatement(body);
+            },
+            .Break => self.writer.writeAll("break;") catch return error.InternalError,
+            .Continue => self.writer.writeAll("continue;") catch return error.InternalError,
+            .VariableDefinition => |start| {
+                const sig_start = self.parser.extra.items[start];
+                const sig_end = self.parser.extra.items[start + 1];
+                const expr_ptr = self.parser.extra.items[start + 2];
+
+                if (sig_start < sig_end) {
+                    const first_sig = self.parser.signaturePool.get(self.parser.extra.items[sig_start]);
+                    if (first_sig.public) self.writer.writeAll("pub ") catch return error.InternalError;
+                }
+                
+                self.writer.writeAll("let ") catch return error.InternalError;
+                for (sig_start..sig_end, 0..) |i, count| {
+                    if (count > 0) self.writer.writeAll(", ") catch return error.InternalError;
+                    try self.printVariableSignature(self.parser.extra.items[i]);
+                }
+                
+                self.writer.writeAll(" = ") catch return error.InternalError;
+                try self.printExpression(expr_ptr);
+                self.writer.writeAll(";") catch return error.InternalError;
+            },
+            .Discard => |expr_ptr| {
+                self.writer.writeAll("_ = ") catch return error.InternalError;
+                try self.printExpression(expr_ptr);
+                self.writer.writeAll(";") catch return error.InternalError;
+            },
+            .Namespace => |expr_ptr| {
+                self.writer.writeAll("namespace ") catch return error.InternalError;
+                try self.printExpression(expr_ptr);
+                self.writer.writeAll(";") catch return error.InternalError;
+            },
+            .Include => |token_ptr| {
+                self.writer.print("include \"{s}\";", .{self.getTokenLexeme(token_ptr)}) catch return error.InternalError;
             },
         }
     }
 
-    pub fn printExpression(self: *AstPrinter, writer: anytype, expr: *const parser.Expression) anyerror!void {
-        try self.indent(writer);
-        switch (expr.*) {
-            .Binary => |b| {
-                try writer.print("Binary (Operator: {s})\n", .{@tagName(b.operator)});
-                self.indentLevel += 1;
-                try self.printExpression(writer, b.lhs);
-                try self.printExpression(writer, b.rhs);
-                self.indentLevel -= 1;
-            },
-            .Grouping => |g| {
-                try writer.writeAll("Grouping:\n");
-                self.indentLevel += 1;
-                try self.printExpression(writer, g);
-                self.indentLevel -= 1;
-            },
-            .Literal => |l| {
-                try writer.print("Literal: '{s}'\n", .{l.lexeme});
-            },
-            .Identifier => |i| {
-                try writer.print("Identifier: '{s}'\n", .{i.lexeme});
-            },
-            .Unary => |u| {
-                try writer.print("Unary (Operator: {s})\n", .{@tagName(u.operator)});
-                self.indentLevel += 1;
-                try self.printExpression(writer, u.rhs);
-                self.indentLevel -= 1;
-            },
-            .LayoutDefinition => |l| {
-                try writer.writeAll("LayoutDefinition:\n");
-                self.indentLevel += 1;
-                for (l.variables.items) |sig| {
-                    try self.printVariableSignature(writer, sig);
-                }
-                for (l.functions.items) |function| {
-                    try self.printStatement(writer, function);
-                }
-                self.indentLevel -= 1;
-            },
-            .Call => |c| {
-                try writer.writeAll("Call:\n");
-                self.indentLevel += 1;
+    pub fn printExpression(self: *Self, ptr: u32) common.CompilerError!void {
+        const expr = self.parser.expressionMap.get(ptr);
+        switch (expr) {
+            .Binary => |start| {
+                const lhs = self.parser.extra.items[start];
+                const op = @as(TokenType, @enumFromInt(self.parser.extra.items[start + 1]));
+                const rhs = self.parser.extra.items[start + 2];
                 
-                try self.indent(writer);
-                try writer.writeAll("Function:\n");
-                self.indentLevel += 1;
-                try self.printExpression(writer, c.function);
-                self.indentLevel -= 1;
+                try self.printExpression(lhs);
+                self.writer.print(" {s} ", .{operatorToString(op)}) catch return error.InternalError;
+                try self.printExpression(rhs);
+            },
+            .Grouping => |inner| {
+                self.writer.writeAll("(") catch return error.InternalError;
+                try self.printExpression(inner);
+                self.writer.writeAll(")") catch return error.InternalError;
+            },
+            .Literal, .Identifier => |token_ptr| {
+                self.writer.writeAll(self.getTokenLexeme(token_ptr)) catch return error.InternalError;
+            },
+            .Unary => |start| {
+                const op = @as(TokenType, @enumFromInt(self.parser.extra.items[start]));
+                const rhs = self.parser.extra.items[start + 1];
+                self.writer.print("{s}", .{operatorToString(op)}) catch return error.InternalError;
+                try self.printExpression(rhs);
+            },
+            .Call => |start| {
+                const callee = self.parser.extra.items[start];
+                const args_start = self.parser.extra.items[start + 1];
+                const args_end = self.parser.extra.items[start + 2];
 
-                try self.indent(writer);
-                try writer.writeAll("Arguments:\n");
-                self.indentLevel += 1;
-                for (c.arguments.items) |arg| {
-                    try self.printExpression(writer, arg);
+                try self.printExpression(callee);
+                self.writer.writeAll("(") catch return error.InternalError;
+                for (args_start..args_end, 0..) |i, count| {
+                    if (count > 0) self.writer.writeAll(", ") catch return error.InternalError;
+                    try self.printExpression(self.parser.extra.items[i]);
                 }
-                self.indentLevel -= 1;
-                
-                self.indentLevel -= 1;
+                self.writer.writeAll(")") catch return error.InternalError;
             },
-            .Conditional => |c| {
-                try writer.writeAll("ConditionalExpr:\n");
-                self.indentLevel += 1;
-                
-                try self.printExpression(writer, c.condition);
-                
-                try self.indent(writer);
-                try writer.writeAll("Then:\n");
-                self.indentLevel += 1;
-                try self.printExpression(writer, c.then);
-                self.indentLevel -= 1;
-                
-                try self.indent(writer);
-                try writer.writeAll("Otherwise:\n");
-                self.indentLevel += 1;
-                try self.printExpression(writer, c.otherwise);
-                self.indentLevel -= 1;
-                
-                self.indentLevel -= 1;
+            .Conditional => |start| {
+                const condition = self.parser.extra.items[start];
+                const then_branch = self.parser.extra.items[start + 1];
+                const otherwise = self.parser.extra.items[start + 2];
+
+                self.writer.writeAll("if ") catch return error.InternalError;
+                try self.printExpression(condition);
+                self.writer.writeAll(" ") catch return error.InternalError;
+                try self.printExpression(then_branch);
+                self.writer.writeAll(" else ") catch return error.InternalError;
+                try self.printExpression(otherwise);
             },
-            .Type => |t| {
-                try writer.print("Type (mutable: {any}):\n", .{t.mutable});
-                self.indentLevel += 1;
-                try self.indent(writer);
-                switch (t.type) {
-                    .Pointer => |p| {
-                        try writer.writeAll("Pointer:\n");
-                        self.indentLevel += 1;
-                        try self.printExpression(writer, p);
-                        self.indentLevel -= 1;
+            .Scoping => |start| {
+                const lhs = self.parser.extra.items[start];
+                const rhs_token = self.parser.extra.items[start + 1];
+                
+                try self.printExpression(lhs);
+                self.writer.print("::{s}", .{self.getTokenLexeme(rhs_token)}) catch return error.InternalError;
+            },
+            .Dot => |start| {
+                const lhs = self.parser.extra.items[start];
+                const rhs_token = self.parser.extra.items[start + 1];
+                
+                try self.printExpression(lhs);
+                self.writer.print(".{s}", .{self.getTokenLexeme(rhs_token)}) catch return error.InternalError;
+            },
+            .Indexing => |start| {
+                const target = self.parser.extra.items[start];
+                const index = self.parser.extra.items[start + 1];
+                
+                try self.printExpression(target);
+                self.writer.writeAll("[") catch return error.InternalError;
+                try self.printExpression(index);
+                self.writer.writeAll("]") catch return error.InternalError;
+            },
+            .ExpressionList => |range| {
+                self.writer.writeAll("{") catch return error.InternalError;
+                for (range.start..range.end, 0..) |i, count| {
+                    if (count > 0) self.writer.writeAll(", ") catch return error.InternalError;
+                    try self.printExpression(self.parser.extra.items[i]);
+                }
+                self.writer.writeAll("}") catch return error.InternalError;
+            },
+            .Type => |type_val| {
+                switch (type_val) {
+                    .Pointer => |inner| {
+                        self.writer.writeAll("*") catch return error.InternalError;
+                        try self.printExpression(inner);
                     },
-                    .Slice => |s| {
-                        try writer.writeAll("Slice:\n");
-                        self.indentLevel += 1;
-                        try self.printExpression(writer, s);
-                        self.indentLevel -= 1;
+                    .Slice => |inner| {
+                        self.writer.writeAll("[]") catch return error.InternalError;
+                        try self.printExpression(inner);
                     },
-                    .Function => |f| {
-                        try writer.writeAll("FunctionSignature:\n");
-                        self.indentLevel += 1;
-                        
-                        try self.indent(writer);
-                        try writer.writeAll("Params:\n");
-                        self.indentLevel += 1;
-                        for (f.parameters.items) |p| {
-                            try self.printExpression(writer, p);
+                    .Mutable => |inner| {
+                        self.writer.writeAll("mut ") catch return error.InternalError;
+                        try self.printExpression(inner);
+                    },
+                    .Function => |start| {
+                        const params_start = self.parser.extra.items[start];
+                        const params_end = self.parser.extra.items[start + 1];
+                        const returns_start = self.parser.extra.items[start + 2];
+                        const returns_end = self.parser.extra.items[start + 3];
+
+                        self.writer.writeAll("fn(") catch return error.InternalError;
+                        for (params_start..params_end, 0..) |i, count| {
+                            if (count > 0) self.writer.writeAll(", ") catch return error.InternalError;
+                            try self.printExpression(self.parser.extra.items[i]);
                         }
-                        self.indentLevel -= 1;
-                        
-                        try self.indent(writer);
-                        try writer.writeAll("Returns:\n");
-                        self.indentLevel += 1;
-                        for (f.returns.items) |r| {
-                            try self.printExpression(writer, r);
+                        self.writer.writeAll(") -> ") catch return error.InternalError;
+                        for (returns_start..returns_end, 0..) |i, count| {
+                            if (count > 0) self.writer.writeAll(", ") catch return error.InternalError;
+                            try self.printExpression(self.parser.extra.items[i]);
                         }
-                        self.indentLevel -= 1;
-                        self.indentLevel -= 1;
                     },
-                    .Value => |v| {
-                        try writer.print("Value: '{s}'\n", .{v.lexeme});
+                    .Value => |start| {
+                        const token_idx = self.parser.extra.items[start + 1];
+                        self.writer.writeAll(self.getTokenLexeme(token_idx)) catch return error.InternalError;
                     },
                 }
-                self.indentLevel -= 1;
             },
-            .Scoping => |s| {
-                try writer.print("Scoping (Member: '{s}'):\n", .{s.member.lexeme});
-                self.indentLevel += 1;
-                try self.printExpression(writer, s.namespace);
-                self.indentLevel -= 1;
-            },
-            .ExpressionList => |el| {
-                try writer.writeAll("ExpressionList:\n");
-                self.indentLevel += 1;
-                for (el.items) |e| {
-                    try self.printExpression(writer, e);
+            .LayoutDefinition => |start| {
+                const vars_start = self.parser.extra.items[start];
+                const vars_end = self.parser.extra.items[start + 1];
+                const fns_start = self.parser.extra.items[start + 2];
+                const fns_end = self.parser.extra.items[start + 3];
+
+                self.writer.writeAll("layout {\n") catch return error.InternalError;
+                self.indent_level += 1;
+                
+                for (vars_start..vars_end) |var_idx| {
+                    try self.indent();
+                    try self.printVariableSignature(self.parser.extra.items[var_idx]); 
+                    self.writer.writeAll(",\n") catch return error.InternalError;
                 }
-                self.indentLevel -= 1;
-            },
-            .Dot => |d| {
-                try writer.print("Dot (RHS: '{s}'):\n", .{d.rhs.lexeme});
-                self.indentLevel += 1;
-                try self.printExpression(writer, d.lhs);
-                self.indentLevel -= 1;
-            },
-            .Indexing => |i| {
-                try writer.writeAll("Indexing:\n");
-                self.indentLevel += 1;
+                for (fns_start..fns_end) |fn_idx| {
+                    try self.indent();
+                    try self.printStatement(self.parser.extra.items[fn_idx]);
+                    self.writer.writeAll("\n") catch return error.InternalError;
+                }
                 
-                try self.indent(writer);
-                try writer.writeAll("LHS:\n");
-                self.indentLevel += 1;
-                try self.printExpression(writer, i.lhs);
-                self.indentLevel -= 1;
-                
-                try self.indent(writer);
-                try writer.writeAll("Index:\n");
-                self.indentLevel += 1;
-                try self.printExpression(writer, i.index);
-                self.indentLevel -= 1;
-                
-                self.indentLevel -= 1;
+                self.indent_level -= 1;
+                try self.indent();
+                self.writer.writeAll("}") catch return error.InternalError;
             },
         }
     }
 
-    pub fn printVariableSignature(self: *AstPrinter, writer: anytype, sig: parser.VariableSignature) anyerror!void {
-        try self.indent(writer);
-        try writer.print("Signature: '{s}' (pub: {any})\n", .{ sig.name.lexeme, sig.public });
-        self.indentLevel += 1;
-        try self.printExpression(writer, sig.type);
-        self.indentLevel -= 1;
+    fn printVariableSignature(self: *Self, ptr: u32) common.CompilerError!void {
+        const sig = self.parser.signaturePool.get(ptr);
+        
+        if (sig.public) self.writer.writeAll("pub ") catch return error.InternalError;
+        self.writer.writeAll(self.getTokenLexeme(sig.name)) catch return error.InternalError;
+        
+        const type_expr = self.parser.expressionMap.get(sig.type);
+        var is_inferred = false;
+        if (type_expr == .Type and type_expr.Type == .Value) {
+            const start = type_expr.Type.Value;
+            const has_type = self.parser.extra.items[start] == 1; 
+            if (!has_type) is_inferred = true;
+        }
+
+        if (!is_inferred) {
+            self.writer.writeAll(": ") catch return error.InternalError;
+            try self.printExpression(sig.type);
+        }
+    }
+
+    fn getTokenLexeme(self: *Self, token_index: u32) []const u8 {
+        return self.parser.tokens[token_index].lexeme(self.parser.file);
+    }
+    
+    fn operatorToString(token_type: TokenType) []const u8 {
+        return switch (token_type) {
+            .Plus => "+",
+            .Minus => "-",
+            .Star => "*",
+            .Slash => "/",
+            .Equal => "=",
+            .EqualEqual => "==",
+            .BangEqual => "!=",
+            .Lesser => "<",
+            .LesserEqual => "<=",
+            .Greater => ">",
+            .GreaterEqual => ">=",
+            .Pipe => "|",
+            .Ampersand => "&",
+            .Xor => "^",
+            .LeftShift => "<<",
+            .RightShift => ">>",
+            .Bang => "!",
+            .Tilde => "~",
+            .And => "and",
+            .Or => "or",
+            else => @tagName(token_type), 
+        };
     }
 };
