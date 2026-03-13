@@ -1,15 +1,11 @@
 const std = @import("std");
 const common = @import("../core/common.zig");
 const lexer = @import("../lexer/lexer.zig");
+const arraylist = @import("../util/arraylist.zig");
 
 const TokenType = lexer.TokenType;
 const Allocator = std.mem.Allocator;
 const ExpressionResult = common.CompilerError!ExpressionPtr;
-
-const TokenRef = struct {
-    ptr: *const lexer.Token,
-    index: u32,
-};
 
 pub const StatementResult = common.CompilerError!StatementPtr;
 
@@ -20,49 +16,95 @@ const ExpressionPtr = u32;
 const StatementPtr = u32;
 const TokenPtr = u32;
 
-pub const VariableSignatureMap = std.MultiArrayList(VariableSignature);
-pub const ExpressionMap = std.MultiArrayList(Expression);
-pub const StatementMap = std.MultiArrayList(Statement);
+pub const VariableSignatureMap = arraylist.MultiArrayList(VariableSignature);
+pub const ExpressionMap = arraylist.MultiArrayList(Expression);
+pub const StatementMap = arraylist.MultiArrayList(Statement);
 
 pub const Range = struct {
     start: u32,
     end: u32,
 };
 
-pub const Expression = union(enum) {
-    Binary: NodePtr,
-    Grouping: ExpressionPtr,
-    Literal: TokenPtr,
-    Identifier: TokenPtr,
-    Unary: NodePtr,
-    LayoutDefinition: NodePtr,
-    Call: NodePtr,
-    Conditional: NodePtr,
-    Mutable: ExpressionPtr,
-    Pointer: ExpressionPtr,
-    Slice: ExpressionPtr,
-    Function: NodePtr,
-    Value: NodePtr,
-    Scoping: NodePtr,
-    ExpressionList: NodeList,
-    Dot: NodePtr,
-    Indexing: NodePtr,
+pub const Expression = struct {
+    type: enum {
+        Binary,
+        Grouping,
+        Literal,
+        Indexing,
+        Identifier,
+        Unary,
+        LayoutDefinition,
+        Call,
+        Conditional,
+        Mutable,
+        Pointer,
+        Slice,
+        Function,
+        Value,
+        Scoping,
+        ExpressionList,
+        Dot,
+    },
+
+    value: union {
+        DirectPtr: NodePtr,
+        List: Range,
+    },
 };
 
-pub const Statement = union(enum) {
-    Block: NodePtr,
-    InlineAssembly: TokenPtr,
-    FunctionDefinition: NodePtr,
-    Return: ExpressionPtr,
-    Conditional: NodePtr,
-    While: NodePtr,
-    Break,
-    Continue,
-    VariableDefinition: NodePtr,
-    Discard: ExpressionPtr,
-    Namespace: ExpressionPtr,
-    Include: TokenPtr,
+// pub const Expression = union(enum) {
+//     Binary: NodePtr,
+//     Grouping: ExpressionPtr,
+//     Literal: TokenPtr,
+//     Identifier: TokenPtr,
+//     Unary: NodePtr,
+//     LayoutDefinition: NodePtr,
+//     Call: NodePtr,
+//     Conditional: NodePtr,
+//     Mutable: ExpressionPtr,
+//     Pointer: ExpressionPtr,
+//     Slice: ExpressionPtr,
+//     Function: NodePtr,
+//     Value: NodePtr,
+//     Scoping: NodePtr,
+//     ExpressionList: NodeList,
+//     Dot: NodePtr,
+//     Indexing: NodePtr,
+// };
+
+pub const Statement = struct {
+    type: enum {
+        Block,
+        InlineAssembly,
+        FunctionDefinition,
+        Return,
+        Conditional,
+        While,
+        Break,
+        Continue,
+        VariableDefinition,
+        Discard,
+        Namespace,
+        Include,
+    },
+
+    value: NodePtr,
 };
+
+// pub const Statement = union(enum) {
+//     Block: NodePtr,
+//     InlineAssembly: TokenPtr,
+//     FunctionDefinition: NodePtr,
+//     Return: ExpressionPtr,
+//     Conditional: NodePtr,
+//     While: NodePtr,
+//     Break,
+//     Continue,
+//     VariableDefinition: NodePtr,
+//     Discard: ExpressionPtr,
+//     Namespace: ExpressionPtr,
+//     Include: TokenPtr,
+// };
 
 pub const VariableSignature = struct {
     public: bool,
@@ -73,31 +115,29 @@ pub const VariableSignature = struct {
 pub const Parser = struct {
     const Self = @This();
 
-    pub const Table = struct {
-        expressions: ExpressionMap.Slice,
-        statements: StatementMap.Slice,
-    };
-
-    tokens: []const lexer.Token,
+    tokens: lexer.TokenList,
     current: u32,
+
     arena: std.heap.ArenaAllocator,
 
     expressionMap: ExpressionMap,
     statementMap: StatementMap,
     signaturePool: VariableSignatureMap,
 
-    extra: std.ArrayListUnmanaged(u32),
-    scratch: std.ArrayListUnmanaged(u32),
+    extra: std.ArrayList(u32),
+    scratch: std.ArrayList(u32),
 
     file: u32,
 
-    pub fn init(tokens: []const lexer.Token, base: Allocator) common.CompilerError!Parser {
-        const arena = std.heap.ArenaAllocator.init(base);
+    pub fn init(base: Allocator, tokens: lexer.TokenList) common.CompilerError!Parser {
+        var arena = std.heap.ArenaAllocator.init(base);
         var self = Self{
-            .signaturePool = VariableSignatureMap.empty,
-            .expressionMap = ExpressionMap.empty,
-            .statementMap = StatementMap.empty,
-            .file = tokens[0].start,
+            .signaturePool = try VariableSignatureMap.init(arena.allocator(), tokens.len / 2),
+            .expressionMap = try ExpressionMap.init(arena.allocator(), tokens.len / 2),
+            .statementMap = try StatementMap.init(arena.allocator(), tokens.len / 4),
+            // .expressionMap = ExpressionMap.empty,
+            // .statementMap = StatementMap.empty,
+            .file = tokens.items(.start)[0],
             .tokens = tokens,
             .current = 1,
             .arena = arena,
@@ -105,9 +145,8 @@ pub const Parser = struct {
             .scratch = .empty,
         };
         
-        self.expressionMap.ensureTotalCapacity(self.allocator(), tokens.len / 2) catch return error.AllocatorFailure;
-        self.statementMap.ensureTotalCapacity(self.allocator(), tokens.len / 4) catch return error.AllocatorFailure;
-        self.signaturePool.ensureTotalCapacity(self.allocator(), tokens.len / 2) catch return error.AllocatorFailure;
+        // self.expressionMap.ensureTotalCapacity(self.allocator(), tokens.len / 2) catch return error.AllocatorFailure;
+        // self.statementMap.ensureTotalCapacity(self.allocator(), tokens.len / 4) catch return error.AllocatorFailure;
         self.extra.ensureTotalCapacity(self.allocator(), tokens.len) catch return error.AllocatorFailure;
         self.scratch.ensureTotalCapacity(self.allocator(), 128) catch return error.AllocatorFailure;
 
@@ -146,7 +185,7 @@ pub const Parser = struct {
     //
 
     fn statement(self: *Self) StatementResult {
-        return switch (self.advance().ptr.type) {
+        return switch (self.tokens.items(.type)[self.advance()]) {
             .LBrace => self.block(),
             .Asm => self.inlineAssembly(),
             .If => self.conditional(),
@@ -154,7 +193,7 @@ pub const Parser = struct {
             .Return => self.returnStatement(),
             .Break => self.breakStatement(),
             .Continue => self.continueStatement(),
-            .Pub => switch (self.advance().ptr.type) {
+            .Pub => switch (self.tokens.items(.type)[self.advance()]) {
                 .Fn => self.function(true),
                 .Let => self.variable(true),
                 else => {
@@ -190,19 +229,21 @@ pub const Parser = struct {
 
         const result = try self.alloc(Statement);
         self.statementMap.set(result, .{
-            .Block = start,
+            .type = .Block,
+            .value = start,
         });
 
         return result;
     }
 
     fn inlineAssembly(self: *Self) StatementResult {
-        const asmly = (try self.consume(.String, error.MissingBrace, "Expected block after 'asm' statement.")).index;
-        std.log.info("{s}", .{self.tokens[asmly].lexeme(self.file)});
+        const asmly = (try self.consume(.String, error.MissingBrace, "Expected block after 'asm' statement."));
+        std.log.info("{s}", .{self.tokens.get(asmly).lexeme(self.file)});
 
         const result = try self.alloc(Statement);
         self.statementMap.set(result, .{
-            .InlineAssembly = asmly,
+            .type = .InlineAssembly,
+            .value = asmly,
         });
 
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
@@ -215,7 +256,10 @@ pub const Parser = struct {
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
         
         const result = try self.alloc(Statement);
-        self.statementMap.set(result, .{ .Return = expr });
+        self.statementMap.set(result, .{
+            .type = .Return,
+            .value = expr
+        });
         
         return result;
     }
@@ -239,7 +283,8 @@ pub const Parser = struct {
 
         const result = try self.alloc(Statement);
         self.statementMap.set(result, .{
-            .Conditional = start,
+            .type = .Conditional,
+            .value = start,
         });
 
         return result;
@@ -255,7 +300,8 @@ pub const Parser = struct {
         
         const result = try self.alloc(Statement);
         self.statementMap.set(result, .{
-            .While = start,
+            .type = .While,
+            .value = start,
         });
         
         return result;
@@ -264,14 +310,20 @@ pub const Parser = struct {
     fn breakStatement(self: *Self) StatementResult {
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
         const result = try self.alloc(Statement);
-        self.statementMap.set(result, .{ .Break = {} });
+        self.statementMap.set(result, .{
+            .type = .Break,
+            .value = 0
+        });
         return result;
     }
 
     fn continueStatement(self: *Self) StatementResult {
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
         const result = try self.alloc(Statement);
-        self.statementMap.set(result, .{ .Continue = {} });
+        self.statementMap.set(result, .{
+            .type = .Continue,
+            .value = 0
+        });
         return result;
     }
 
@@ -304,7 +356,7 @@ pub const Parser = struct {
 
         const start: u32 = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), @intFromBool(public)) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), name.index) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), name) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), returns.start) catch return error.AllocatorFailure;
@@ -314,7 +366,8 @@ pub const Parser = struct {
         const result = try self.alloc(Statement);
         
         self.statementMap.set(result, .{
-            .FunctionDefinition = start,
+            .type = .FunctionDefinition,
+            .value = start,
         });
 
         return result;
@@ -339,7 +392,8 @@ pub const Parser = struct {
 
         const result = try self.alloc(Statement);
         self.statementMap.set(result, .{
-            .VariableDefinition = start,
+            .type = .VariableDefinition,
+            .value = start,
         });
 
         return result;
@@ -351,7 +405,10 @@ pub const Parser = struct {
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
         const result = try self.alloc(Statement);
-        self.statementMap.set(result, .{ .Discard = expr });
+        self.statementMap.set(result, .{
+            .type = .Discard,
+            .value = expr
+        });
         
         return result;
     }
@@ -361,7 +418,10 @@ pub const Parser = struct {
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
         const result = try self.alloc(Statement);
-        self.statementMap.set(result, .{ .Namespace = expr });
+        self.statementMap.set(result, .{
+            .type = .Namespace,
+            .value = expr
+        });
 
         return result;
     }
@@ -371,7 +431,10 @@ pub const Parser = struct {
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
         const result = try self.alloc(Statement);
-        self.statementMap.set(result, .{ .Include = file.index });
+        self.statementMap.set(result, .{
+            .type = .Include,
+            .value = file
+        });
 
         return result;
     }
@@ -412,7 +475,8 @@ pub const Parser = struct {
 
         const expr = try self.alloc(Expression);
         self.expressionMap.set(expr, .{
-            .Conditional = start,
+            .type = .Conditional,
+            .value = .{ .DirectPtr = start },
         });
 
         return expr;
@@ -520,7 +584,7 @@ pub const Parser = struct {
 
     fn unary(self: *Self) ExpressionResult {
         if (self.match(&.{.Bang, .Minus, .Plus, .Tilde})) {
-            const operator = self.previous().ptr.type;
+            const operator = self.tokens.items(.type)[self.previous()];
 
             const rhs = try self.unary();
             const expr = try self.alloc(Expression);
@@ -530,7 +594,8 @@ pub const Parser = struct {
             self.extra.append(self.allocator(), rhs) catch return error.AllocatorFailure;
 
             self.expressionMap.set(expr, .{
-                .Unary = start,
+                .type = .Unary,
+                .value = .{ .DirectPtr = start },
             });
 
             return expr;
@@ -561,7 +626,8 @@ pub const Parser = struct {
 
                 const newExpr = try self.alloc(Expression);
                 self.expressionMap.set(newExpr, .{
-                    .Call = start,
+                    .type = .Call,
+                    .value = .{ .DirectPtr = start },
                 });
                 expr = newExpr;
             } else if (self.match(&.{.Dot})) {
@@ -576,10 +642,11 @@ pub const Parser = struct {
 
                 const start: u32 = @intCast(self.extra.items.len);
                 self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
-                self.extra.append(self.allocator(), member.index) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), member) catch return error.AllocatorFailure;
 
                 self.expressionMap.set(newExpr, .{
-                    .Dot = start,
+                    .type = .Dot,
+                    .value = .{ .DirectPtr = start },
                 });
                 expr = newExpr;
             } else if (self.match(&.{.LBracket})) {
@@ -592,11 +659,12 @@ pub const Parser = struct {
 
                 const newExpr = try self.alloc(Expression);
                 self.expressionMap.set(newExpr, .{
-                    .Indexing = start,
+                    .type = .Indexing,
+                    .value = .{ .DirectPtr = start },
                 });
                 expr = newExpr;
             } else if (self.match(&.{.DoubleColon})) {
-                switch (self.expressionMap.get(expr)) {
+                switch (self.expressionMap.get(expr).type) {
                     .Identifier, .Scoping, .Dot => {},
                     else => {
                         self.report("Expected a identifier name in scoping expression.", .{});
@@ -609,10 +677,11 @@ pub const Parser = struct {
 
                 const start: u32 = @intCast(self.extra.items.len);
                 self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
-                self.extra.append(self.allocator(), member.index) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), member) catch return error.AllocatorFailure;
 
                 self.expressionMap.set(newExpr, .{
-                    .Scoping = start,
+                    .type = .Scoping,
+                    .value = .{ .DirectPtr = start },
                 });
                 expr = newExpr;
             } else {
@@ -627,7 +696,7 @@ pub const Parser = struct {
         var expr = try self.primary();
 
         while (self.match(&.{.DoubleColon})) {
-            switch (self.expressionMap.get(expr)) {
+            switch (self.expressionMap.get(expr).type) {
                 .Identifier, .Scoping => {},
                 else => {
                     self.report("Expected a namespace name in scoping expression.", .{});
@@ -640,10 +709,11 @@ pub const Parser = struct {
 
             const start: u32 = @intCast(self.extra.items.len);
             self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
-            self.extra.append(self.allocator(), member.index) catch return error.AllocatorFailure;
+            self.extra.append(self.allocator(), member) catch return error.AllocatorFailure;
 
             self.expressionMap.set(newExpr, .{
-                .Scoping = start,
+                .type = .Scoping,
+                .value = .{ .DirectPtr = start },
             });
             expr = newExpr;
         }
@@ -652,11 +722,12 @@ pub const Parser = struct {
     }
 
     fn primary(self: *Self) ExpressionResult {
-        switch (self.peek().ptr.type) {
+        switch (self.tokens.items(.type)[self.peek()]) {
             .False, .True, .Nullptr, .Integer, .Float, .String => {
                 const expr = try self.alloc(Expression);
                 self.expressionMap.set(expr, .{
-                    .Literal = self.advance().index,
+                    .type = .Literal,
+                    .value = .{ .DirectPtr = self.advance() },
                 });
                 return expr;
             },
@@ -668,7 +739,8 @@ pub const Parser = struct {
 
                 const expr = try self.alloc(Expression);
                 self.expressionMap.set(expr, .{
-                    .Grouping = inner,
+                    .type = .Grouping,
+                    .value = .{ .DirectPtr = inner },
                 });
                 return expr;
             },
@@ -688,19 +760,21 @@ pub const Parser = struct {
 
                 const expr = try self.alloc(Expression);
                 self.expressionMap.set(expr, .{
-                    .ExpressionList = expressions,
+                    .type = .ExpressionList,
+                    .value = .{ .List = expressions },
                 });
                 return expr;
             },
             .Identifier => {
                 const expr = try self.alloc(Expression);
                 self.expressionMap.set(expr, .{
-                    .Identifier = self.advance().index,
+                    .type = .Identifier,
+                    .value = .{ .DirectPtr = self.advance() },
                 });
                 return expr;
             },
             else => {
-                self.report("Expected a primary expression, got '{s}' instead.", .{self.advance().ptr.lexeme(self.file)});
+                self.report("Expected a primary expression, got '{s}' instead.", .{self.tokens.get(self.advance()).lexeme(self.file)});
                 return error.InvalidToken;
             },
         }
@@ -709,18 +783,20 @@ pub const Parser = struct {
     fn typeExpression(self: *Self) ExpressionResult {
         const expr = try self.alloc(Expression);
 
-        switch (self.advance().ptr.type) {
+        switch (self.tokens.items(.type)[self.advance()]) {
             .Star => {
                 const res = try self.expression();
                 self.expressionMap.set(expr, .{
-                    .Pointer = res,
+                    .type = .Pointer,
+                    .value = .{ .DirectPtr = res },
                 });
             },
             .LBracket => {
                 _ = try self.consume(.RBracket, error.MissingBracket, "Expected enclosing bracket in slice type.");
                 const res = try self.expression();
                 self.expressionMap.set(expr, .{
-                    .Slice = res,
+                    .type = .Slice,
+                    .value = .{ .DirectPtr = res },
                 });
             },
             .Fn => {
@@ -759,27 +835,29 @@ pub const Parser = struct {
                 self.extra.append(self.allocator(), returns.end) catch return error.AllocatorFailure;
 
                 self.expressionMap.set(expr, .{
-                    .Function = start,
+                    .type = .Function,
+                    .value = .{ .DirectPtr = start },
                 });
             },
             .Mut => {
                 const res = try self.expression();
 
                 self.expressionMap.set(expr, .{
-                    .Mutable = res,
+                    .type = .Mutable,
+                    .value = .{ .DirectPtr = res },
                 });
             },
             .Layout => {
                 _ = try self.consume(.LBrace, error.MissingBrace, "Expected layout body.");
 
-                var variablesTmp = std.ArrayListUnmanaged(u32).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
-                var functionsTmp = std.ArrayListUnmanaged(u32).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+                var variablesTmp = std.ArrayList(u32).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+                var functionsTmp = std.ArrayList(u32).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
 
                 while (!self.check(.RBrace)) {
-                    switch (self.peek().ptr.type) {
+                    switch (self.tokens.items(.type)[self.peek()]) {
                         .Pub => {
                             _ = self.advance();
-                            switch (self.peek().ptr.type) {
+                            switch (self.tokens.items(.type)[self.peek()]) {
                                 .Fn => {
                                     _ = self.advance();
                                     functionsTmp.append(self.allocator(), try self.function(true)) catch return error.AllocatorFailure;
@@ -823,16 +901,18 @@ pub const Parser = struct {
                 self.extra.append(self.allocator(), functions.end) catch return error.AllocatorFailure;
 
                 self.expressionMap.set(expr, .{
-                    .LayoutDefinition = start,
+                    .type = .LayoutDefinition,
+                    .value = .{ .DirectPtr = start },
                 });
             },
             .Identifier => {
                 const start: u32 = @intCast(self.extra.items.len);
                 self.extra.append(self.allocator(), @intFromBool(true)) catch return error.AllocatorFailure;
-                self.extra.append(self.allocator(), self.previous().index) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), self.previous()) catch return error.AllocatorFailure;
 
                 self.expressionMap.set(expr, .{
-                    .Value = start,
+                    .type = .Value,
+                    .value = .{ .DirectPtr = start },
                 });
             },
 
@@ -854,7 +934,7 @@ pub const Parser = struct {
     }
 
     fn commonBinary(self: *Self, expr: u32, comptime next: anytype) ExpressionResult {
-        const operator = self.previous().ptr.type;
+        const operator = self.tokens.items(.type)[self.previous()];
         const rhs = try next(self);
         const newExpr = try self.alloc(Expression);
 
@@ -864,7 +944,8 @@ pub const Parser = struct {
         self.extra.append(self.allocator(), rhs) catch return error.AllocatorFailure;
 
         self.expressionMap.set(newExpr, .{
-            .Binary = binaryStart,
+            .type = .Binary,
+            .value = .{ .DirectPtr = binaryStart },
         });
 
         return newExpr;
@@ -872,11 +953,11 @@ pub const Parser = struct {
 
     fn synchronize(self: *Self) void {
         while (!self.isAtEnd()) {
-            if (self.previous().ptr.type == .Semicolon) {
+            if (self.tokens.items(.type)[self.previous()] == .Semicolon) {
                 return;
             }
 
-            switch (self.peek().ptr.type) {
+            switch (self.tokens.items(.type)[self.peek()]) {
                 .Fn, .Let, .Pub, .While, .If, .Asm, .Continue, .Return, .Include, .Namespace, .Defer, .Extern, .Discard, .Break => {
                     return;
                 },
@@ -905,7 +986,7 @@ pub const Parser = struct {
         } else if (comptime T == Statement) {
             return @intCast(self.statementMap.addOne(self.allocator()) catch return error.AllocatorFailure);
         } else if (comptime T == VariableSignature) {
-            return @intCast(self.signaturePool.addOne(self.allocator()) catch return error.AllocatorFailure);
+            return @intCast(try self.signaturePool.addOne(self.allocator()));
         } else {
             @compileError("Unsupported type.");
         }
@@ -921,7 +1002,8 @@ pub const Parser = struct {
 
             typename = try self.alloc(Expression);
             self.expressionMap.set(typename, .{
-                .Value = start,
+                .type = .Value,
+                .value = .{ .DirectPtr = start },
             });
         } else {
             _ = try self.consume(.Colon, error.MissingColon, "Expected a separator colon ':' after identifier.");
@@ -931,54 +1013,46 @@ pub const Parser = struct {
         const signature = try self.alloc(VariableSignature);
         self.signaturePool.set(signature, .{
             .public = public,
-            .name = name.index,
+            .name = name,
             .type = typename,
         });
 
         return signature;
     }
 
-    fn consume(self: *Self, tokenType: TokenType, err: common.CompilerError, message: []const u8) common.CompilerError!TokenRef {
+    fn consume(self: *Self, tokenType: TokenType, err: common.CompilerError, message: []const u8) common.CompilerError!TokenPtr {
         if (self.check(tokenType)) return self.advance();
 
-        self.report("{s}\n\tExpected {s}, Received {s}", .{ message, @tagName(tokenType), @tagName(self.peek().ptr.type) });
+        self.report("{s}\n\tExpected {s}, Received {s}", .{ message, @tagName(tokenType), @tagName(self.tokens.items(.type)[self.peek()]) });
         return err;
     }
 
-    fn previous(self: *Self) TokenRef {
-        if (self.current == 0) return .{
-            .ptr = &lexer.Token.eof,
-            .index = 0,
-        };
-        return .{
-            .ptr = &self.tokens[self.current - 1],
-            .index = self.current - 1,
-        };
+    fn previous(self: *Self) TokenPtr {
+        if (self.current == 0) unreachable;
+        return self.current - 1;
     }
 
-    fn peek(self: *Self) TokenRef {
-        return .{
-            .ptr = &self.tokens[self.current],
-            .index = self.current,
-        };
+    fn peek(self: *Self) TokenPtr {
+        return self.current;
     }
 
     fn isAtEnd(self: *Self) bool {
-        return self.peek().ptr.type == .EOF;
+        if (self.current >= self.tokens.len) return true;
+        return self.tokens.items(.type)[self.peek()] == .EOF;
     }
 
-    fn advance(self: *Self) TokenRef {
+    fn advance(self: *Self) TokenPtr {
         if (!self.isAtEnd()) self.current += 1;
         return self.previous();
     }
 
     fn check(self: *Self, tokenType: TokenType) bool {
         if (self.isAtEnd()) return false;
-        return self.peek().ptr.type == tokenType;
+        return self.tokens.items(.type)[self.peek()] == tokenType;
     }
 
     fn match(self: *Self, comptime args: []const TokenType) bool {
-        const t = self.peek().ptr.type;
+        const t = self.tokens.items(.type)[self.peek()];
         inline for (args) |arg| {
             if (t == arg) {
                 _ = self.advance();
@@ -990,10 +1064,14 @@ pub const Parser = struct {
 
     fn report(self: *Self, comptime fmt: []const u8, args: anytype) void {
         common.log.err(fmt, args);
-        const token = self.previous().ptr;
+        const token = self.tokens.get(self.previous());
         const position = token.position(self.file);
         common.log.err("\t{s} {d}:{d}", .{ common.CompilerContext.filenameMap[self.file], position.line, position.column});
     }
+};
+
+pub const StreamingParser = struct {
+    inner: Parser,
 };
 
 //

@@ -20,7 +20,7 @@ pub fn build(b: *std.Build) void {
         .linkage = .static
     });
     exe.linkLibC();
-    b.exe_dir = "build/bin/" ++ (if (builtin.mode == .Debug) "debug" else "release");
+    b.exe_dir = "build/";
     b.installArtifact(exe);
 
     const tests = b.addTest(.{

@@ -1,10 +1,11 @@
 const std = @import("std");
 const common = @import("../core/common.zig");
 const platform = @import("../core/platform.zig");
+const arraylist = @import("../util/arraylist.zig");
 
-pub const TokenList = std.ArrayListUnmanaged(Token);
+pub const TokenList = arraylist.MultiArrayList(Token);
 
-pub const TokenType = enum {
+pub const TokenType = enum(u8) {
     LParen, RParen,
     LBrace, RBrace,
     LBracket, RBracket,
@@ -127,15 +128,15 @@ pub const Scanner = struct {
         const len: u32 = @intCast(src.len);
 
         var arena = std.heap.ArenaAllocator.init(base);
-        var tokens = TokenList.initCapacity(arena.allocator(), len + 2) catch return error.AllocatorFailure;
+        var tokens = try TokenList.init(arena.allocator(), len + 2);
 
         tokens.appendAssumeCapacity(.{
             .type = .Semicolon,
             .start = file,
             .end = file,
         });
-
-        return .{
+        
+        var self = Self{
             .start = 0,
             .current = 0,
             .end = len,
@@ -144,12 +145,13 @@ pub const Scanner = struct {
             .arena = arena,
             .tokens = tokens,
         };
+
+        self.skipWhitespace();
+        return self;
     }
 
     pub fn scanAll(self: *Self) common.CompilerError!TokenList {
-        self.skipWhitespace();
         while (!self.isAtEnd()) {
-            self.start = self.current;
             try self.scanToken();
             self.skipWhitespace();
         }
@@ -169,11 +171,27 @@ pub const Scanner = struct {
         return self.tokens;
     }
 
+    pub fn scan(self: *Self) common.CompilerError!Token {
+        if (self.isAtEnd()) {
+            return .{
+                .type = .EOF,
+                .start = self.end,
+                .end = self.end,
+            };
+        }
+        else {
+            try self.scanToken();
+            return self.tokens[self.tokens.len - 1];
+        }
+    }
+
     //
     // Private Implementation
     //
 
     fn scanToken(self: *Self) common.CompilerError!void {
+        self.start = self.current;
+
         return switch (self.advance()) {
             '(' => self.addToken(.LParen),
             ')' => self.addToken(.RParen),
@@ -201,7 +219,7 @@ pub const Scanner = struct {
             '/' => 
                 if (self.match('/')) {
                     const index =
-                        if (std.mem.findScalarPos(u8, self.source, self.current, '\n'))
+                        if (std.mem.indexOfScalarPos(u8, self.source, self.current, '\n'))
                             |idx| idx
                         else
                             self.end;
@@ -247,7 +265,7 @@ pub const Scanner = struct {
             '&' => self.addToken(.Ampersand),
             '"' => {
                 const index =
-                    if (std.mem.findScalarPos(u8, self.source, self.current, '"'))
+                    if (std.mem.indexOfScalarPos(u8, self.source, self.current, '"'))
                         |idx| idx
                     else
                         self.end;
@@ -287,9 +305,17 @@ pub const Scanner = struct {
                     return self.addToken(.Integer);
                 }
                 else if (std.ascii.isAlphabetic(ch) or ch == '_'){
-                    while (std.ascii.isAlphanumeric(self.peek()) or self.check('_')) {
-                        _ = self.advance();
-                    }
+                    const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+                    const num = comptime "0123456789";
+                    const alphanum = alpha ++ num;
+
+                    const index =
+                        if (std.mem.indexOfNonePos(u8, self.source, self.current, alphanum))
+                            |idx| idx 
+                        else
+                            self.end;
+
+                    self.current = @intCast(index);
 
                     const str = self.source[self.start..self.current];
                     return self.addToken(getType(str));
@@ -311,14 +337,20 @@ pub const Scanner = struct {
     }
 
     fn skipWhitespace(self: *Self) void {
-        while (self.current < self.end) {
-            switch (self.source[self.current]) {
-                ' ', '\t', '\r', '\n' => {
-                    self.current += 1;
-                },
-                else => return,
-            }
-        }
+        const index = if(std.mem.indexOfNonePos(u8, self.source, self.current, " \n\t\r")) |idx| idx
+            else
+                self.end;
+
+        self.current = @intCast(index);
+
+//        while (self.current < self.end) {
+//            switch (self.source[self.current]) {
+//                ' ', '\t', '\r', '\n' => {
+//                    self.current += 1;
+//                },
+//                else => return,
+//            }
+//        }
     }
 
     fn check(self: *Self, expected: u8) bool {
@@ -381,6 +413,22 @@ pub const Scanner = struct {
         common.log.err("[LEXER ERROR] ", .{});
         common.log.err(fmt, args);
         common.log.err("\t{s} {d}:{d}\n", .{common.CompilerContext.filenameMap[self.file], pos.line, pos.column});
+    }
+};
+
+pub const StreamingScanner = struct {
+    const Self = @This();
+
+    inner: Scanner,
+
+    pub fn init(base: std.mem.Allocator, file: u32) common.CompilerError!Self {
+        return .{
+            .inner = Scanner.init(base, file),
+        };
+    }
+
+    pub fn requestToken(self: *Self) common.CompilerError!Token {
+        return self.inner.scan();
     }
 };
 

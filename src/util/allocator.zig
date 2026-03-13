@@ -8,10 +8,12 @@ const posix = std.posix;
 
 const Allocator = std.mem.Allocator;
 
+/// Attempts to utilize a huge page allocator on posix
+/// compliant platforms to minimize page faults. Fallbacks
+/// to standard C allocator.
 pub const performanceAllocator =
-    if (platform.isPosix) HugePageAllocator.allocator()
+    if (!platform.isPosix) HugePageAllocator.allocator()
     else std.heap.c_allocator;
-
 
 var HugePageAllocator =
     if (platform.isPosix) struct {

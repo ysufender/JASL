@@ -15,7 +15,7 @@ pub const CompilerSettings = struct {
     const Self = @This();
 
     pub fn print(self: *const Self) void {
-        common.log.info(
+        log.info(
             "Compilation settings\n\tInput File: {s}\n\tWorking Dir: {s}\n",
             .{self.inputFile, self.workingDir}
         );
@@ -27,13 +27,11 @@ pub const CompilerContext = struct {
     pub var fileMap: [512][]const u8 = undefined;
     var fileCount: u32 = 0;
 
-    var io: std.Io = undefined;
     var arena: std.heap.ArenaAllocator = undefined;
     var allocator: std.mem.Allocator = undefined;
 
-    pub fn init(baseAllocator: std.mem.Allocator, baseIo: std.Io) !void {
+    pub fn init(baseAllocator: std.mem.Allocator) !void {
         arena = std.heap.ArenaAllocator.init(baseAllocator);
-        io = baseIo;
 
         allocator = arena.allocator();
 
@@ -42,20 +40,29 @@ pub const CompilerContext = struct {
     }
 
     pub fn openRead(file: []const u8) CompilerError!u32 {
-        const path = std.fs.realpathAlloc(allocator, file) catch return error.IOError;
+        const path = std.fs.realpathAlloc(allocator, file) catch {
+            log.err("Couldn't find the file with path {s}", .{file});
+            return error.IOError;
+        };
 
         filenameMap[fileCount] = path;
 
         var sourceFile = std.fs.openFileAbsolute(path, .{.mode = .read_only}) catch {
-            common.log.err("Couldn't open source file '{s}'.", .{file});
+            log.err("Couldn't open source file '{s}'.", .{file});
             return error.IOError;
         };
         defer sourceFile.close();
 
-        var fileReader = sourceFile.reader(io, &.{});
-        const sourceSize = fileReader.getSize() catch return error.IOError;
+        var fileReader = sourceFile.reader(&.{});
+        const sourceSize = fileReader.getSize() catch {
+            log.err("Couldn't get the size of file {s}", .{path});
+            return error.IOError;
+        };
 
-        fileMap[fileCount] = fileReader.interface.readAlloc(allocator, sourceSize) catch return error.IOError;
+        fileMap[fileCount] = fileReader.interface.readAlloc(allocator, sourceSize) catch |err| {
+            log.err("Couldn't read file {s}\n\tInfo: {s}", .{path, @errorName(err)});
+            return error.IOError;
+        };
 
         fileCount += 1;
         return @intCast(fileCount - 1);
