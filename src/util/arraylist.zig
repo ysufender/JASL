@@ -36,6 +36,17 @@ pub fn MultiArrayList(comptime T: type) type {
     return struct {
         const Self = @This();
 
+        const Iterator = struct {
+            list: *const Self,
+            index: u32,
+
+            pub fn next(self: *Iterator) ?T {
+                if (self.index >= self.list.len) return null;
+                self.index += 1;
+                return self.list.get(self.index - 1);
+            }
+        };
+
         inner: InnerType,
         len: u32,
 
@@ -130,6 +141,13 @@ pub fn MultiArrayList(comptime T: type) type {
             inline for (info.fields) |field| {
                 @field(self.inner, field.name)[index] = @field(value, field.name);
             }
+        }
+
+        pub fn iterator(self: *const Self) Iterator {
+            return .{
+                .list = self,
+                .index = 0,
+            };
         }
     };
 }

@@ -305,7 +305,7 @@ pub const Scanner = struct {
                     return self.addToken(.Integer);
                 }
                 else if (std.ascii.isAlphabetic(ch) or ch == '_'){
-                    const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+                    const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
                     const num = comptime "0123456789";
                     const alphanum = alpha ++ num;
 

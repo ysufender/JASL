@@ -1,10 +1,11 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const common = @import("core/common.zig");
-const lexer = @import("lexer/lexer.zig");
-const parser = @import("parser/parser.zig");
 const perfAllc = @import("util/allocator.zig");
-const astPrinter = @import("parser/printer.zig");
+
+const Lexer = @import("lexer/lexer.zig").Scanner;
+const Parser = @import("parser/parser.zig").Parser;
+const Printer = @import("parser/printer.zig").PrettyPrinter;
 
 pub fn main() !void {
     const allocator = perfAllc.performanceAllocator;
@@ -23,25 +24,16 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     // Open Source File
     const file = try common.CompilerContext.openRead(common.CompilerSettings.settings.inputFile);
 
-    var scanner = try lexer.Scanner.init(allocator, file);
-    const tokens = try scanner.scanAll();
+    var lexer = try Lexer.init(allocator, file);
+    const tokens = try lexer.scanAll();
 
-    var prs = try parser.Parser.init(allocator, tokens);
-    try prs.parse();
+    var parser = try Parser.init(allocator, tokens);
+    try parser.parse();
 
-    std.log.info("Lexed {d} tokens.", .{tokens.len});
-    std.log.info("Parsed {d} statements.", .{prs.statementMap.len});
-    std.log.info("Parsed {d} expressions.", .{prs.expressionMap.len});
-    std.log.info("Parsed {d} signatures.", .{prs.signaturePool.len});
-    std.log.info("Needed {d} extras.", .{prs.extra.items.len});
-    std.log.info("Needed {d} scratch.", .{prs.scratch.capacity});
-}
-
-//
-// Tests
-//
-
-test "All Tests" {
-    _ = lexer.Tests;
-    _ = parser.Tests;
+    var printer = Printer.init(&parser);
+    for (parser.statementMask.items) |stmt| {
+        std.debug.print("\n", .{});
+        printer.printStatement(stmt) catch return error.InternalError;
+        std.debug.print("\n", .{});
+    }
 }

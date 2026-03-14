@@ -5,6 +5,7 @@ const platform = @import("../core/platform.zig");
 
 const mem = std.mem;
 const posix = std.posix;
+const windows = std.os.windows;
 
 const Allocator = std.mem.Allocator;
 

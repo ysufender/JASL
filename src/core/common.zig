@@ -40,11 +40,7 @@ pub const CompilerContext = struct {
     }
 
     pub fn openRead(file: []const u8) CompilerError!u32 {
-        const path = std.fs.realpathAlloc(allocator, file) catch {
-            log.err("Couldn't find the file with path {s}", .{file});
-            return error.IOError;
-        };
-
+        const path = try realpath(file);
         filenameMap[fileCount] = path;
 
         var sourceFile = std.fs.openFileAbsolute(path, .{.mode = .read_only}) catch {
@@ -66,6 +62,20 @@ pub const CompilerContext = struct {
 
         fileCount += 1;
         return @intCast(fileCount - 1);
+    }
+
+    pub fn openWrite(file: []const u8) CompilerError!std.fs.File {
+        return std.fs.createFileAbsolute(file, .{ .truncate = true }) catch {
+            log.err("Couldn't open target file {s}", .{file});
+            return error.IOError;
+        };
+    }
+
+    fn realpath(file: []const u8) CompilerError![]const u8 {
+        return std.fs.realpathAlloc(allocator, file) catch {
+            log.err("Couldn't find the file with path {s}", .{file});
+            return error.IOError;
+        };
     }
 };
 
@@ -204,6 +214,7 @@ pub const CompilerError = error {
     MissingBranch,
     MissingStatement,
     MultipleErrors,
+    EOS,
 };
 
 pub const log = struct {

@@ -6,6 +6,8 @@ pub const isPosix = switch (builtin.target.os.tag) {
     else => false,
 };
 
+pub const isWindows = builtin.target.os.tag == .windows;
+
 pub const hasSIMD = 
         builtin.target.cpu.has(.arm, .neon)
         or builtin.target.cpu.has(.aarch64, .neon)
