@@ -3,6 +3,7 @@ const common = @This();
 const std = @import("std");
 const builtin = @import("builtin");
 const lexer = @import("../lexer/lexer.zig");
+const parser = @import("../parser/parser.zig");
 
 const Lock = std.Thread.RwLock;
 
@@ -26,30 +27,66 @@ pub const CompilerSettings = struct {
 };
 
 pub const CompilerContext = struct {
-    pub var filenameMap: [512][]const u8 = undefined;
-    pub var fileMap: [512][]const u8 = undefined;
-    var fileCount: u32 = 0;
+    const Self = @This();
 
-    var arena: std.heap.ArenaAllocator = undefined;
-    var allocator: std.mem.Allocator = undefined;
+    const FileNameMap = std.ArrayList([]const u8);
+    const FileMap = std.ArrayList([]const u8);
+    const TokenMap = std.ArrayList(lexer.TokenList.Slice);
+    const ASTMap = std.ArrayList(parser.AST);
+    const ResolveMap = std.StringHashMapUnmanaged(u32);
 
-    var lock = std.Thread.RwLock{};
+    // Source Files
+    filenameMap: FileNameMap,
+    fileMap: FileMap,
+    resolved: ResolveMap,
 
-    pub fn init(baseAllocator: std.mem.Allocator) !void {
-        arena = std.heap.ArenaAllocator.init(baseAllocator);
+    // Tokens
+    tokenMap: TokenMap,
 
-        allocator = arena.allocator();
+    // ASTs
+    astMap: ASTMap,
+
+    arena: std.heap.ArenaAllocator,
+    lock: std.Thread.RwLock,
+
+    pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Self {
+        var arena = std.heap.ArenaAllocator.init(baseAllocator);
+        const allocator = arena.allocator();
 
         CompilerSettings.settings = try CLI.parseCLI(allocator);
         common.CompilerSettings.settings.print();
+
+        var resolved = ResolveMap.empty;
+        resolved.ensureTotalCapacity(allocator, 512) catch return error.AllocatorFailure;
+
+        return .{
+            .filenameMap = FileNameMap.initCapacity(allocator, 512) catch return error.AllocatorFailure,
+            .fileMap = FileMap.initCapacity(allocator, 512) catch return error.AllocatorFailure,
+            .tokenMap = TokenMap.initCapacity(allocator, 512) catch return error.AllocatorFailure,
+            .astMap = ASTMap.initCapacity(allocator, 512) catch return error.AllocatorFailure,
+            .arena = arena,
+            .lock = .{},
+            .resolved = resolved,
+        };
     }
 
-    pub fn openRead(file: []const u8) CompilerError!u32 {
-        lock.lock();
-        defer lock.unlock();
+    pub fn openRead(self: *Self, file: []const u8) CompilerError!u32 {
+        const path = try self.realpath(file);
 
-        const path = try realpath(file);
-        filenameMap[fileCount] = path;
+        // pre-check
+        {
+            self.lock.lockShared();
+            defer self.lock.unlockShared();
+
+            if (self.resolved.get(path)) |id| {
+                return id;
+            }
+        }
+
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        self.filenameMap.append(self.arena.allocator(), path) catch return error.AllocatorFailure;
 
         var sourceFile = std.fs.openFileAbsolute(path, .{.mode = .read_only}) catch {
             log.err("Couldn't open source file '{s}'.", .{file});
@@ -63,13 +100,21 @@ pub const CompilerContext = struct {
             return error.IOError;
         };
 
-        fileMap[fileCount] = fileReader.interface.readAlloc(allocator, sourceSize) catch |err| {
-            log.err("Couldn't read file {s}\n\tInfo: {s}", .{path, @errorName(err)});
-            return error.IOError;
-        };
+        self.fileMap.append(
+            self.arena.allocator(),
+            fileReader.interface.readAlloc(self.arena.allocator(), sourceSize) catch |err| {
+                log.err("Couldn't read file {s}\n\tInfo: {s}", .{path, @errorName(err)});
+                return error.IOError;
+            }
+        ) catch return error.AllocatorFailure;
 
-        defer fileCount += 1;
-        return fileCount;
+        self.resolved.putNoClobber(
+            self.arena.allocator(),
+            path,
+            @intCast(self.fileMap.items.len - 1)
+        ) catch return error.AllocatorFailure;
+
+        return @intCast(self.fileMap.items.len - 1);
     }
 
     pub fn openWrite(file: []const u8) CompilerError!std.fs.File {
@@ -79,22 +124,57 @@ pub const CompilerContext = struct {
         };
     }
 
-    pub fn getFile(file: u32) []const u8 {
-        lock.lockShared();
-        defer lock.unlockShared();
+    pub fn getFile(self: *Self, file: u32) []const u8 {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
 
-        return fileMap[file];
+        return self.fileMap.items[file];
     }
 
-    pub fn getFileName(file: u32) []const u8 {
-        lock.lockShared();
-        defer lock.unlockShared();
+    pub fn getFileName(self: *Self, file: u32) []const u8 {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
 
-        return filenameMap[file];
+        return self.filenameMap.items[file];
     }
 
-    fn realpath(file: []const u8) CompilerError![]const u8 {
-        return std.fs.realpathAlloc(allocator, file) catch {
+    pub fn registerTokens(self: *Self, tokens: lexer.TokenList.Slice) CompilerError!u32 {
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        self.tokenMap.append(self.arena.allocator(), tokens) catch return error.AllocatorFailure;
+
+        return @intCast(self.tokenMap.items.len - 1);
+    }
+
+    pub fn getTokens(self: *Self, tokens: u32) *const lexer.TokenList.Slice {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+
+        return &self.tokenMap.items[tokens];
+    }
+
+    pub fn registerAST(self: *Self, ast: parser.AST) CompilerError!u32 {
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        self.astMap.append(self.arena.allocator(), ast) catch return error.AllocatorFailure;
+
+        return @intCast(self.astMap.items.len - 1);
+    }
+
+    pub fn getAST(self: *Self, ast: u32) *const parser.AST {
+        self.lock.lockShared();
+        defer self.lock.unlockShared();
+
+        return &self.astMap.items[ast];
+    }
+
+    fn realpath(self: *Self, file: []const u8) CompilerError![]const u8 {
+        self.lock.lock();
+        defer self.lock.unlock();
+
+        return std.fs.realpathAlloc(self.arena.allocator(), file) catch {
             log.err("Couldn't find the file with path {s}", .{file});
             return error.IOError;
         };

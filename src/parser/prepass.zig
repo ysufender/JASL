@@ -1,14 +1,13 @@
 const std = @import("std");
 const parser = @import("parser.zig");
+const common = @import("../core/common.zig");
+
+pub const Table = struct {
+    ast: u32,
+};
 
 pub const Prepass = struct {
     const Self = @This();
 
-    table: parser.Parser.Table,
-
-    pub fn init(table: parser.Parser.Table) Self {
-        return .{
-            .table = table,
-        };
-    }
+    lock: std.Thread.RwLock,
 };

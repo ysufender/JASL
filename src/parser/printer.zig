@@ -7,10 +7,10 @@ const parser = @import("parser.zig");
 pub const PrettyPrinter = struct {
     const Self = @This();
 
-    table: *const parser.Parser.Table,
+    table: *const parser.AST,
     indent_level: u32 = 0,
 
-    pub fn init(table: *const parser.Parser.Table) Self {
+    pub fn init(table: *const parser.AST) Self {
         return .{
             .table = table,
         };

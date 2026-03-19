@@ -11,20 +11,28 @@ pub fn main() !void {
     const allocator = perfAllc.performanceAllocator;
 
     innerMain(allocator) catch |err| {
-        common.log.err("Compiler exited with code {d} <{s}>", .{@intFromError(err), @errorName(err)});
-        return;
+        return common.log.err("Compiler exited with code {d} <{s}>", .{@intFromError(err), @errorName(err)});
     };
     common.log.info("Compiler exited succesfully.", .{});
 }
 
 fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     // Init Context
-    try common.CompilerContext.init(allocator);
+    var context = try common.CompilerContext.init(allocator);
 
-    var lexer = try Lexer.init(allocator, common.CompilerSettings.settings.inputFile);
+    var lexer = try Lexer.init(
+        allocator,
+        &context,
+        common.CompilerSettings.settings.inputFile,
+    );
     const tokens = try lexer.scanAll();
 
-    var parser = try Parser.init(allocator, tokens);
+    var parser = try Parser.init(
+        allocator,
+        &context,
+        context.getTokens(tokens),
+    );
+
     const ast = try parser.parse();
     _ = ast;
 }

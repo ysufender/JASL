@@ -1,6 +1,5 @@
 const std = @import("std");
 const common = @import("../core/common.zig");
-const platform = @import("../core/platform.zig");
 const arraylist = @import("../util/arraylist.zig");
 
 pub const TokenList = arraylist.MultiArrayList(Token);
@@ -57,12 +56,12 @@ pub const Token = struct {
         return std.fmt.bufPrint(buffer, "<{s}: {s}>", .{@tagName(self.type), lex}) catch unreachable;
     }
 
-    pub fn lexeme(self: *const Self, file: u32) []const u8 {
-        return common.CompilerContext.getFile(file)[self.start..self.end];
+    pub fn lexeme(self: *const Self, context: *common.CompilerContext, file: u32) []const u8 {
+        return context.getFile(file)[self.start..self.end];
     }
 
-    pub fn position(self: *const Self, file: u32) Position {
-        const source = common.CompilerContext.getFile(file)[0..self.start];
+    pub fn position(self: *const Self, context: *common.CompilerContext, file: u32) Position {
+        const source = context.getFile(file)[0..self.start];
         var line: u32 = 1;
         var col: u32 = 0;
 
@@ -118,15 +117,16 @@ pub const Scanner = struct {
     end: u32,
 
     arena: std.heap.ArenaAllocator,
+    context: *common.CompilerContext,
 
     //
     // Public API
     //
 
-    pub fn init(base: std.mem.Allocator, file: []const u8) common.CompilerError!Self {
-        const fileHandle = try common.CompilerContext.openRead(file);
+    pub fn init(base: std.mem.Allocator, context: *common.CompilerContext, file: []const u8) common.CompilerError!Self {
+        const fileHandle = try context.openRead(file);
 
-        const src = common.CompilerContext.getFile(fileHandle);
+        const src = context.getFile(fileHandle);
         const len: u32 = @intCast(src.len);
 
         var arena = std.heap.ArenaAllocator.init(base);
@@ -146,13 +146,14 @@ pub const Scanner = struct {
             .source = src,
             .arena = arena,
             .tokens = tokens,
+            .context = context,
         };
 
         self.skipWhitespace();
         return self;
     }
 
-    pub fn scanAll(self: *Self) common.CompilerError!TokenList.Slice {
+    pub fn scanAll(self: *Self) common.CompilerError!u32 {
         while (!self.isAtEnd()) {
             try self.scanToken();
             self.skipWhitespace();
@@ -170,7 +171,7 @@ pub const Scanner = struct {
         self.start = 0;
         self.current = 0;
 
-        return self.tokens.toOwnedSlice();
+        return self.context.registerTokens(self.tokens.toOwnedSlice());
     }
 
     pub fn scan(self: *Self) common.CompilerError!Token {
@@ -410,11 +411,11 @@ pub const Scanner = struct {
             .start = self.start,
             .end = self.start + 1,
         };
-        const pos = errToken.position(self.file);
+        const pos = errToken.position(self.context, self.file);
 
         common.log.err("[LEXER ERROR] ", .{});
         common.log.err(fmt, args);
-        common.log.err("\t{s} {d}:{d}\n", .{common.CompilerContext.getFileName(self.file), pos.line, pos.column});
+        common.log.err("\t{s} {d}:{d}\n", .{self.context.getFileName(self.file), pos.line, pos.column});
     }
 };
 

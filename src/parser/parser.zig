@@ -83,20 +83,20 @@ pub const VariableSignature = struct {
     type: ExpressionPtr,
 };
 
+pub const AST = struct {
+    arena: std.heap.ArenaAllocator,
+    tokens: *const lexer.TokenList.Slice,
+    expressions: ExpressionMap.Slice,
+    statements: StatementMap.Slice,
+    signatures: VariableSignatureMap.Slice,
+    statementMask: std.ArrayList(StatementPtr),
+    extra: std.ArrayList(u32),
+};
+
 pub const Parser = struct {
     const Self = @This();
 
-    pub const Table = struct {
-        arena: std.heap.ArenaAllocator,
-        tokens: lexer.TokenList.Slice,
-        expressions: ExpressionMap.Slice,
-        statements: StatementMap.Slice,
-        signatures: VariableSignatureMap.Slice,
-        statementMask: std.ArrayList(StatementPtr),
-        extra: std.ArrayList(u32),
-    };
-
-    tokens: lexer.TokenList.Slice,
+    tokens: *const lexer.TokenList.Slice,
     current: u32,
 
     arena: std.heap.ArenaAllocator,
@@ -111,8 +111,9 @@ pub const Parser = struct {
     scratch: std.ArrayList(u32),
 
     file: u32,
+    context: *common.CompilerContext,
 
-    pub fn init(base: Allocator, tokens: lexer.TokenList.Slice) common.CompilerError!Parser {
+    pub fn init(base: Allocator, context: *common.CompilerContext, tokens: *const lexer.TokenList.Slice) common.CompilerError!Parser {
         var arena = std.heap.ArenaAllocator.init(base);
         return .{
             .signaturePool = try VariableSignatureMap.init(arena.allocator(), tokens.len / 2),
@@ -120,6 +121,7 @@ pub const Parser = struct {
             .statementMap = try StatementMap.init(arena.allocator(), tokens.len / 4),
             .statementMask = std.ArrayList(u32).initCapacity(arena.allocator(), tokens.len / 4) catch return error.AllocatorFailure,
             .file = tokens.items(.start)[0],
+            .context = context,
             .tokens = tokens,
             .current = 1,
             .arena = arena,
@@ -130,7 +132,7 @@ pub const Parser = struct {
 
     /// Returns a final table containing all info about the parsing.
     /// Parser is undefined and should be reinitialized after the call.
-    pub fn parse(self: *Self) common.CompilerError!Table {
+    pub fn parse(self: *Self) common.CompilerError!u32 {
         var errCount: u32 = 0;
         var lastErr: common.CompilerError = undefined;
 
@@ -157,7 +159,7 @@ pub const Parser = struct {
             return lastErr;
         }
 
-        const result = Table{
+        const result = AST{
             .arena = self.arena,
             .tokens = self.tokens,
             .expressions = self.expressionMap.toOwnedSlice(),
@@ -169,7 +171,7 @@ pub const Parser = struct {
 
         self.* = undefined;
 
-        return result;
+        return self.context.registerAST(result);
     }
 
     //
@@ -756,7 +758,7 @@ pub const Parser = struct {
                 return expr;
             },
             else => {
-                self.report("Expected a primary expression, got '{s}' instead.", .{self.tokens.get(self.advance()).lexeme(self.file)});
+                self.report("Expected a primary expression, got '{s}' instead.", .{self.tokens.get(self.advance()).lexeme(self.context, self.file)});
                 return error.InvalidToken;
             },
         }
@@ -1046,8 +1048,8 @@ pub const Parser = struct {
     fn report(self: *Self, comptime fmt: []const u8, args: anytype) void {
         common.log.err(fmt, args);
         const token = self.tokens.get(self.previous());
-        const position = token.position(self.file);
-        common.log.err("\t{s} {d}:{d}", .{ common.CompilerContext.getFileName(self.file), position.line, position.column});
+        const position = token.position(self.context, self.file);
+        common.log.err("\t{s} {d}:{d}", .{ self.context.getFileName(self.file), position.line, position.column});
     }
 };
 
