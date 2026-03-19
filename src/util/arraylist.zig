@@ -36,14 +36,35 @@ pub fn MultiArrayList(comptime T: type) type {
     return struct {
         const Self = @This();
 
-        const Iterator = struct {
-            list: *const Self,
-            index: u32,
+        /// Owned readonly slice
+        pub const Slice = struct {
+            inner: InnerType,
+            len: u32,
 
-            pub fn next(self: *Iterator) ?T {
-                if (self.index >= self.list.len) return null;
-                self.index += 1;
-                return self.list.get(self.index - 1);
+            pub fn items(slice: *const Slice, comptime field: std.meta.FieldEnum(InnerType)) []const @typeInfo(std.meta.fieldInfo(InnerType, field).type).pointer.child {
+                return @field(slice.inner, std.meta.fieldInfo(InnerType, field).name);
+            }
+
+            pub fn get(slice: *const Slice, index: u32) T {
+                var ret: T = undefined;
+
+                inline for (info.fields) |field| {
+                    @field(ret, field.name) = @field(slice.inner, field.name)[index];
+                }
+
+                return ret;
+            }
+
+            /// Frees all owned memory, slice shouldn't be used after free.
+            pub fn free(slice: *Slice, allocator: Allocator) void {
+                inline for (info.fields) |field| {
+                    allocator.free(@field(slice.inner, field.name));
+                }
+
+                slice = .{
+                    .len = 0,
+                    .inner = undefined,
+                };
             }
         };
 
@@ -98,7 +119,7 @@ pub fn MultiArrayList(comptime T: type) type {
             const lastField = info.fields[info.fields.len - 1].name;
 
             if (self.len >= @field(self.inner, lastField).len) {
-                try self.ensureTotalCapacity(allocator, @field(self.inner, lastField).len * 2);
+                try self.ensureTotalCapacity(allocator, @field(self.inner, lastField).len);
             }
 
             self.len += 1;
@@ -109,7 +130,7 @@ pub fn MultiArrayList(comptime T: type) type {
             const lastField = info.fields[info.fields.len - 1].name;
 
             if (@field(self.inner, lastField).len <= self.len) {
-                try self.ensureTotalCapacity(allocator, @field(self.inner, lastField).len * 2);
+                try self.ensureTotalCapacity(allocator, @field(self.inner, lastField).len);
             }
 
             self.appendAssumeCapacity(element);
@@ -143,10 +164,19 @@ pub fn MultiArrayList(comptime T: type) type {
             }
         }
 
-        pub fn iterator(self: *const Self) Iterator {
+        /// Clears all internal data and releases the ownership
+        /// self is uninitialized after this call. Self.init must be called
+        /// before use.
+        pub fn toOwnedSlice(self: *Self) Slice {
+            const len = self.len;
+            const inner = self.inner;
+
+            self.len = 0;
+            self.inner = undefined;
+
             return .{
-                .list = self,
-                .index = 0,
+                .len = len,
+                .inner = inner,
             };
         }
     };

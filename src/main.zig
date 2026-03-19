@@ -21,19 +21,10 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     // Init Context
     try common.CompilerContext.init(allocator);
 
-    // Open Source File
-    const file = try common.CompilerContext.openRead(common.CompilerSettings.settings.inputFile);
-
-    var lexer = try Lexer.init(allocator, file);
+    var lexer = try Lexer.init(allocator, common.CompilerSettings.settings.inputFile);
     const tokens = try lexer.scanAll();
 
     var parser = try Parser.init(allocator, tokens);
-    try parser.parse();
-
-    var printer = Printer.init(&parser);
-    for (parser.statementMask.items) |stmt| {
-        std.debug.print("\n", .{});
-        printer.printStatement(stmt) catch return error.InternalError;
-        std.debug.print("\n", .{});
-    }
+    const ast = try parser.parse();
+    _ = ast;
 }

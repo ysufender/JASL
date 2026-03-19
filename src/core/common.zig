@@ -2,6 +2,9 @@ const common = @This();
 
 const std = @import("std");
 const builtin = @import("builtin");
+const lexer = @import("../lexer/lexer.zig");
+
+const Lock = std.Thread.RwLock;
 
 pub const JASL_VERSION = "0.0.1";
 
@@ -30,6 +33,8 @@ pub const CompilerContext = struct {
     var arena: std.heap.ArenaAllocator = undefined;
     var allocator: std.mem.Allocator = undefined;
 
+    var lock = std.Thread.RwLock{};
+
     pub fn init(baseAllocator: std.mem.Allocator) !void {
         arena = std.heap.ArenaAllocator.init(baseAllocator);
 
@@ -40,6 +45,9 @@ pub const CompilerContext = struct {
     }
 
     pub fn openRead(file: []const u8) CompilerError!u32 {
+        lock.lock();
+        defer lock.unlock();
+
         const path = try realpath(file);
         filenameMap[fileCount] = path;
 
@@ -60,8 +68,8 @@ pub const CompilerContext = struct {
             return error.IOError;
         };
 
-        fileCount += 1;
-        return @intCast(fileCount - 1);
+        defer fileCount += 1;
+        return fileCount;
     }
 
     pub fn openWrite(file: []const u8) CompilerError!std.fs.File {
@@ -69,6 +77,20 @@ pub const CompilerContext = struct {
             log.err("Couldn't open target file {s}", .{file});
             return error.IOError;
         };
+    }
+
+    pub fn getFile(file: u32) []const u8 {
+        lock.lockShared();
+        defer lock.unlockShared();
+
+        return fileMap[file];
+    }
+
+    pub fn getFileName(file: u32) []const u8 {
+        lock.lockShared();
+        defer lock.unlockShared();
+
+        return filenameMap[file];
     }
 
     fn realpath(file: []const u8) CompilerError![]const u8 {

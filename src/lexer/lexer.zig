@@ -22,7 +22,7 @@ pub const TokenType = enum(u8) {
     If, Else, While,
     Return, Defer, Extern,
     Break, Continue,
-    Fn, Layout, Let, 
+    Fn, Struct, Let, 
     Asm,
     Pub, Mut,
     And, Or,
@@ -58,11 +58,11 @@ pub const Token = struct {
     }
 
     pub fn lexeme(self: *const Self, file: u32) []const u8 {
-        return common.CompilerContext.fileMap[file][self.start..self.end];
+        return common.CompilerContext.getFile(file)[self.start..self.end];
     }
 
     pub fn position(self: *const Self, file: u32) Position {
-        const source = common.CompilerContext.fileMap[file][0..self.start];
+        const source = common.CompilerContext.getFile(file)[0..self.start];
         var line: u32 = 1;
         var col: u32 = 0;
 
@@ -100,7 +100,7 @@ pub const Scanner = struct {
         .{ "false", .False },
         .{ "true", .True },
         .{ "nullptr", .Nullptr },
-        .{ "layout", .Layout },
+        .{ "struct", .Struct },
         .{ "pub", .Pub },
         .{ "mut", .Mut },
         .{ "asm", .Asm },
@@ -123,8 +123,10 @@ pub const Scanner = struct {
     // Public API
     //
 
-    pub fn init(base: std.mem.Allocator, file: u32) common.CompilerError!Self {
-        const src = common.CompilerContext.fileMap[file];
+    pub fn init(base: std.mem.Allocator, file: []const u8) common.CompilerError!Self {
+        const fileHandle = try common.CompilerContext.openRead(file);
+
+        const src = common.CompilerContext.getFile(fileHandle);
         const len: u32 = @intCast(src.len);
 
         var arena = std.heap.ArenaAllocator.init(base);
@@ -132,15 +134,15 @@ pub const Scanner = struct {
 
         tokens.appendAssumeCapacity(.{
             .type = .Semicolon,
-            .start = file,
-            .end = file,
+            .start = fileHandle,
+            .end = fileHandle,
         });
         
         var self = Self{
             .start = 0,
             .current = 0,
             .end = len,
-            .file = file,
+            .file = fileHandle,
             .source = src,
             .arena = arena,
             .tokens = tokens,
@@ -150,7 +152,7 @@ pub const Scanner = struct {
         return self;
     }
 
-    pub fn scanAll(self: *Self) common.CompilerError!TokenList {
+    pub fn scanAll(self: *Self) common.CompilerError!TokenList.Slice {
         while (!self.isAtEnd()) {
             try self.scanToken();
             self.skipWhitespace();
@@ -168,7 +170,7 @@ pub const Scanner = struct {
         self.start = 0;
         self.current = 0;
 
-        return self.tokens;
+        return self.tokens.toOwnedSlice();
     }
 
     pub fn scan(self: *Self) common.CompilerError!Token {
@@ -412,23 +414,7 @@ pub const Scanner = struct {
 
         common.log.err("[LEXER ERROR] ", .{});
         common.log.err(fmt, args);
-        common.log.err("\t{s} {d}:{d}\n", .{common.CompilerContext.filenameMap[self.file], pos.line, pos.column});
-    }
-};
-
-pub const StreamingScanner = struct {
-    const Self = @This();
-
-    inner: Scanner,
-
-    pub fn init(base: std.mem.Allocator, file: u32) common.CompilerError!Self {
-        return .{
-            .inner = Scanner.init(base, file),
-        };
-    }
-
-    pub fn requestToken(self: *Self) common.CompilerError!Token {
-        return self.inner.scan();
+        common.log.err("\t{s} {d}:{d}\n", .{common.CompilerContext.getFileName(self.file), pos.line, pos.column});
     }
 };
 
