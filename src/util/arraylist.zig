@@ -71,7 +71,7 @@ pub fn MultiArrayList(comptime T: type) type {
         inner: InnerType,
         len: u32,
 
-        pub fn init(allocator: Allocator, capacity: usize) CompilerError!Self {
+        pub fn init(allocator: Allocator, cap: usize) CompilerError!Self {
             var self = Self{
                 .len = 0,
                 .inner = undefined,
@@ -81,15 +81,15 @@ pub fn MultiArrayList(comptime T: type) type {
                 @field(self.inner, field.name) = &.{};
             }
 
-            try self.ensureTotalCapacity(allocator, capacity);
+            try self.ensureTotalCapacity(allocator, cap);
 
             return self;
         }
 
-        pub fn ensureTotalCapacity(self: *Self, allocator: Allocator, capacity: usize) CompilerError!void {
+        pub fn ensureTotalCapacity(self: *Self, allocator: Allocator, cap: usize) CompilerError!void {
             const lastField = info.fields[info.fields.len - 1].name;
 
-            if (@field(self.inner, lastField).len >= capacity) {
+            if (@field(self.inner, lastField).len >= cap) {
                 return;
             }
 
@@ -97,18 +97,18 @@ pub fn MultiArrayList(comptime T: type) type {
                 var new: []field.type = undefined;
 
                 if (@field(self.inner, field.name).len != 0) {
-                    if (allocator.remap(@field(self.inner, field.name), capacity)) |mem| {
+                    if (allocator.remap(@field(self.inner, field.name), cap)) |mem| {
                         new = mem;
                     }
                     else {
-                        const mem = allocator.alloc(field.type, capacity) catch return error.AllocatorFailure;
+                        const mem = allocator.alloc(field.type, cap) catch return error.AllocatorFailure;
                         @memcpy(mem, @field(self.inner, field.name));
                         allocator.free(@field(self.inner, field.name));
                         new = mem;
                     }
                 }
                 else {
-                    new = allocator.alloc(field.type, capacity) catch return error.AllocatorFailure;
+                    new = allocator.alloc(field.type, cap) catch return error.AllocatorFailure;
                 }
 
                 @field(self.inner, field.name) = new;
@@ -162,6 +162,10 @@ pub fn MultiArrayList(comptime T: type) type {
             inline for (info.fields) |field| {
                 @field(self.inner, field.name)[index] = @field(value, field.name);
             }
+        }
+
+        pub fn capacity(self: *Self) u32 {
+            return @intCast(@field(self.inner, info.fields[0].name).len);
         }
 
         /// Clears all internal data and releases the ownership

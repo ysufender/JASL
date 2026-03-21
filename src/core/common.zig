@@ -4,8 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const lexer = @import("../lexer/lexer.zig");
 const parser = @import("../parser/parser.zig");
-
-const Lock = std.Thread.RwLock;
+const types = @import("types.zig");
 
 pub const JASL_VERSION = "0.0.1";
 
@@ -26,6 +25,11 @@ pub const CompilerSettings = struct {
     }
 };
 
+/// Central database of compilation
+/// - Assumes there is a single AST and
+/// a single token list per file.
+/// - Hence file indices are also token
+/// and ast indices.
 pub const CompilerContext = struct {
     const Self = @This();
 
@@ -33,7 +37,12 @@ pub const CompilerContext = struct {
     const FileMap = std.ArrayList([]const u8);
     const TokenMap = std.ArrayList(lexer.TokenList.Slice);
     const ASTMap = std.ArrayList(parser.AST);
-    const ResolveMap = std.StringHashMapUnmanaged(u32);
+    const ResolveMap = std.StringHashMapUnmanaged(types.FilePtr);
+
+    const hardcoded = std.StaticStringMap([]const u8).initComptime(.{
+        .{ "builtin.jasl", "builtin.jasl" },
+        .{ "std.jasl", "builtin.jasl" },
+    });
 
     // Source Files
     filenameMap: FileNameMap,
@@ -70,7 +79,7 @@ pub const CompilerContext = struct {
         };
     }
 
-    pub fn openRead(self: *Self, file: []const u8) CompilerError!u32 {
+    pub fn openRead(self: *Self, file: []const u8) CompilerError!types.FilePtr {
         const path = try self.realpath(file);
 
         // pre-check
@@ -124,21 +133,21 @@ pub const CompilerContext = struct {
         };
     }
 
-    pub fn getFile(self: *Self, file: u32) []const u8 {
+    pub fn getFile(self: *Self, file: types.FilePtr) []const u8 {
         self.lock.lockShared();
         defer self.lock.unlockShared();
 
         return self.fileMap.items[file];
     }
 
-    pub fn getFileName(self: *Self, file: u32) []const u8 {
+    pub fn getFileName(self: *Self, file: types.FilePtr) []const u8 {
         self.lock.lockShared();
         defer self.lock.unlockShared();
 
         return self.filenameMap.items[file];
     }
 
-    pub fn registerTokens(self: *Self, tokens: lexer.TokenList.Slice) CompilerError!u32 {
+    pub fn registerTokens(self: *Self, tokens: lexer.TokenList.Slice) CompilerError!types.TokenPtr {
         self.lock.lock();
         defer self.lock.unlock();
 
@@ -147,14 +156,14 @@ pub const CompilerContext = struct {
         return @intCast(self.tokenMap.items.len - 1);
     }
 
-    pub fn getTokens(self: *Self, tokens: u32) *const lexer.TokenList.Slice {
+    pub fn getTokens(self: *Self, tokens: types.TokenPtr) *const lexer.TokenList.Slice {
         self.lock.lockShared();
         defer self.lock.unlockShared();
 
         return &self.tokenMap.items[tokens];
     }
 
-    pub fn registerAST(self: *Self, ast: parser.AST) CompilerError!u32 {
+    pub fn registerAST(self: *Self, ast: parser.AST) CompilerError!types.ASTPtr {
         self.lock.lock();
         defer self.lock.unlock();
 
@@ -163,14 +172,22 @@ pub const CompilerContext = struct {
         return @intCast(self.astMap.items.len - 1);
     }
 
-    pub fn getAST(self: *Self, ast: u32) *const parser.AST {
+    pub fn getAST(self: *Self, ast: types.ASTPtr) *const parser.AST {
         self.lock.lockShared();
         defer self.lock.unlockShared();
 
         return &self.astMap.items[ast];
     }
 
+    pub fn isProcessed(self: *Self, file: []const u8) bool {
+        return self.resolved.contains(file);
+    }
+
     fn realpath(self: *Self, file: []const u8) CompilerError![]const u8 {
+        if (hardcoded.get(file)) |rfn| {
+            return rfn;
+        }
+
         self.lock.lock();
         defer self.lock.unlock();
 
@@ -316,7 +333,7 @@ pub const CompilerError = error {
     MissingBranch,
     MissingStatement,
     MultipleErrors,
-    EOS,
+    ThreadingError,
 };
 
 pub const log = struct {

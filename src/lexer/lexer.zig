@@ -1,6 +1,7 @@
 const std = @import("std");
 const common = @import("../core/common.zig");
 const arraylist = @import("../util/arraylist.zig");
+const types = @import("../core/types.zig");
 
 pub const TokenList = arraylist.MultiArrayList(Token);
 
@@ -17,53 +18,53 @@ pub const TokenType = enum(u8) {
     LeftShift, RightShift,
     Arrow,
     Pipe, Ampersand,
-    Include, Namespace,
+    Import,
     If, Else, While,
     Return, Defer, Extern,
     Break, Continue,
-    Fn, Struct, Let, 
+    Fn, Struct, Let, Enum, Union,
     Asm,
     Pub, Mut,
     And, Or,
     Identifier,
-    String, Integer, Float, False, True, Nullptr,
+    String, Integer, Float, False, True, Null,
     Discard,
     EOF,
 };
 
 pub const Position = struct {
-    line: u32,
-    column: u32,
+    line: types.Offset,
+    column: types.Offset,
 };
 
 pub const Token = struct {
     type: TokenType,
-    start: u32,
-    end: u32,
+    start: types.Offset,
+    end: types.Offset,
 
     const Self = @This();
 
-    pub const eof: Self = .{
+    pub const eof = Self{
         .type = .EOF,
         .start = 0,
         .end = 0,
     };
 
-    pub fn toString(self: *const Self, allocator: std.mem.Allocator, file: u32) []const u8 {
+    pub fn toString(self: *const Self, allocator: std.mem.Allocator, file: types.FilePtr) []const u8 {
         const lex = self.lexeme(file);
         const length =  @tagName(self.type).len + lex.len + 4;
         const buffer = allocator.alloc(u8, length) catch return "";
         return std.fmt.bufPrint(buffer, "<{s}: {s}>", .{@tagName(self.type), lex}) catch unreachable;
     }
 
-    pub fn lexeme(self: *const Self, context: *common.CompilerContext, file: u32) []const u8 {
+    pub fn lexeme(self: *const Self, context: *common.CompilerContext, file: types.FilePtr) []const u8 {
         return context.getFile(file)[self.start..self.end];
     }
 
-    pub fn position(self: *const Self, context: *common.CompilerContext, file: u32) Position {
+    pub fn position(self: *const Self, context: *common.CompilerContext, file: types.FilePtr) Position {
         const source = context.getFile(file)[0..self.start];
-        var line: u32 = 1;
-        var col: u32 = 0;
+        var line: types.Offset = 1;
+        var col: types.Offset = 0;
 
         for (source) |ch| {
             if (ch == '\n') {
@@ -94,12 +95,13 @@ pub const Scanner = struct {
         .{ "defer", .Defer },
         .{ "extern", .Extern },
         .{ "let", .Let },
-        .{ "include", .Include },
-        .{ "namespace", .Namespace },
+        .{ "import", .Import },
         .{ "false", .False },
         .{ "true", .True },
-        .{ "nullptr", .Nullptr },
+        .{ "null", .Null },
         .{ "struct", .Struct },
+        .{ "enum", .Enum },
+        .{ "union", .Union},
         .{ "pub", .Pub },
         .{ "mut", .Mut },
         .{ "asm", .Asm },
@@ -109,12 +111,12 @@ pub const Scanner = struct {
     });
 
     tokens: TokenList,
-    file: u32,
+    file: types.FilePtr,
     source: []const u8,
 
-    start: u32,
-    current: u32,
-    end: u32,
+    start: types.Offset,
+    current: types.Offset,
+    end: types.Offset,
 
     arena: std.heap.ArenaAllocator,
     context: *common.CompilerContext,
@@ -153,7 +155,7 @@ pub const Scanner = struct {
         return self;
     }
 
-    pub fn scanAll(self: *Self) common.CompilerError!u32 {
+    pub fn scanAll(self: *Self) common.CompilerError!types.TokenListPtr {
         while (!self.isAtEnd()) {
             try self.scanToken();
             self.skipWhitespace();

@@ -1,11 +1,11 @@
 const std = @import("std");
-const builtin = @import("builtin");
 const common = @import("core/common.zig");
 const perfAllc = @import("util/allocator.zig");
 
 const Lexer = @import("lexer/lexer.zig").Scanner;
 const Parser = @import("parser/parser.zig").Parser;
 const Printer = @import("parser/printer.zig").PrettyPrinter;
+const Prepass = @import("parser/prepass.zig").Prepass;
 
 pub fn main() !void {
     const allocator = perfAllc.performanceAllocator;
@@ -30,9 +30,11 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     var parser = try Parser.init(
         allocator,
         &context,
-        context.getTokens(tokens),
+        tokens,
     );
 
     const ast = try parser.parse();
-    _ = ast;
+
+    var prepass = try Prepass.init(allocator, &context, ast);
+    _ = try prepass.prepass();
 }

@@ -1,0 +1,3 @@
+pub let TypeInfo = struct {
+    name: []u8,
+};
