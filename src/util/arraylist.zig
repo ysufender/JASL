@@ -11,7 +11,7 @@ pub fn MultiArrayList(comptime T: type) type {
 
     const fields = info.fields;
 
-    var newFields: [fields.len]std.builtin.Type.StructField = undefined;
+    comptime var newFields: [fields.len]std.builtin.Type.StructField = undefined;
     
     for (fields, 0..) |field, i| {
         newFields[i] = .{
@@ -60,7 +60,7 @@ pub fn MultiArrayList(comptime T: type) type {
             len: u32,
 
             pub fn items(self: *const Slice, comptime field: std.meta.FieldEnum(Inner)) []const @typeInfo(std.meta.fieldInfo(Inner, field).type).pointer.child {
-                return @field(self.inner, std.meta.fieldInfo(Inner, field).name);
+                return @field(self.inner, std.meta.fieldInfo(Inner, field).name)[0..self.len];
             }
 
             pub fn get(self: *const Slice, index: u32) T {
@@ -71,6 +71,10 @@ pub fn MultiArrayList(comptime T: type) type {
                 }
 
                 return ret;
+            }
+
+            pub fn capacity(self: *const Slice) u32 {
+                return @intCast(@field(self.inner, info.fields[0].name).len);
             }
 
             /// Frees all owned memory, slice shouldn't be used after free.
@@ -94,10 +98,45 @@ pub fn MultiArrayList(comptime T: type) type {
             pub fn dupe(self: *const Slice, allocator: Allocator) CompilerError!Slice {
                 var new: Inner = undefined;
 
-                inline for (info.fields) |field| {
-                    @field(new, field.name) =
-                        allocator.dupe(field.type, @field(self.inner, field.name))
-                        catch return error.AllocatorFailure;
+                if (@as(?[]const u8,
+                    if (std.meta.hasMethod(T, "dupe")) "dupe"
+                    else if (std.meta.hasMethod(T, "clone")) "clone"
+                    else null
+                )) |name| {
+                    inline for (fields) |field| {
+                        @field(new, field.name) =
+                            allocator.alloc(field.type, self.len)
+                            catch return error.AllocatorFailure;
+                    }
+
+                    for (0..self.len) |i| {
+                        const item = self.get(@intCast(i));
+                        const newItem =
+                            @field(T, name)(&item, allocator)
+                            catch return error.AllocatorFailure;
+
+                        inline for (fields) |field| {
+                            @field(new, field.name)[i] = @field(newItem, field.name);
+                        }
+                    }
+                }
+                else {
+                    inline for (newFields) |field| {
+                        if (@as(?[]const u8,
+                            if (std.meta.hasMethod(field.type, "dupe")) "dupe"
+                            else if (std.meta.hasMethod(field.type, "clone")) "clone"
+                            else null
+                        )) |name| {
+                            @field(new, field.name) =
+                                @field(field.type, name)(@field(self.inner, field.name), allocator)
+                                catch return error.AllocatorFailure;
+                        }
+                        else {
+                            @field(new, field.name) =
+                                allocator.dupe(@typeInfo(field.type).pointer.child, @field(self.inner, field.name)[0..self.len])
+                                catch return error.AllocatorFailure;
+                        }
+                    }
                 }
 
                 return .{
@@ -144,9 +183,7 @@ pub fn MultiArrayList(comptime T: type) type {
         }
 
         pub fn ensureTotalCapacity(self: *Self, allocator: Allocator, cap: usize) CompilerError!void {
-            const lastField = info.fields[info.fields.len - 1].name;
-
-            if (@field(self.inner, lastField).len >= cap) {
+            if (self.capacity() >= cap) {
                 return;
             }
 
@@ -173,32 +210,31 @@ pub fn MultiArrayList(comptime T: type) type {
         }
 
         pub fn addOne(self: *Self, allocator: Allocator) CompilerError!u32 {
-            const lastField = info.fields[info.fields.len - 1].name;
+            const cap = self.capacity();
 
-            if (self.len >= @field(self.inner, lastField).len) {
-                try self.ensureTotalCapacity(allocator, @field(self.inner, lastField).len * 2);
+            if (self.len >= cap) {
+                try self.ensureTotalCapacity(allocator, cap * 2);
             }
 
-            self.len += 1;
-            return self.len - 1;
+            defer self.len += 1;
+            return self.len;
         }
 
         pub fn append(self: *Self, allocator: Allocator, element: T) CompilerError!void {
-            const lastField = info.fields[info.fields.len - 1].name;
+            const cap = self.capacity();
 
-            if (@field(self.inner, lastField).len <= self.len) {
-                try self.ensureTotalCapacity(allocator, @field(self.inner, lastField).len * 2);
+            if (cap <= self.len) {
+                try self.ensureTotalCapacity(allocator, cap * 2);
             }
 
             self.appendAssumeCapacity(element);
         }
 
         pub fn appendAssumeCapacity(self: *Self, element: T) void {
+            defer self.len += 1;
             inline for (info.fields) |array| {
                 @field(self.inner, array.name)[self.len] = @field(element, array.name);
             }
-
-            self.len += 1;
         }
 
         pub fn items(self: *const Self, comptime field: std.meta.FieldEnum(Inner)) []const @typeInfo(std.meta.fieldInfo(Inner, field).type).pointer.child {
@@ -251,6 +287,72 @@ pub fn MultiArrayList(comptime T: type) type {
             return .{ 
                 .ctx = self.slice(),
             };
+        }
+
+        pub fn dupe(self: *const Self, allocator: Allocator) CompilerError!Self {
+            var new: Inner = undefined;
+
+            inline for (newFields) |field| {
+                if (@as(?[]const u8,
+                    if (std.meta.hasMethod(field.type, "dupe")) "dupe"
+                    else if (std.meta.hasMethod(field.type, "clone")) "clone"
+                    else null
+                )) |name| {
+                    @field(new, field.name) =
+                        @field(field.type, name)(@field(self.inner, field.name), allocator)
+                        catch return error.AllocatorFailure;
+                }
+                else {
+                    @field(new, field.name) =
+                        allocator.dupe(@typeInfo(field.type).pointer.child, @field(self.inner, field.name))
+                        catch return error.AllocatorFailure;
+                }
+            }
+
+            return .{
+                .inner = new,
+                .len = self.len,
+            };
+        }
+    };
+}
+
+pub fn ReverseStackArray(comptime T: type, comptime capacity: u32) type {
+    return struct {
+        const Self = @This();
+
+        buffer: [capacity]T,
+        items: []T,
+
+        pub fn init() Self {
+            return .{
+                .buffer = undefined,
+                .items = &[_]T{},
+            };
+        }
+
+        pub fn append(self: *Self, element: T) CompilerError!void {
+            if (self.items.len >= capacity) {
+                return error.OutOfMemory;
+            }
+
+            const index = capacity - self.items.len - 1;
+
+            defer self.items = self.buffer[index..];
+            self.buffer[index] = element;
+        }
+
+        /// Clears all internal data and releases the ownership
+        /// self is uninitialized after this call. Self.init must be called
+        /// before use.
+        pub fn toOwnedSlice(self: *Self, allocator: Allocator) CompilerError![]T {
+            defer self.* = .{
+                .len = 0,
+                .items = &[_]T{},
+                .buffer = &[_]T{},
+            };
+
+            return allocator.dupe(T, self.items) catch error.AllocatorFailure;
         }
     };
 }

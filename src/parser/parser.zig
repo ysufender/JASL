@@ -84,7 +84,7 @@ pub const AST = struct {
     statementMask: std.ArrayList(types.StatementPtr).Slice,
     extra: std.ArrayList(types.OpaquePtr).Slice,
 
-    pub fn toOwned(self: *const Self, allocator: Allocator) common.CompilerError!Self {
+    pub fn dupe(self: *const Self, allocator: Allocator) common.CompilerError!Self {
         return .{
             .tokens = self.tokens,
             .expressions = try self.expressions.dupe(allocator),
@@ -180,9 +180,13 @@ pub const Parser = struct {
     /// Returns a final table containing all info about the parsing.
     /// Parser is undefined and should be reinitialized after the call.
     pub fn parse(self: *Self) common.CompilerError!types.ASTPtr {
-        std.debug.assert(self.extra.items.len == 0);
-
         defer self.arena.deinit();
+
+        // any type
+        self.expressionMap.appendAssumeCapacity(.{
+            .type = .ValueType,
+            .value = 0,
+        });
 
         var errCount: types.OpaquePtr = 0;
         var lastErr: common.CompilerError = undefined;
@@ -206,15 +210,16 @@ pub const Parser = struct {
         if (errCount > 1) {
             lastErr = error.MultipleErrors;
         }
-        else if (errCount > 0) {
+
+        if (errCount > 0) {
             return lastErr;
         }
 
         const ast = AST{
             .tokens = self.tokens,
-            .expressions = self.expressionMap.toOwnedSlice(),
-            .statements = self.statementMap.toOwnedSlice(),
-            .signatures = self.signaturePool.toOwnedSlice(),
+            .expressions = self.expressionMap.slice(),
+            .statements = self.statementMap.slice(),
+            .signatures = self.signaturePool.slice(),
             .statementMask = self.statementMask.items,
             .extra = self.extra.items,
         };
@@ -455,6 +460,7 @@ pub const Parser = struct {
         self.extra.append(self.allocator(), signatures.start) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), signatures.end) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+
 
         const result = try self.alloc(Statement);
         self.statementMap.set(result, .{
@@ -854,12 +860,10 @@ pub const Parser = struct {
         // Check unionDefinition for details.
         // TODO: Fix this.
         // TODO: Maybe two loops using scratch would be better...
-        var variableBuf: [512]types.OpaquePtr = undefined;
-        var definitionBuf: [512]types.OpaquePtr = undefined;
         // var variablesTmp = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
         // var definitions = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
-        var variablesTmp = std.ArrayList(types.OpaquePtr).initBuffer(&variableBuf);
-        var definitions = std.ArrayList(types.OpaquePtr).initBuffer(&definitionBuf);
+        var variablesTmp = arraylist.ReverseStackArray(types.OpaquePtr, 512).init();
+        var definitions = arraylist.ReverseStackArray(types.OpaquePtr, 512).init();
 
         while (!self.check(.RBrace)) {
             switch (self.tokens.items(.type)[self.peek()]) {
@@ -868,12 +872,10 @@ pub const Parser = struct {
                     switch (self.tokens.items(.type)[self.peek()]) {
                         .Let => {
                             _ = self.advance();
-                            //definitions.append(self.allocator(), try self.variable(true)) catch return error.AllocatorFailure;
-                            definitions.appendBounded(try self.variable(true)) catch return error.AllocatorFailure;
+                            try definitions.append(try self.variable(true));
                         },
                         .Identifier => {
-                            //variablesTmp.append(self.allocator(), try self.variableSignature(true, true)) catch return error.AllocatorFailure;
-                            variablesTmp.appendBounded(try self.variableSignature(true, true)) catch return error.AllocatorFailure;
+                            try variablesTmp.append(try self.variableSignature(true, true));
                             if (!self.match(&.{.Comma})) break;
                         },
                         else => {
@@ -885,12 +887,10 @@ pub const Parser = struct {
                 },
                 .Let => {
                     _ = self.advance();
-                    //definitions.append(self.allocator(), try self.variable(false)) catch return error.AllocatorFailure;
-                    definitions.appendBounded(try self.variable(false)) catch return error.AllocatorFailure;
+                    try definitions.append(try self.variable(false));
                 },
                 .Identifier => {
-                    //variablesTmp.append(self.allocator(), try self.variableSignature(false, true)) catch return error.AllocatorFailure;
-                    variablesTmp.appendBounded(try self.variableSignature(false, true)) catch return error.AllocatorFailure;
+                    try variablesTmp.append(try self.variableSignature(false, true));
                     if (!self.match(&.{.Comma})) break;
                 },
                 else => {
@@ -926,12 +926,8 @@ pub const Parser = struct {
 
         // Check unionDefinition for details.
         // TODO: Fix this.
-        var variableBuf: [512]types.OpaquePtr = undefined;
-        var definitionBuf: [512]types.OpaquePtr = undefined;
-        // var variablesTmp = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
-        // var definitions = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
-        var variablesTmp = std.ArrayList(types.OpaquePtr).initBuffer(&variableBuf);
-        var definitions = std.ArrayList(types.OpaquePtr).initBuffer(&definitionBuf);
+        var variablesTmp = arraylist.ReverseStackArray(types.OpaquePtr, 512).init();
+        var definitions = arraylist.ReverseStackArray(types.OpaquePtr, 512).init();
 
         while (!self.check(.RBrace)) {
             switch (self.tokens.items(.type)[self.peek()]) {
@@ -940,8 +936,7 @@ pub const Parser = struct {
                     switch (self.tokens.items(.type)[self.peek()]) {
                         .Let => {
                             _ = self.advance();
-                            //definitions.append(self.allocator(), try self.variable(true)) catch return error.AllocatorFailure;
-                            definitions.appendBounded(try self.variable(true)) catch return error.AllocatorFailure;
+                            try definitions.append(try self.variable(true));
                         },
                         else => {
                             _ = self.advance();
@@ -952,12 +947,10 @@ pub const Parser = struct {
                 },
                 .Let => {
                     _ = self.advance();
-                    //definitions.append(self.allocator(), try self.variable(false)) catch return error.AllocatorFailure;
-                    definitions.appendBounded(try self.variable(false)) catch return error.AllocatorFailure;
+                    try definitions.append(try self.variable(false));
                 },
                 .Identifier => {
-                    //variablesTmp.append(self.allocator(), self.advance()) catch return error.AllocatorFailure;
-                    variablesTmp.appendBounded(self.advance()) catch return error.AllocatorFailure;
+                    try variablesTmp.append(self.advance());
                     if (!self.match(&.{.Comma})) break;
                 },
                 else => {
@@ -1005,12 +998,8 @@ pub const Parser = struct {
         // For some reason, variablesTmp overwrites the extra buffer.
         // Fixed buffer for temporary fix.
         // TODO: fix this
-        var variableBuf: [512]types.OpaquePtr = undefined;
-        var definitionBuf: [512]types.OpaquePtr = undefined;
-        // var variablesTmp = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
-        // var definitions = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
-        var variablesTmp = std.ArrayList(types.OpaquePtr).initBuffer(&variableBuf);
-        var definitions = std.ArrayList(types.OpaquePtr).initBuffer(&definitionBuf);
+        var variablesTmp = arraylist.ReverseStackArray(types.OpaquePtr, 512).init();
+        var definitions = arraylist.ReverseStackArray(types.OpaquePtr, 512).init();
 
         while (!self.check(.RBrace)) {
             switch (self.tokens.items(.type)[self.peek()]) {
@@ -1019,8 +1008,7 @@ pub const Parser = struct {
                     switch (self.tokens.items(.type)[self.peek()]) {
                         .Let => {
                             _ = self.advance();
-                            // definitions.append(self.allocator(), try self.variable(true)) catch return error.AllocatorFailure;
-                            definitions.appendBounded(try self.variable(true)) catch return error.AllocatorFailure;
+                            try definitions.append(try self.variable(true));
                         },
                         else => {
                             _ = self.advance();
@@ -1031,12 +1019,10 @@ pub const Parser = struct {
                 },
                 .Let => {
                     _ = self.advance();
-                    // definitions.append(self.allocator(), try self.variable(false)) catch return error.AllocatorFailure;
-                    definitions.appendBounded(try self.variable(false)) catch return error.AllocatorFailure;
+                    try definitions.append(try self.variable(false));
                 },
                 .Identifier => {
-                    // variablesTmp.append(self.allocator(), try self.variableSignature(false, true)) catch return error.AllocatorFailure;
-                    variablesTmp.appendBounded(try self.variableSignature(true, true)) catch return error.AllocatorFailure;
+                    try variablesTmp.append(try self.variableSignature(true, true));
                     if (!self.match(&.{.Comma})) break;
                 },
                 else => {
@@ -1186,12 +1172,6 @@ pub const Parser = struct {
     }
 
     fn synchronize(self: *Self) void {
-        defer {
-            if (self.tokens.items(.type)[self.peek()] == .RBrace) {
-                _ = self.advance();
-            }
-        }
-
         while (!self.isAtEnd()) {
             if (self.tokens.items(.type)[self.previous()] == .Semicolon) {
                 return;
@@ -1245,11 +1225,7 @@ pub const Parser = struct {
         var typename: types.ExpressionPtr = undefined;
 
         if (!enforceType and !self.check(.Colon)) {
-            typename = try self.alloc(Expression);
-            self.expressionMap.set(typename, .{
-                .type = .ValueType,
-                .value = 0,
-            });
+            typename = 0;
         } else {
             _ = try self.consume(.Colon, error.MissingColon, "Expected a separator colon ':' after identifier.");
             typename = try self.ifExpression();

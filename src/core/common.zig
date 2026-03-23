@@ -158,7 +158,7 @@ pub const CompilerContext = struct {
         self.lock.lock();
         defer self.lock.unlock();
 
-        self.astMap.append(self.arena.allocator(), try ast.toOwned(self.arena.allocator())) catch return error.AllocatorFailure;
+        self.astMap.append(self.arena.allocator(), try ast.dupe(self.arena.allocator())) catch return error.AllocatorFailure;
 
         return @intCast(self.astMap.items.len - 1);
     }
@@ -189,6 +189,12 @@ pub const CompilerContext = struct {
             log.err("Couldn't find the file with path {s}", .{file});
             return error.IOError;
         };
+    }
+
+    pub fn getFileId(self: *const Self, file: []const u8) types.FilePtr {
+        return
+            if (self.resolved.get(file)) |f| f
+            else 0;
     }
 };
 
@@ -330,6 +336,8 @@ pub const CompilerError = error {
     ThreadingError,
     Unimplemented,
     IllegalSyntax,
+    PathNameTooLong,
+    OutOfMemory,
 };
 
 pub const log = struct {
