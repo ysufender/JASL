@@ -9,13 +9,11 @@ const types = @import("types.zig");
 pub const JASL_VERSION = "0.0.1";
 
 pub const CompilerSettings = struct {
+    const Self = @This();
+
     inputFile: []const u8,
     workingDir: []const u8,
     maxErr: u32,
-
-    pub var settings: CompilerSettings = undefined;
-
-    const Self = @This();
 
     pub fn print(self: *const Self) void {
         log.info(
@@ -39,11 +37,6 @@ pub const CompilerContext = struct {
     const ASTMap = std.ArrayList(parser.AST);
     const ResolveMap = std.StringHashMapUnmanaged(types.FilePtr);
 
-    const hardcoded = std.StaticStringMap([]const u8).initComptime(.{
-        .{ "builtin.jasl", "builtin.jasl" },
-        .{ "std.jasl", "builtin.jasl" },
-    });
-
     // Source Files
     filenameMap: FileNameMap,
     fileMap: FileMap,
@@ -56,14 +49,16 @@ pub const CompilerContext = struct {
     astMap: ASTMap,
 
     arena: std.heap.ArenaAllocator,
-    lock: std.Thread.RwLock,
+    lock: types.Lock,
+
+    settings: CompilerSettings,
 
     pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Self {
         var arena = std.heap.ArenaAllocator.init(baseAllocator);
         const allocator = arena.allocator();
 
-        CompilerSettings.settings = try CLI.parseCLI(allocator);
-        common.CompilerSettings.settings.print();
+        const settings = try CLI.parseCLI(allocator);
+        settings.print();
 
         var resolved = ResolveMap.empty;
         resolved.ensureTotalCapacity(allocator, 512) catch return error.AllocatorFailure;
@@ -76,24 +71,20 @@ pub const CompilerContext = struct {
             .arena = arena,
             .lock = .{},
             .resolved = resolved,
+            .settings = settings,
         };
     }
 
     pub fn openRead(self: *Self, file: []const u8) CompilerError!types.FilePtr {
         const path = try self.realpath(file);
 
-        // pre-check
-        {
-            self.lock.lockShared();
-            defer self.lock.unlockShared();
-
-            if (self.resolved.get(path)) |id| {
-                return id;
-            }
-        }
-
         self.lock.lock();
+
         defer self.lock.unlock();
+
+        if (self.resolved.get(path)) |id| {
+            return id;
+        }
 
         self.filenameMap.append(self.arena.allocator(), path) catch return error.AllocatorFailure;
 
@@ -134,15 +125,15 @@ pub const CompilerContext = struct {
     }
 
     pub fn getFile(self: *Self, file: types.FilePtr) []const u8 {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
+        self.lock.lock();
+        defer self.lock.unlock();
 
         return self.fileMap.items[file];
     }
 
     pub fn getFileName(self: *Self, file: types.FilePtr) []const u8 {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
+        self.lock.lock();
+        defer self.lock.unlock();
 
         return self.filenameMap.items[file];
     }
@@ -157,8 +148,8 @@ pub const CompilerContext = struct {
     }
 
     pub fn getTokens(self: *Self, tokens: types.TokenPtr) *const lexer.TokenList.Slice {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
+        self.lock.lock();
+        defer self.lock.unlock();
 
         return &self.tokenMap.items[tokens];
     }
@@ -167,31 +158,34 @@ pub const CompilerContext = struct {
         self.lock.lock();
         defer self.lock.unlock();
 
-        self.astMap.append(self.arena.allocator(), ast) catch return error.AllocatorFailure;
+        self.astMap.append(self.arena.allocator(), try ast.toOwned(self.arena.allocator())) catch return error.AllocatorFailure;
 
         return @intCast(self.astMap.items.len - 1);
     }
 
     pub fn getAST(self: *Self, ast: types.ASTPtr) *const parser.AST {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
+        self.lock.lock();
+        defer self.lock.unlock();
 
         return &self.astMap.items[ast];
     }
 
     pub fn isProcessed(self: *Self, file: []const u8) bool {
+        self.lock.lock();
+        defer self.lock.unlock();
+
         return self.resolved.contains(file);
     }
 
     fn realpath(self: *Self, file: []const u8) CompilerError![]const u8 {
-        if (hardcoded.get(file)) |rfn| {
-            return rfn;
-        }
-
         self.lock.lock();
         defer self.lock.unlock();
 
-        return std.fs.realpathAlloc(self.arena.allocator(), file) catch {
+        return realpathAlloc(self.arena.allocator(), file);
+    }
+
+    pub fn realpathAlloc(allocator: std.mem.Allocator, file: []const u8) CompilerError![]const u8 {
+        return std.fs.realpathAlloc(allocator, file) catch {
             log.err("Couldn't find the file with path {s}", .{file});
             return error.IOError;
         };
@@ -252,7 +246,7 @@ const CLI = struct {
                         return error.IOError;
                     };
 
-                    workingDir = dir;
+                    workingDir = std.process.getCwdAlloc(allocator) catch return error.AllocatorFailure;
                 },
                 .MaxErr => {
                     const max = if (args.next()) |next| next else return error.MissingFlag;
@@ -334,6 +328,8 @@ pub const CompilerError = error {
     MissingStatement,
     MultipleErrors,
     ThreadingError,
+    Unimplemented,
+    IllegalSyntax,
 };
 
 pub const log = struct {

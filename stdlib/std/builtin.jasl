@@ -1,4 +1,0 @@
-// Intended for the typechecker
-pub let this = fn () -> any {
-    return undefined;
-};

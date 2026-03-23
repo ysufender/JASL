@@ -23,7 +23,7 @@ pub fn MultiArrayList(comptime T: type) type {
         };
     }
 
-    const InnerType = @Type(.{
+    const Inner = @Type(.{
         .@"struct" = .{
             .fields = &newFields,
             .layout = .auto,
@@ -36,39 +36,96 @@ pub fn MultiArrayList(comptime T: type) type {
     return struct {
         const Self = @This();
 
-        /// Owned readonly slice
-        pub const Slice = struct {
-            inner: InnerType,
-            len: u32,
+        pub const Iterator = struct {
+            ctx: Slice,
+            idx: u32 = 0,
 
-            pub fn items(slice: *const Slice, comptime field: std.meta.FieldEnum(InnerType)) []const @typeInfo(std.meta.fieldInfo(InnerType, field).type).pointer.child {
-                return @field(slice.inner, std.meta.fieldInfo(InnerType, field).name);
+            pub fn next(self: *Iterator) ?T {
+                if (self.idx >= self.ctx.len) {
+                    return null;
+                }
+
+                defer self.idx += 1;
+                return self.ctx.get(self.idx);
             }
 
-            pub fn get(slice: *const Slice, index: u32) T {
+            pub fn eos(self: *const Iterator) bool {
+                return self.idx >= self.ctx.len;
+            }
+        };
+
+        /// Readonly slice
+        pub const Slice = struct {
+            inner: Inner,
+            len: u32,
+
+            pub fn items(self: *const Slice, comptime field: std.meta.FieldEnum(Inner)) []const @typeInfo(std.meta.fieldInfo(Inner, field).type).pointer.child {
+                return @field(self.inner, std.meta.fieldInfo(Inner, field).name);
+            }
+
+            pub fn get(self: *const Slice, index: u32) T {
                 var ret: T = undefined;
 
                 inline for (info.fields) |field| {
-                    @field(ret, field.name) = @field(slice.inner, field.name)[index];
+                    @field(ret, field.name) = @field(self.inner, field.name)[index];
                 }
 
                 return ret;
             }
 
             /// Frees all owned memory, slice shouldn't be used after free.
-            pub fn free(slice: *Slice, allocator: Allocator) void {
+            pub fn free(self: *Slice, allocator: Allocator) void {
                 inline for (info.fields) |field| {
-                    allocator.free(@field(slice.inner, field.name));
+                    allocator.free(@field(self.inner, field.name));
                 }
 
-                slice = .{
+                self = .{
                     .len = 0,
                     .inner = undefined,
                 };
             }
+
+            pub fn iterator(self: *const Slice) Iterator {
+                return .{
+                    .ctx = self.*,
+                };
+            }
+
+            pub fn dupe(self: *const Slice, allocator: Allocator) CompilerError!Slice {
+                var new: Inner = undefined;
+
+                inline for (info.fields) |field| {
+                    @field(new, field.name) =
+                        allocator.dupe(field.type, @field(self.inner, field.name))
+                        catch return error.AllocatorFailure;
+                }
+
+                return .{
+                    .inner = new,
+                    .len = self.len,
+                };
+            }
+
+            pub fn eql(self: *const Slice, other: *const Slice) bool {
+                if (self.len != other.len) {
+                    return false;
+                }
+
+                for (0..self.len) |i| {
+                    inline for (info.fields) |field| {
+                        if (
+                            @field(self.inner, field.name)[i] != @field(other.inner, field.name)[i]
+                        ) {
+                            return false;
+                        }
+                    }
+                }
+
+                return true;
+            }
         };
 
-        inner: InnerType,
+        inner: Inner,
         len: u32,
 
         pub fn init(allocator: Allocator, cap: usize) CompilerError!Self {
@@ -119,7 +176,7 @@ pub fn MultiArrayList(comptime T: type) type {
             const lastField = info.fields[info.fields.len - 1].name;
 
             if (self.len >= @field(self.inner, lastField).len) {
-                try self.ensureTotalCapacity(allocator, @field(self.inner, lastField).len);
+                try self.ensureTotalCapacity(allocator, @field(self.inner, lastField).len * 2);
             }
 
             self.len += 1;
@@ -130,7 +187,7 @@ pub fn MultiArrayList(comptime T: type) type {
             const lastField = info.fields[info.fields.len - 1].name;
 
             if (@field(self.inner, lastField).len <= self.len) {
-                try self.ensureTotalCapacity(allocator, @field(self.inner, lastField).len);
+                try self.ensureTotalCapacity(allocator, @field(self.inner, lastField).len * 2);
             }
 
             self.appendAssumeCapacity(element);
@@ -144,8 +201,8 @@ pub fn MultiArrayList(comptime T: type) type {
             self.len += 1;
         }
 
-        pub fn items(self: *const Self, comptime field: std.meta.FieldEnum(InnerType)) []const @typeInfo(std.meta.fieldInfo(InnerType, field).type).pointer.child {
-            return @field(self.inner, std.meta.fieldInfo(InnerType, field).name);
+        pub fn items(self: *const Self, comptime field: std.meta.FieldEnum(Inner)) []const @typeInfo(std.meta.fieldInfo(Inner, field).type).pointer.child {
+            return @field(self.inner, std.meta.fieldInfo(Inner, field).name)[0..self.len];
         }
 
         pub fn get(self: *const Self, index: u32) T {
@@ -172,15 +229,27 @@ pub fn MultiArrayList(comptime T: type) type {
         /// self is uninitialized after this call. Self.init must be called
         /// before use.
         pub fn toOwnedSlice(self: *Self) Slice {
-            const len = self.len;
-            const inner = self.inner;
-
-            self.len = 0;
-            self.inner = undefined;
-
+            defer self.* = .{
+                .len = 0,
+                .inner = undefined,
+            };
             return .{
-                .len = len,
-                .inner = inner,
+                .len = self.len,
+                .inner = self.inner,
+            };
+        }
+
+        /// Returns a readonly slice without releasing ownership
+        pub fn slice(self: *const Self) Slice {
+            return .{
+                .len = self.len,
+                .inner = self.inner,
+            };
+        }
+
+        pub fn iterator(self: *const Self) Iterator {
+            return .{ 
+                .ctx = self.slice(),
             };
         }
     };

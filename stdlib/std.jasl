@@ -1,25 +1,6 @@
-import std::
-
-// TODO: stdlib
-
-let OptionField = enum {
-    Some,
-    None,
-};
-
 pub let Option = fn (T: type) -> type {
-    return struct {
-        let Self = std::builtin::this();
-
-        field: OptionField,
-        value: T,
-
-        pub let Some = fn (value: T) -> Self {
-            return (OptionField.Some, value);
-        };
-
-        pub let None = fn () -> Self {
-            return Self(OptionField.None, undefined);
-        };
+    return union(enum) {
+        None: void,
+        Some: T,
     };
 };

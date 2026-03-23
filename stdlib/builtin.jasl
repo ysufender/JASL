@@ -1,0 +1,12 @@
+// This file is for the typechecker to be
+// happy, it is all comptime.
+
+import std::builtin::type;
+
+pub let this = fn () -> any {
+    return undefined;
+};
+
+pub let typeof = fn (x: any) -> std::builtin::type::TypeInfo {
+    return undefined;
+}

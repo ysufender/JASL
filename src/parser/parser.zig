@@ -1,4 +1,5 @@
 // TODO: remove all temp arraylists, use scratch
+// TODO: assert certain semantic checks as well (like only calls on defer)
 
 const std = @import("std");
 const common = @import("../core/common.zig");
@@ -19,6 +20,7 @@ pub const StatementMap = arraylist.MultiArrayList(Statement);
 // performant with arraylist.MultiArrayList(T)
 pub const Expression = struct {
     pub const Type = enum {
+        Assignment,
         Binary, // ok
         Literal, // ok
         Indexing, // ok
@@ -59,6 +61,7 @@ pub const Statement = struct {
         Discard, // ok
         Import, // ok
         Expression, // ok
+        Defer,
     };
 
     type: Type,
@@ -72,13 +75,67 @@ pub const VariableSignature = struct {
 };
 
 pub const AST = struct {
-    arena: std.heap.ArenaAllocator,
+    const Self = @This();
+
     tokens: *const lexer.TokenList.Slice,
     expressions: ExpressionMap.Slice,
     statements: StatementMap.Slice,
     signatures: VariableSignatureMap.Slice,
-    statementMask: std.ArrayList(types.StatementPtr),
-    extra: std.ArrayList(types.OpaquePtr),
+    statementMask: std.ArrayList(types.StatementPtr).Slice,
+    extra: std.ArrayList(types.OpaquePtr).Slice,
+
+    pub fn toOwned(self: *const Self, allocator: Allocator) common.CompilerError!Self {
+        return .{
+            .tokens = self.tokens,
+            .expressions = try self.expressions.dupe(allocator),
+            .statements = try self.statements.dupe(allocator),
+            .signatures = try self.signatures.dupe(allocator),
+            .statementMask = allocator.dupe(types.StatementPtr, self.statementMask) catch return error.AllocatorFailure,
+            .extra = allocator.dupe(types.OpaquePtr, self.extra) catch return error.AllocatorFailure,
+        };
+    }
+
+    pub fn eql(self: *const Self, other: *const Self) bool {
+        return
+            self.tokens.eql(other.tokens)
+            and self.expressions.eql(&other.expressions)
+            and self.statements.eql(&other.statements)
+            and self.signatures.eql(&other.signatures)
+            and std.mem.eql(types.StatementPtr, self.statementMask, other.statementMask)
+            and std.mem.eql(types.OpaquePtr, self.extra, other.extra);
+    }
+
+    pub fn print(self: *const Self) void {
+        std.debug.print("\nTokens:      ", .{});
+        var titerator = self.tokens.iterator();
+        while (titerator.next()) |token| {
+            std.debug.print("{d} ", .{token.start});
+        }
+        std.debug.print("\nExpressions: ", .{});
+        var eiterator = self.expressions.iterator();
+        while (eiterator.next()) |stmt| {
+            std.debug.print("{d} ", .{stmt.value});
+        }
+        std.debug.print("\nStatements:  ", .{});
+        var siterator = self.statements.iterator();
+        while (siterator.next()) |stmt| {
+            std.debug.print("{d} ", .{stmt.value});
+        }
+        std.debug.print("\nSignatures:  ", .{});
+        var viterator = self.signatures.iterator();
+        while (viterator.next()) |stmt| {
+            std.debug.print("{d} ", .{stmt.name});
+        }
+        std.debug.print("\nMask:        ", .{});
+        for (self.statementMask) |stmt| {
+            std.debug.print("{d} ", .{stmt});
+        }
+        std.debug.print("\nExtra:       ", .{});
+        for (self.extra) |extra| {
+            std.debug.print("{d} ", .{extra});
+        }
+        std.debug.print("\n", .{});
+    }
 };
 
 pub const Parser = struct {
@@ -123,6 +180,10 @@ pub const Parser = struct {
     /// Returns a final table containing all info about the parsing.
     /// Parser is undefined and should be reinitialized after the call.
     pub fn parse(self: *Self) common.CompilerError!types.ASTPtr {
+        std.debug.assert(self.extra.items.len == 0);
+
+        defer self.arena.deinit();
+
         var errCount: types.OpaquePtr = 0;
         var lastErr: common.CompilerError = undefined;
 
@@ -135,7 +196,7 @@ pub const Parser = struct {
                 lastErr = err;
                 common.log.err("Error: {d} <{s}>\n", .{ @intFromError(err), @errorName(err) });
                 self.synchronize();
-                if (errCount == common.CompilerSettings.settings.maxErr) {
+                if (errCount == self.context.settings.maxErr) {
                     common.log.err("Too many errors, aborting compilation.", .{});
                     return err;
                 }
@@ -149,19 +210,19 @@ pub const Parser = struct {
             return lastErr;
         }
 
-        const result = AST{
-            .arena = self.arena,
+        const ast = AST{
             .tokens = self.tokens,
             .expressions = self.expressionMap.toOwnedSlice(),
             .statements = self.statementMap.toOwnedSlice(),
             .signatures = self.signaturePool.toOwnedSlice(),
-            .statementMask = self.statementMask,
-            .extra = self.extra,
+            .statementMask = self.statementMask.items,
+            .extra = self.extra.items,
         };
 
-        self.* = undefined;
-
-        return self.context.registerAST(result);
+        const result = try self.context.registerAST(ast);
+        //std.debug.print("\nParse", .{});
+        //ast.print();
+        return result;
     }
 
     //
@@ -188,13 +249,47 @@ pub const Parser = struct {
             .Discard => self.discard(),
             .Import => self.import(),
             .Semicolon => self.statement(),
+            .Defer => self.deferStatement(),
+            .Extern => {
+                self.report("Extern symbols are not yet implemented.", .{});
+                return error.Unimplemented;
+            },
             else => self.expressionStmt(),
         };
+    }
+
+    /// Defer only allows function calls, for now.
+    fn deferStatement(self: *Self) StatementResult {
+        const call = try self.expression();
+
+        if (self.expressionMap.items(.type)[call] != .Call) {
+            self.report("Only function calls are allowed in defer statements.", .{});
+            return error.IllegalSyntax;
+        }
+
+        _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
+
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{
+            .type = .Defer,
+            .value = call,
+        });
+
+        return result;
     }
 
     fn expressionStmt(self: *Self) StatementResult {
         self.current -= 1;
         const expr = try self.expression();
+
+        switch (self.expressionMap.items(.type)[expr]) {
+            .Assignment, .Call => { },
+            else => {
+                self.report("Only assignment and function calls are allowed as expression statements.", .{});
+                return error.IllegalSyntax;
+            },
+        }
+
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
         const result = try self.alloc(Statement);
@@ -213,7 +308,7 @@ pub const Parser = struct {
         }
 
         _ = try self.consume(.RBrace, error.MissingBrace, "Missing enclosing brace '}' after block.");
-        const stmts = try self.commitList(scratchStart);
+        const stmts = try self.commitScratch(scratchStart);
 
         const start: types.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), stmts.start) catch return error.AllocatorFailure;
@@ -257,10 +352,24 @@ pub const Parser = struct {
 
     fn conditional(self: *Self) StatementResult {
         const condition = try self.expression();
+
+        if (!self.check(.LBrace)) {
+            self.report("Expected a block after if statement.", .{});
+            return error.MissingBrace;
+        }
+
         const body = try self.statement();
 
-        var otherwise: ?types.ExpressionPtr = null;
+        var otherwise: ?types.StatementPtr = null;
         if (self.match(&.{.Else})) {
+            switch (self.tokens.items(.type)[self.peek()]) {
+                .LBrace, .If => { },
+                else => {
+                    self.report("Expected a block or conditional after else statement.", .{});
+                    return error.MissingBrace;
+                },
+            }
+
             otherwise.? = try self.statement();
         }
 
@@ -283,6 +392,12 @@ pub const Parser = struct {
 
     fn whileStatement(self: *Self) StatementResult {
         const condition = try self.expression();
+
+        if (!self.check(.LBrace)) {
+            self.report("Expected a while body.", .{});
+            return error.MissingBrace;
+        }
+
         const body = try self.statement();
 
         const start: types.OpaquePtr = @intCast(self.extra.items.len);
@@ -324,7 +439,13 @@ pub const Parser = struct {
             self.scratch.append(self.allocator(), try self.variableSignature(public, false)) catch return error.AllocatorFailure;
             if (!self.match(&.{.Comma})) break;
         }
-        const signatures = try self.commitList(sigsStart);
+
+        if (sigsStart == self.scratch.items.len){
+            self.report("Expected variable signature(s) after 'let'.", .{});
+            return error.MissingIdentifier;
+        }
+
+        const signatures = try self.commitScratch(sigsStart);
 
         _ = try self.consume(.Equal, error.MissingAssignment, "Expected assignment in variable definition.");
         const expr = try self.expression();
@@ -360,7 +481,7 @@ pub const Parser = struct {
 
     fn import(self: *Self) StatementResult {
         // const file = try self.consume(.String, error.InvalidToken, "Expected file path in import statement.");
-        const module = try self.ifExpression();
+        const module = try self.scoping();
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
         const result = try self.alloc(Statement);
@@ -384,7 +505,19 @@ pub const Parser = struct {
         var expr = try self.ifExpression();
 
         if (self.match(&.{.Equal})) {
-            expr = try self.commonBinary(expr, Self.ifExpression);
+            const rhs = try self.ifExpression();
+
+            const start: types.OpaquePtr = @intCast(self.extra.items.len);
+            self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+            self.extra.append(self.allocator(), rhs) catch return error.AllocatorFailure;
+
+            const newExpr = try self.alloc(Expression);
+            self.expressionMap.set(newExpr, .{
+                .type = .Assignment,
+                .value = start,
+            });
+
+            expr = newExpr;
         }
 
         return expr;
@@ -520,12 +653,12 @@ pub const Parser = struct {
             const operator = self.tokens.items(.type)[self.previous()];
 
             const rhs = try self.unary();
-            const expr = try self.alloc(Expression);
 
             const start: types.OpaquePtr = @intCast(self.extra.items.len);
             self.extra.append(self.allocator(), @intFromEnum(operator)) catch return error.AllocatorFailure;
             self.extra.append(self.allocator(), rhs) catch return error.AllocatorFailure;
 
+            const expr = try self.alloc(Expression);
             self.expressionMap.set(expr, .{
                 .type = .Unary,
                 .value = start,
@@ -550,7 +683,7 @@ pub const Parser = struct {
                     }
                 }
                 _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' in function call.");
-                const args = try self.commitList(argsStart);
+                const args = try self.commitScratch(argsStart);
 
                 const start: types.OpaquePtr = @intCast(self.extra.items.len);
                 self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
@@ -571,12 +704,12 @@ pub const Parser = struct {
                 }
 
                 const member = self.previous();
-                const newExpr = try self.alloc(Expression);
 
                 const start: types.OpaquePtr = @intCast(self.extra.items.len);
                 self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
                 self.extra.append(self.allocator(), member) catch return error.AllocatorFailure;
 
+                const newExpr = try self.alloc(Expression);
                 self.expressionMap.set(newExpr, .{
                     .type = .Dot,
                     .value = start,
@@ -596,59 +729,9 @@ pub const Parser = struct {
                     .value = start,
                 });
                 expr = newExpr;
-            } else if (self.match(&.{.DoubleColon})) {
-                switch (self.expressionMap.get(expr).type) {
-                    .Identifier, .Scoping => {},
-                    else => {
-                        self.report("Expected a namespace name in scoping expression.", .{});
-                        return error.MissingIdentifier;
-                    },
-                }
-
-                const member = try self.consume(.Identifier, error.MissingIdentifier, "Expected member name in scope resolution.");
-                const newExpr = try self.alloc(Expression);
-
-                const start: types.OpaquePtr = @intCast(self.extra.items.len);
-                self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
-                self.extra.append(self.allocator(), member) catch return error.AllocatorFailure;
-
-                self.expressionMap.set(newExpr, .{
-                    .type = .Scoping,
-                    .value = start,
-                });
-                expr = newExpr;
             } else {
                 break;
             }
-        }
-
-        return expr;
-    }
-
-    fn scoping(self: *Self) ExpressionResult {
-        var expr = try self.primary();
-
-        while (self.match(&.{.DoubleColon})) {
-            switch (self.expressionMap.get(expr).type) {
-                .Identifier, .Scoping => {},
-                else => {
-                    self.report("Expected a namespace name in scoping expression.", .{});
-                    return error.MissingIdentifier;
-                },
-            }
-
-            const member = try self.consume(.Identifier, error.MissingIdentifier, "Expected member name in scope resolution.");
-            const newExpr = try self.alloc(Expression);
-
-            const start: types.OpaquePtr = @intCast(self.extra.items.len);
-            self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
-            self.extra.append(self.allocator(), member) catch return error.AllocatorFailure;
-
-            self.expressionMap.set(newExpr, .{
-                .type = .Scoping,
-                .value = start,
-            });
-            expr = newExpr;
         }
 
         return expr;
@@ -671,7 +754,7 @@ pub const Parser = struct {
                 _ = self.advance();
 
                 const exprsStart = self.scratch.items.len;
-                while (!self.check(.RBrace)) {
+                while (!self.check(.RParen)) {
                     self.scratch.append(self.allocator(), try self.expression()) catch return error.AllocatorFailure;
                     if (!self.match(&.{.Comma})) {
                         break;
@@ -679,7 +762,7 @@ pub const Parser = struct {
                 }
 
                 _ = try self.consume(.RParen, error.MissingBrace, "Expected enclosing parenthesis ')' in expression list.");
-                const expressions = try self.commitList(exprsStart);
+                const expressions = try self.commitScratch(exprsStart);
 
                 const start: types.OpaquePtr = @intCast(self.extra.items.len);
                 self.extra.append(self.allocator(), expressions.start) catch return error.AllocatorFailure;
@@ -692,19 +775,41 @@ pub const Parser = struct {
                 });
                 return expr;
             },
-            .Identifier => {
-                const expr = try self.alloc(Expression);
-                self.expressionMap.set(expr, .{
-                    .type = .Identifier,
-                    .value = self.advance(),
-                });
-                return expr;
-            },
+            .Identifier => return self.scoping(),
             else => {
                 self.report("Expected a primary expression, got '{s}' instead.", .{self.tokens.get(self.advance()).lexeme(self.context, self.file)});
                 return error.InvalidToken;
             },
         }
+    }
+
+    fn scoping(self: *Self) ExpressionResult {
+        var expr = try self.alloc(Expression);
+        self.expressionMap.set(expr, .{
+            .type = .Identifier,
+            .value = try self.consume(.Identifier, error.MissingIdentifier, "Expected identifier in scoping expression"),
+        });
+
+        while (self.match(&.{.DoubleColon})) {
+            const member = try self.consume(.Identifier, error.MissingIdentifier, "Expected member name in scope resolution.");
+            
+            const start: types.OpaquePtr = @intCast(self.extra.items.len);
+            self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+            self.extra.append(self.allocator(), member) catch return error.AllocatorFailure;
+
+            const newExpr = try self.alloc(Expression);
+            // std.debug.print("Scoping Def {d}\n", .{newExpr});
+            // std.debug.print("Scoping Def Start {d}\n", .{start});
+            // std.debug.print("Scoping Def LHS {d} {d}\n", .{self.extra.items[start], expr});
+            // std.debug.print("Scoping Def Member {d} {d}\n", .{self.extra.items[start + 1], member});
+            self.expressionMap.set(newExpr, .{
+                .type = .Scoping,
+                .value = start,
+            });
+            expr = newExpr;
+        }
+
+        return expr;
     }
 
     fn function(self: *Self) ExpressionResult {
@@ -719,7 +824,7 @@ pub const Parser = struct {
             }
         }
         _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' after parameter list.");
-        const params = try self.commitList(paramsStart);
+        const params = try self.commitScratch(paramsStart);
 
         _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
         const returns = try self.ifExpression();
@@ -734,7 +839,7 @@ pub const Parser = struct {
         self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), body) catch return error.AllocatorFailure;
 
-        const expr = try self.alloc(Statement);
+        const expr = try self.alloc(Expression);
         self.expressionMap.set(expr, .{
             .type = .FunctionDefinition,
             .value = start,
@@ -746,8 +851,15 @@ pub const Parser = struct {
     fn structDefinition(self: *Self) ExpressionResult {
         _ = try self.consume(.LBrace, error.MissingBrace, "Expected struct body.");
 
-        var variablesTmp = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
-        var definitions = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+        // Check unionDefinition for details.
+        // TODO: Fix this.
+        // TODO: Maybe two loops using scratch would be better...
+        var variableBuf: [512]types.OpaquePtr = undefined;
+        var definitionBuf: [512]types.OpaquePtr = undefined;
+        // var variablesTmp = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+        // var definitions = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+        var variablesTmp = std.ArrayList(types.OpaquePtr).initBuffer(&variableBuf);
+        var definitions = std.ArrayList(types.OpaquePtr).initBuffer(&definitionBuf);
 
         while (!self.check(.RBrace)) {
             switch (self.tokens.items(.type)[self.peek()]) {
@@ -756,25 +868,29 @@ pub const Parser = struct {
                     switch (self.tokens.items(.type)[self.peek()]) {
                         .Let => {
                             _ = self.advance();
-                            definitions.append(self.allocator(), try self.variable(true)) catch return error.AllocatorFailure;
+                            //definitions.append(self.allocator(), try self.variable(true)) catch return error.AllocatorFailure;
+                            definitions.appendBounded(try self.variable(true)) catch return error.AllocatorFailure;
                         },
                         .Identifier => {
-                            variablesTmp.append(self.allocator(), try self.variableSignature(true, true)) catch return error.AllocatorFailure;
+                            //variablesTmp.append(self.allocator(), try self.variableSignature(true, true)) catch return error.AllocatorFailure;
+                            variablesTmp.appendBounded(try self.variableSignature(true, true)) catch return error.AllocatorFailure;
                             if (!self.match(&.{.Comma})) break;
                         },
                         else => {
                             _ = self.advance();
-                            self.report("Expected a function or a field definition after 'pub' specifier.", .{});
+                            self.report("Expected a field after 'pub' specifier.", .{});
                             return error.InvalidToken;
                         },
                     }
                 },
                 .Let => {
                     _ = self.advance();
-                    definitions.append(self.allocator(), try self.variable(false)) catch return error.AllocatorFailure;
+                    //definitions.append(self.allocator(), try self.variable(false)) catch return error.AllocatorFailure;
+                    definitions.appendBounded(try self.variable(false)) catch return error.AllocatorFailure;
                 },
                 .Identifier => {
-                    variablesTmp.append(self.allocator(), try self.variableSignature(false, true)) catch return error.AllocatorFailure;
+                    //variablesTmp.append(self.allocator(), try self.variableSignature(false, true)) catch return error.AllocatorFailure;
+                    variablesTmp.appendBounded(try self.variableSignature(false, true)) catch return error.AllocatorFailure;
                     if (!self.match(&.{.Comma})) break;
                 },
                 else => {
@@ -808,11 +924,40 @@ pub const Parser = struct {
     fn enumDefinition(self: *Self) ExpressionResult {
         _ = try self.consume(.LBrace, error.MissingBrace, "Expected enum body.");
 
-        const scratch = self.scratch.items.len;
+        // Check unionDefinition for details.
+        // TODO: Fix this.
+        var variableBuf: [512]types.OpaquePtr = undefined;
+        var definitionBuf: [512]types.OpaquePtr = undefined;
+        // var variablesTmp = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+        // var definitions = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+        var variablesTmp = std.ArrayList(types.OpaquePtr).initBuffer(&variableBuf);
+        var definitions = std.ArrayList(types.OpaquePtr).initBuffer(&definitionBuf);
+
         while (!self.check(.RBrace)) {
             switch (self.tokens.items(.type)[self.peek()]) {
+                .Pub => {
+                    _ = self.advance();
+                    switch (self.tokens.items(.type)[self.peek()]) {
+                        .Let => {
+                            _ = self.advance();
+                            //definitions.append(self.allocator(), try self.variable(true)) catch return error.AllocatorFailure;
+                            definitions.appendBounded(try self.variable(true)) catch return error.AllocatorFailure;
+                        },
+                        else => {
+                            _ = self.advance();
+                            self.report("Expected a definition after 'pub' specifier.", .{});
+                            return error.InvalidToken;
+                        },
+                    }
+                },
+                .Let => {
+                    _ = self.advance();
+                    //definitions.append(self.allocator(), try self.variable(false)) catch return error.AllocatorFailure;
+                    definitions.appendBounded(try self.variable(false)) catch return error.AllocatorFailure;
+                },
                 .Identifier => {
-                    self.scratch.append(self.allocator(), self.advance()) catch return error.AllocatorFailure;
+                    //variablesTmp.append(self.allocator(), self.advance()) catch return error.AllocatorFailure;
+                    variablesTmp.appendBounded(self.advance()) catch return error.AllocatorFailure;
                     if (!self.match(&.{.Comma})) break;
                 },
                 else => {
@@ -823,17 +968,20 @@ pub const Parser = struct {
             }
         }
 
-        _ = try self.consume(.RBrace, error.MissingBrace, "Expected enclosing brace after struct definition.");
+        _ = try self.consume(.RBrace, error.MissingBrace, "Expected enclosing brace after enum definition.");
 
-        const fields = try self.commitList(scratch);
+        const variables = try self.commitFromSlice(variablesTmp.items);
+        const defs = try self.commitFromSlice(definitions.items);
 
-        const start: u32 = @intCast(self.extra.items.len);
-        self.extra.append(self.allocator(), fields.start) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), fields.end) catch return error.AllocatorFailure;
+        const start: types.OpaquePtr = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), variables.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), variables.end) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), defs.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), defs.end) catch return error.AllocatorFailure;
 
         const expr = try self.alloc(Expression);
         self.expressionMap.set(expr, .{
-            .type = .StructDefinition,
+            .type = .EnumDefinition,
             .value = start,
         });
 
@@ -852,14 +1000,43 @@ pub const Parser = struct {
             _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis.");
         }
 
-        _ = try self.consume(.LBrace, error.MissingBrace, "Expected struct body.");
+        _ = try self.consume(.LBrace, error.MissingBrace, "Expected union body.");
 
-        var fieldsTmp = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+        // For some reason, variablesTmp overwrites the extra buffer.
+        // Fixed buffer for temporary fix.
+        // TODO: fix this
+        var variableBuf: [512]types.OpaquePtr = undefined;
+        var definitionBuf: [512]types.OpaquePtr = undefined;
+        // var variablesTmp = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+        // var definitions = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+        var variablesTmp = std.ArrayList(types.OpaquePtr).initBuffer(&variableBuf);
+        var definitions = std.ArrayList(types.OpaquePtr).initBuffer(&definitionBuf);
 
         while (!self.check(.RBrace)) {
             switch (self.tokens.items(.type)[self.peek()]) {
+                .Pub => {
+                    _ = self.advance();
+                    switch (self.tokens.items(.type)[self.peek()]) {
+                        .Let => {
+                            _ = self.advance();
+                            // definitions.append(self.allocator(), try self.variable(true)) catch return error.AllocatorFailure;
+                            definitions.appendBounded(try self.variable(true)) catch return error.AllocatorFailure;
+                        },
+                        else => {
+                            _ = self.advance();
+                            self.report("Expected a definition after 'pub' specifier.", .{});
+                            return error.InvalidToken;
+                        },
+                    }
+                },
+                .Let => {
+                    _ = self.advance();
+                    // definitions.append(self.allocator(), try self.variable(false)) catch return error.AllocatorFailure;
+                    definitions.appendBounded(try self.variable(false)) catch return error.AllocatorFailure;
+                },
                 .Identifier => {
-                    fieldsTmp.append(self.allocator(), try self.variableSignature(false, true)) catch return error.AllocatorFailure;
+                    // variablesTmp.append(self.allocator(), try self.variableSignature(false, true)) catch return error.AllocatorFailure;
+                    variablesTmp.appendBounded(try self.variableSignature(true, true)) catch return error.AllocatorFailure;
                     if (!self.match(&.{.Comma})) break;
                 },
                 else => {
@@ -872,7 +1049,8 @@ pub const Parser = struct {
 
         _ = try self.consume(.RBrace, error.MissingBrace, "Expected enclosing brace after union definition.");
 
-        const fields = try self.commitFromSlice(fieldsTmp.items);
+        const variables = try self.commitFromSlice(variablesTmp.items);
+        const defs = try self.commitFromSlice(definitions.items);
 
         const start: types.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), tagged) catch return error.AllocatorFailure;
@@ -885,12 +1063,14 @@ pub const Parser = struct {
                 self.extra.append(self.allocator(), 0) catch return error.AllocatorFailure;
             }
         }
-        self.extra.append(self.allocator(), fields.start) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), fields.end) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), variables.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), variables.end) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), defs.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), defs.end) catch return error.AllocatorFailure;
 
         const expr = try self.alloc(Expression);
         self.expressionMap.set(expr, .{
-            .type = .StructDefinition,
+            .type = .UnionDefinition,
             .value = start,
         });
 
@@ -900,8 +1080,9 @@ pub const Parser = struct {
     fn typeExpression(self: *Self) ExpressionResult {
         switch (self.tokens.items(.type)[self.advance()]) {
             .Star => {
-                const expr = try self.alloc(Expression);
                 const res = try self.typeExpression();
+
+                const expr = try self.alloc(Expression);
                 self.expressionMap.set(expr, .{
                     .type = .PointerType,
                     .value = res,
@@ -910,8 +1091,9 @@ pub const Parser = struct {
             },
             .LBracket => {
                 _ = try self.consume(.RBracket, error.MissingBracket, "Expected enclosing bracket in slice type.");
-                const expr = try self.alloc(Expression);
                 const res = try self.typeExpression();
+
+                const expr = try self.alloc(Expression);
                 self.expressionMap.set(expr, .{
                     .type = .SliceType,
                     .value = res,
@@ -923,13 +1105,13 @@ pub const Parser = struct {
 
                 const paramsStart = self.scratch.items.len;
                 while (!self.check(.RParen)) {
-                    self.scratch.append(self.allocator(), try self.variableSignature(false, true)) catch return error.AllocatorFailure;
+                    self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
                     if (!self.match(&.{.Comma})) {
                         break;
                     }
                 }
                 _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' after parameter list.");
-                const params = try self.commitList(paramsStart);
+                const params = try self.commitScratch(paramsStart);
 
                 _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
                 const returns = try self.ifExpression();
@@ -947,9 +1129,9 @@ pub const Parser = struct {
                 return expr;
             },
             .Mut => {
-                const expr = try self.alloc(Expression);
                 const res = try self.typeExpression();
 
+                const expr = try self.alloc(Expression);
                 self.expressionMap.set(expr, .{
                     .type = .MutableType,
                     .value = res,
@@ -961,13 +1143,9 @@ pub const Parser = struct {
             .Union => return self.unionDefinition(),
             .Identifier => {
                 const expr = try self.alloc(Expression);
-                const start: types.OpaquePtr = @intCast(self.extra.items.len);
-                self.extra.append(self.allocator(), 1) catch return error.AllocatorFailure;
-                self.extra.append(self.allocator(), self.previous()) catch return error.AllocatorFailure;
-
                 self.expressionMap.set(expr, .{
                     .type = .ValueType,
-                    .value = start,
+                    .value = self.previous(),
                 });
                 return expr;
             },
@@ -992,13 +1170,13 @@ pub const Parser = struct {
     fn commonBinary(self: *Self, expr: types.ExpressionPtr, comptime next: anytype) ExpressionResult {
         const operator = self.tokens.items(.type)[self.previous()];
         const rhs = try next(self);
-        const newExpr = try self.alloc(Expression);
 
         const binaryStart: types.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), @intFromEnum(operator)) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), rhs) catch return error.AllocatorFailure;
 
+        const newExpr = try self.alloc(Expression);
         self.expressionMap.set(newExpr, .{
             .type = .Binary,
             .value = binaryStart,
@@ -1008,6 +1186,12 @@ pub const Parser = struct {
     }
 
     fn synchronize(self: *Self) void {
+        defer {
+            if (self.tokens.items(.type)[self.peek()] == .RBrace) {
+                _ = self.advance();
+            }
+        }
+
         while (!self.isAtEnd()) {
             if (self.tokens.items(.type)[self.previous()] == .Semicolon) {
                 return;
@@ -1032,12 +1216,15 @@ pub const Parser = struct {
     fn commitFromSlice(self: *Self, items: []const types.OpaquePtr) common.CompilerError!types.Range {
         const start: types.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.appendSlice(self.allocator(), items) catch return error.AllocatorFailure;
-        return types.Range{ .start = start, .end = @intCast(self.extra.items.len) };
+        return .{
+            .start = start,
+            .end = @intCast(self.extra.items.len)
+        };
     }
 
-    fn commitList(self: *Self, scratchStart: usize) common.CompilerError!types.Range {
+    fn commitScratch(self: *Self, scratchStart: usize) common.CompilerError!types.Range {
         const span = try self.commitFromSlice(self.scratch.items[scratchStart..]);
-        self.scratch.shrinkRetainingCapacity(scratchStart);
+        self.scratch.shrinkRetainingCapacity(@intCast(scratchStart));
         return span;
     }
 
@@ -1058,17 +1245,14 @@ pub const Parser = struct {
         var typename: types.ExpressionPtr = undefined;
 
         if (!enforceType and !self.check(.Colon)) {
-            const start: types.OpaquePtr = @intCast(self.extra.items.len);
-            self.extra.append(self.allocator(), 0) catch return error.AllocatorFailure;
-
             typename = try self.alloc(Expression);
             self.expressionMap.set(typename, .{
                 .type = .ValueType,
-                .value = start,
+                .value = 0,
             });
         } else {
             _ = try self.consume(.Colon, error.MissingColon, "Expected a separator colon ':' after identifier.");
-            typename = try self.primary();
+            typename = try self.ifExpression();
         }
 
         const signature = try self.alloc(VariableSignature);
@@ -1128,6 +1312,17 @@ pub const Parser = struct {
         const token = self.tokens.get(self.previous());
         const position = token.position(self.context, self.file);
         common.log.err("\t{s} {d}:{d}", .{ self.context.getFileName(self.file), position.line, position.column});
+    }
+
+    fn getAST(self: *const Self) AST {
+        return .{
+            .extra = self.extra.items,
+            .tokens = self.tokens,
+            .statementMask = self.statementMask.items,
+            .signatures = self.signaturePool.slice(),
+            .expressions = self.expressionMap.slice(),
+            .statements = self.statementMap.slice(),
+        };
     }
 };
 

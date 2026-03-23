@@ -1,6 +1,8 @@
 const std = @import("std"); 
 
-pub const Lock = std.Thread.RwLock;
+pub const Lock = std.Thread.Mutex;
+pub const ThreadPool = std.Thread.Pool;
+pub const WaitGroup = std.Thread.WaitGroup;
 
 pub const FilePtr = u32;
 pub const TokenListPtr = u32;
