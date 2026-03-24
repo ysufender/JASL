@@ -42,9 +42,54 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     var prepass = try Prepass.init(&context, ast);
     const modules = try prepass.prepass(allocator);
 
-    std.debug.print("Parsed {d} files.\n", .{context.fileMap.items.len});
-    var iterator = modules.iterator();
-    while (iterator.next()) |module| {
-        module.print(&context);
+    if (true) {
+        var iterator = modules.iterator();
+        var totalModules: usize = 0;
+        var totalTopLevels: usize = 0;
+        while (iterator.next()) |module| {
+            totalModules += 1;
+            totalTopLevels += module.symbols.len;
+        }
+
+        var totalTokens: usize = 0;
+        for (context.tokenMap.items) |t| {
+            totalTokens += t.len;
+        }
+
+        var totalExpressions: usize = 0;
+        var totalStatements: usize = 0;
+        var totalExtras: usize = 0;
+        for (context.astMap.items) |a| {
+            totalExpressions += a.expressions.len;
+            totalStatements += a.statements.len;
+            totalExtras += a.extra.len;
+        }
+
+        common.log.info("Stats:", .{});
+        common.log.info("\tTotal Module Count:              {d}", .{totalModules});
+        common.log.info("\tTotal Top-Level Signature Count: {d}", .{totalTopLevels});
+        common.log.info("\tTotal Tokens:                    {d}", .{totalTokens});
+        common.log.info("\tTotal Expressions:               {d}", .{totalExpressions});
+        common.log.info("\tTotal Extras:                    {d}", .{totalExtras});
+
+        common.log.info("\tProcessed Files:", .{});
+        for (context.filenameMap.items) |file| {
+            common.log.info("\t\t{s}", .{file});
+        }
     }
+}
+
+pub const panic = std.debug.FullPanic(panicHandler);
+
+fn panicHandler(msg: []const u8, trace: ?usize) noreturn {
+    std.fs.File.stderr().writeAll("\nRuntime invoked panic:\n") catch {};
+    std.fs.File.stderr().writeAll(msg) catch {};
+    std.fs.File.stderr().writeAll("\n") catch {};
+
+    if (trace) |traceStart| {
+        std.debug.dumpCurrentStackTrace(traceStart);
+    }
+
+    std.fs.File.stderr().writeAll("\n") catch {};
+    std.process.exit(1);
 }

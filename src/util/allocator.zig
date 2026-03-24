@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const platform = @import("../core/platform.zig");
+const common = @import("../core/common.zig");
 
 const mem = std.mem;
 const posix = std.posix;
@@ -44,6 +45,7 @@ var HugePageAllocator =
                     .TYPE = .PRIVATE,
                     .ANONYMOUS = true,
                     .HUGETLB = true,
+                    .POPULATE = true,
                 },
                 -1,
                 0,
@@ -59,10 +61,6 @@ var HugePageAllocator =
         }
 
         fn remap(_: *anyopaque, buf: []u8, _: mem.Alignment, new_len: usize, _: usize) ?[*]u8 {
-            const mrmp = posix.MREMAP {
-                .MAYMOVE = true,
-            };
-
             const huge_page_size = 2 * 1024 * 1024;
             const aligned_old = mem.alignForward(usize, buf.len, huge_page_size);
             const aligned_new = mem.alignForward(usize, new_len, huge_page_size);
@@ -75,7 +73,9 @@ var HugePageAllocator =
                 aligned_ptr, 
                 aligned_old,
                 aligned_new,
-                mrmp,
+                .{
+                    .MAYMOVE = true,
+                },
                 null,
             ) catch return null;
 

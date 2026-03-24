@@ -59,15 +59,17 @@ pub fn MultiArrayList(comptime T: type) type {
             inner: Inner,
             len: u32,
 
-            pub fn items(self: *const Slice, comptime field: std.meta.FieldEnum(Inner)) []const @typeInfo(std.meta.fieldInfo(Inner, field).type).pointer.child {
+            pub fn items(self: *const Slice, comptime field: std.meta.FieldEnum(Inner)) []@typeInfo(std.meta.fieldInfo(Inner, field).type).pointer.child {
                 return @field(self.inner, std.meta.fieldInfo(Inner, field).name)[0..self.len];
             }
 
             pub fn get(self: *const Slice, index: u32) T {
+                std.debug.assert(index < self.len);
+
                 var ret: T = undefined;
 
                 inline for (info.fields) |field| {
-                    @field(ret, field.name) = @field(self.inner, field.name)[index];
+                    @field(ret, field.name) = @field(self.inner, field.name)[0..self.len][index];
                 }
 
                 return ret;
@@ -174,7 +176,7 @@ pub fn MultiArrayList(comptime T: type) type {
             };
 
             inline for (info.fields) |field| {
-                @field(self.inner, field.name) = &.{};
+                @field(self.inner, field.name) = allocator.alloc(field.type, cap) catch return error.AllocatorFailure;
             }
 
             try self.ensureTotalCapacity(allocator, cap);
@@ -196,7 +198,7 @@ pub fn MultiArrayList(comptime T: type) type {
                     }
                     else {
                         const mem = allocator.alloc(field.type, cap) catch return error.AllocatorFailure;
-                        @memcpy(mem, @field(self.inner, field.name));
+                        @memcpy(mem.ptr, @field(self.inner, field.name)[0..self.len]);
                         allocator.free(@field(self.inner, field.name));
                         new = mem;
                     }
@@ -213,7 +215,7 @@ pub fn MultiArrayList(comptime T: type) type {
             const cap = self.capacity();
 
             if (self.len >= cap) {
-                try self.ensureTotalCapacity(allocator, cap * 2);
+                try self.ensureTotalCapacity(allocator, @max(cap, 8) * 2);
             }
 
             defer self.len += 1;
@@ -224,7 +226,7 @@ pub fn MultiArrayList(comptime T: type) type {
             const cap = self.capacity();
 
             if (cap <= self.len) {
-                try self.ensureTotalCapacity(allocator, cap * 2);
+                try self.ensureTotalCapacity(allocator, @max(cap, 8) * 2);
             }
 
             self.appendAssumeCapacity(element);
@@ -237,15 +239,17 @@ pub fn MultiArrayList(comptime T: type) type {
             }
         }
 
-        pub fn items(self: *const Self, comptime field: std.meta.FieldEnum(Inner)) []const @typeInfo(std.meta.fieldInfo(Inner, field).type).pointer.child {
+        pub fn items(self: *const Self, comptime field: std.meta.FieldEnum(Inner)) []@typeInfo(std.meta.fieldInfo(Inner, field).type).pointer.child {
             return @field(self.inner, std.meta.fieldInfo(Inner, field).name)[0..self.len];
         }
 
         pub fn get(self: *const Self, index: u32) T {
+            std.debug.assert(index < self.len);
+
             var ret: T = undefined;
 
             inline for (info.fields) |field| {
-                @field(ret, field.name) = @field(self.inner, field.name)[index];
+                @field(ret, field.name) = @field(self.inner, field.name)[0..self.len][index];
             }
 
             return ret;
@@ -265,10 +269,13 @@ pub fn MultiArrayList(comptime T: type) type {
         /// self is uninitialized after this call. Self.init must be called
         /// before use.
         pub fn toOwnedSlice(self: *Self) Slice {
-            defer self.* = .{
-                .len = 0,
-                .inner = undefined,
-            };
+            defer {
+                self.len = 1;
+
+                inline for (fields) |field| {
+                    @field(self.inner, field.name) = &.{};
+                }
+            }
             return .{
                 .len = self.len,
                 .inner = self.inner,
@@ -277,9 +284,15 @@ pub fn MultiArrayList(comptime T: type) type {
 
         /// Returns a readonly slice without releasing ownership
         pub fn slice(self: *const Self) Slice {
+            var inner: Inner = undefined;
+
+            inline for (fields) |field| {
+                @field(inner, field.name) = @field(self.inner, field.name)[0..self.len];
+            }
+
             return .{
                 .len = self.len,
-                .inner = self.inner,
+                .inner = inner,
             };
         }
 

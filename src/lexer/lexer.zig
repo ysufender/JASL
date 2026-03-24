@@ -342,7 +342,9 @@ pub const Scanner = struct {
     }
 
     fn skipWhitespace(self: *Self) void {
-        const index = if(std.mem.indexOfNonePos(u8, self.source, self.current, " \n\t\r")) |idx| idx
+        const index =
+            if(std.mem.indexOfNonePos(u8, self.source, self.current, " \n\t\r")) |idx|
+                idx
             else
                 self.end;
 
@@ -382,8 +384,8 @@ pub const Scanner = struct {
     }
 
     fn advance(self: *Self) u8 {
-        self.current += 1;
-        return self.source[self.current-1];
+        defer self.current += 1;
+        return self.source[self.current];
     }
 
     fn addToken(self: *Self, tokenType: TokenType) common.CompilerError!void {

@@ -77,7 +77,7 @@ pub const VariableSignature = struct {
 pub const AST = struct {
     const Self = @This();
 
-    tokens: *const lexer.TokenList.Slice,
+    tokens: types.TokenPtr,
     expressions: ExpressionMap.Slice,
     statements: StatementMap.Slice,
     signatures: VariableSignatureMap.Slice,
@@ -105,33 +105,54 @@ pub const AST = struct {
             and std.mem.eql(types.OpaquePtr, self.extra, other.extra);
     }
 
-    pub fn print(self: *const Self) void {
+    pub fn print(self: *const Self, context: *common.CompilerContext) void {
+        const tokens = context.getTokens(self.tokens);
         std.debug.print("\nTokens:      ", .{});
-        var titerator = self.tokens.iterator();
+        var titerator = tokens.iterator();
+        var i: u32 = 0;
         while (titerator.next()) |token| {
-            std.debug.print("{d} ", .{token.start});
+            defer i += 1;
+            if (i >= 16) {
+                break;
+            }
+            std.debug.print("({d} {s} {d} {d}) ", .{titerator.idx - 1, @tagName(token.type), token.start, token.end});
         }
         std.debug.print("\nExpressions: ", .{});
         var eiterator = self.expressions.iterator();
+        i = 0;
         while (eiterator.next()) |stmt| {
+            defer i += 1;
+            if (i >= 16) {
+                break;
+            }
             std.debug.print("{d} ", .{stmt.value});
         }
         std.debug.print("\nStatements:  ", .{});
         var siterator = self.statements.iterator();
+        i = 0;
         while (siterator.next()) |stmt| {
+            defer i += 1;
+            if (i >= 16) {
+                break;
+            }
             std.debug.print("{d} ", .{stmt.value});
         }
         std.debug.print("\nSignatures:  ", .{});
         var viterator = self.signatures.iterator();
+        i = 0;
         while (viterator.next()) |stmt| {
+            defer i += 1;
+            if (i >= 16) {
+                break;
+            }
             std.debug.print("{d} ", .{stmt.name});
         }
         std.debug.print("\nMask:        ", .{});
-        for (self.statementMask) |stmt| {
+        for (self.statementMask[0..@min(16, self.statementMask.len)]) |stmt| {
             std.debug.print("{d} ", .{stmt});
         }
         std.debug.print("\nExtra:       ", .{});
-        for (self.extra) |extra| {
+        for (self.extra[0..@min(16, self.extra.len)]) |extra| {
             std.debug.print("{d} ", .{extra});
         }
         std.debug.print("\n", .{});
@@ -141,7 +162,7 @@ pub const AST = struct {
 pub const Parser = struct {
     const Self = @This();
 
-    tokens: *const lexer.TokenList.Slice,
+    tokens: lexer.TokenList.Slice,
     current: types.TokenPtr,
 
     arena: std.heap.ArenaAllocator,
@@ -216,7 +237,7 @@ pub const Parser = struct {
         }
 
         const ast = AST{
-            .tokens = self.tokens,
+            .tokens = self.file,
             .expressions = self.expressionMap.slice(),
             .statements = self.statementMap.slice(),
             .signatures = self.signaturePool.slice(),
@@ -225,8 +246,8 @@ pub const Parser = struct {
         };
 
         const result = try self.context.registerAST(ast);
-        //std.debug.print("\nParse", .{});
-        //ast.print();
+        //std.debug.print("\nParse {s}", .{self.context.getFileName(self.file)});
+        //ast.print(self.context);
         return result;
     }
 
