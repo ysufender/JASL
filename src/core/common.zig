@@ -43,4 +43,5 @@ pub const CompilerError = error {
     IllegalSyntax,
     PathNameTooLong,
     OutOfMemory,
+    EmptyCharLiteral,
 };

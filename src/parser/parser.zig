@@ -555,7 +555,7 @@ pub const Parser = struct {
             return self.logicalOr();
         }
 
-        const condition = try self.expression();
+        const condition = try self.ifExpression();
         const then = try self.expression();
 
         _ = try self.consume(.Else, error.MissingBranch, "Expected an 'else' branch in conditional expression.");
@@ -766,7 +766,7 @@ pub const Parser = struct {
 
     fn primary(self: *Self) ExpressionResult {
         switch (self.tokens.items(.type)[self.peek()]) {
-            .False, .True, .Null, .Integer, .Float, .String => {
+            .False, .True, .Integer, .Float, .String => {
                 const expr = try self.alloc(Expression);
                 self.expressionMap.set(expr, .{
                     .type = .Literal,

@@ -45,7 +45,6 @@ var HugePageAllocator =
                     .TYPE = .PRIVATE,
                     .ANONYMOUS = true,
                     .HUGETLB = true,
-                    .POPULATE = true,
                 },
                 -1,
                 0,

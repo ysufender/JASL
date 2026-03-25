@@ -76,6 +76,11 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
         for (context.filenameMap.items) |file| {
             common.log.info("\t\t{s}", .{file});
         }
+
+        var it = modules.iterator();
+        while (it.next()) |module| {
+            module.print(&context);
+        }
     }
 }
 

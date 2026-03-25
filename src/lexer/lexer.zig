@@ -27,7 +27,7 @@ pub const TokenType = enum(u8) {
     Pub, Mut,
     And, Or,
     Identifier,
-    String, Integer, Float, False, True, Null,
+    String, Integer, Float, False, True,
     Discard,
     EOF,
 };
@@ -98,7 +98,6 @@ pub const Scanner = struct {
         .{ "import", .Import },
         .{ "false", .False },
         .{ "true", .True },
-        .{ "null", .Null },
         .{ "struct", .Struct },
         .{ "enum", .Enum },
         .{ "union", .Union},
@@ -268,6 +267,18 @@ pub const Scanner = struct {
                 else self.addToken(.Lesser),
             '|' => self.addToken(.Pipe),
             '&' => self.addToken(.Ampersand),
+            '\'' => {
+                const ch = self.advance();
+
+                if (ch == '\'') {
+                    self.report("Empty character literals are not allowed.", .{});
+                    return error.EmptyCharLiteral;
+                }
+
+                _ = try self.consume('\'', "Expected closing single quote (')");
+                self.start += 1;
+                try self.addToken(.Integer);
+            },
             '"' => {
                 const index =
                     if (std.mem.indexOfScalarPos(u8, self.source, self.current, '"'))
@@ -386,6 +397,13 @@ pub const Scanner = struct {
     fn advance(self: *Self) u8 {
         defer self.current += 1;
         return self.source[self.current];
+    }
+
+    fn consume(self: *Self, expected: u8, message: []const u8) common.CompilerError!u8 {
+        if (self.peek() == expected) return self.advance();
+
+        self.report("{s}\n\tExpected '{c}' got '{c}'", .{message, expected, self.peek()});
+        return error.UnexpectedCharacter;
     }
 
     fn addToken(self: *Self, tokenType: TokenType) common.CompilerError!void {

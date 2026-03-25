@@ -30,17 +30,15 @@ pub const Module = struct {
 
     pub fn print(self: *const Self, context: *Context) void {
         const ast = context.getAST(self.ast);
-        std.debug.print("\n{s} with id {d}:\n", .{self.name, self.ast});
+        std.debug.print("\nModule {s}:\n", .{self.name});
         std.debug.print("\tFile: {s}\n", .{context.getFileName(self.ast)});
-        std.debug.print("\n\tAST:\n", .{});
-        ast.print(context);
+        std.debug.print("\tAST:\n", .{});
         std.debug.print("\tDependencies:\n", .{});
         for (self.dependencies.items[0..@min(16, self.dependencies.items.len)]) |dependency| {
             std.debug.print("\t\t{s}\n", .{dependency});
         }
         std.debug.print("\tSymbols:\n", .{});
-        for (self.symbols.items(.name)[0..@min(16, self.symbols.len)]) |symbol| {
-            std.debug.print("\t\tToken ID: {d}\n", .{symbol});
+        for (self.symbols.items(.name)) |symbol| {
             std.debug.print("\t\t{s}\n", .{context.getTokens(ast.tokens).get(symbol).lexeme(context, self.ast)});
         }
     }
@@ -164,7 +162,6 @@ pub const Prepass = struct {
                 .Import => {
                     const path = getModulePathWithExtension(allocator, statement.value, ast, self.context) catch {
                         self.report("Couldn't get module path.", .{}, file.ast, null);
-                        self.hadErr.store(true, .release);
                         fail = true;
                         continue;
                     };
@@ -175,28 +172,24 @@ pub const Prepass = struct {
 
                     var scanner = lexer.Scanner.init(allocator, self.context, path) catch {
                         self.report("Couldn't scan module at path {s}.", .{path}, self.context.getFileId(path), null);
-                        self.hadErr.store(true, .release);
                         fail = true;
                         continue;
                     };
 
                     const moduleTokens = scanner.scanAll() catch {
                         self.report("Couldn't scan module at path {s}.", .{path}, file.ast, null);
-                        self.hadErr.store(true, .release);
                         fail = true;
                         continue;
                     };
 
                     var prs = parser.Parser.init(allocator, self.context, moduleTokens) catch {
                         self.report("Couldn't parse module at path {s}.", .{path}, file.ast, null);
-                        self.hadErr.store(true, .release);
                         fail = true;
                         continue;
                     };
 
                     const imported = prs.parse() catch {
                         self.report("Couldn't parse module at path {s}.", .{path}, file.ast, null);
-                        self.hadErr.store(true, .release);
                         fail = true;
                         continue;
                     };
@@ -208,7 +201,6 @@ pub const Prepass = struct {
 
                     file.dependencies.append(allocator, module) catch {
                         self.report("Couldn't add dependency {s} to {s}.", .{module, file.name}, file.ast, null);
-                        self.hadErr.store(true, .release);
                         fail = true;
                         continue;
                     };
@@ -231,7 +223,6 @@ pub const Prepass = struct {
                                 file.ast,
                                 sig.name,
                             );
-                            self.hadErr.store(true, .release);
                             fail = true;
                             continue :statementLoop;
                         };
@@ -243,7 +234,6 @@ pub const Prepass = struct {
                                 file.ast,
                                 sig.name,
                             );
-                            self.hadErr.store(true, .release);
                             fail = true;
                             continue :statementLoop;
                         };
@@ -254,11 +244,21 @@ pub const Prepass = struct {
                         });
                     }
                 },
-                else => { }
+                else => {
+                    self.report(
+                        "Only definitions are allowed at top-level.",
+                        .{},
+                        file.ast,
+                        null
+                    );
+                    fail = true;
+                    continue :statementLoop;
+                },
             }
         }
 
         if (fail) {
+            self.hadErr.store(true, .release);
             return;
         }
 
