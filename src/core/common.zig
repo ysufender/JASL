@@ -4,7 +4,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const lexer = @import("../lexer/lexer.zig");
 const parser = @import("../parser/parser.zig");
-const types = @import("types.zig");
+const defines = @import("defines.zig");
 
 pub const log = @import("log.zig");
 pub const CompilerContext = @import("context.zig");

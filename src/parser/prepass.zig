@@ -1,8 +1,8 @@
 const std = @import("std");
 const parser = @import("parser.zig");
 const common = @import("../core/common.zig");
-const types = @import("../core/types.zig");
-const arraylist = @import("../util/arraylist.zig");
+const defines = @import("../core/defines.zig");
+const collections = @import("../util/collections.zig");
 const lexer = @import("../lexer/lexer.zig");
 
 const Context = common.CompilerContext;
@@ -14,50 +14,44 @@ pub const Module = struct {
     const Self = @This();
 
     pub const Symbol = struct {
-        name: types.TokenPtr,
-        value: types.ExpressionPtr,
+        public: bool,
+        name: defines.TokenPtr,
+        value: defines.ExpressionPtr,
     };
 
     /// namespace of the module
     name: []const u8,
 
     /// Also file and token list index
-    ast: types.ASTPtr,
+    dataIndex: defines.Offset,
 
     symbolPtrs: SymbolMap,
     symbols: SymbolList,
     dependencies: DependencyList,
 
     pub fn print(self: *const Self, context: *Context) void {
-        const ast = context.getAST(self.ast);
+        const ast = context.getAST(self.dataIndex);
         std.debug.print("\nModule {s}:\n", .{self.name});
-        std.debug.print("\tFile: {s}\n", .{context.getFileName(self.ast)});
+        std.debug.print("\tFile: {s}\n", .{context.getFileName(self.dataIndex)});
         std.debug.print("\tAST:\n", .{});
         std.debug.print("\tDependencies:\n", .{});
         for (self.dependencies.items[0..@min(16, self.dependencies.items.len)]) |dependency| {
             std.debug.print("\t\t{s}\n", .{dependency});
         }
         std.debug.print("\tSymbols:\n", .{});
-        for (self.symbols.items(.name)) |symbol| {
-            std.debug.print("\t\t{s}\n", .{context.getTokens(ast.tokens).get(symbol).lexeme(context, self.ast)});
+        for (self.symbols.items(.name), 0..) |symbol, i| {
+            std.debug.print("\t\t{s}{s}\n", .{
+                if (self.symbols.items(.public)[i]) "pub " else "",
+                context.getTokens(ast.tokens).get(symbol).lexeme(context, self.dataIndex)
+            });
         }
-    }
-
-    pub fn dupe(self: *const Self, allocator: std.mem.Allocator) Error!Self {
-        return .{
-            .name = allocator.dupe(u8, self.name) catch return error.AllocatorFailure,
-            .ast = self.ast,
-            .symbolPtrs = self.symbolPtrs.clone(allocator) catch return error.AllocatorFailure,
-            .symbols = try self.symbols.dupe(allocator),
-            .dependencies = self.dependencies.clone(allocator) catch return error.AllocatorFailure,
-        };
     }
 };
 
-pub const ModuleList = arraylist.MultiArrayList(Module);
-pub const SymbolList = arraylist.MultiArrayList(Module.Symbol);
-pub const SymbolMap = std.StringHashMapUnmanaged(types.SymbolPtr);
-pub const ModuleMap = std.StringHashMapUnmanaged(types.ModulePtr);
+pub const ModuleList = collections.MultiArrayList(Module);
+pub const SymbolList = collections.MultiArrayList(Module.Symbol);
+pub const SymbolMap = std.StringHashMapUnmanaged(defines.SymbolPtr);
+pub const ModuleMap = std.StringHashMapUnmanaged(defines.ModulePtr);
 pub const DependencyList = std.ArrayList([]const u8);
 
 pub const Prepass = struct {
@@ -71,13 +65,13 @@ pub const Prepass = struct {
     moduleMap: ModuleMap,
     modules: ModuleList,
     context: *Context,
-    lock: types.Lock,
+    lock: defines.Lock,
     hadErr: std.atomic.Value(bool),
-    wg: types.WaitGroup,
-    pool: types.ThreadPool,
+    wg: defines.WaitGroup,
+    pool: defines.ThreadPool,
 
     /// Uses multithreaded allocator under the hood
-    pub fn init(context: *Context, initial: types.ASTPtr) Error!Self {
+    pub fn init(context: *Context, initial: defines.ASTPtr) Error!Self {
         var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
 
         var moduleMap = ModuleMap.empty;
@@ -116,10 +110,11 @@ pub const Prepass = struct {
             return error.ThreadingError;
         }
 
-        // root module AST keeps getting corrupted, hardcode it.
-        // self.modules.items(.ast)[self.moduleMap.get("root").?] = 0;
+        for (0..self.modules.len) |i| {
+            self.modules.items(.dependencies)[i].shrinkAndFree(self.safeAlloc.allocator(), self.modules.items(.dependencies)[i].items.len);
+        }
 
-        return try self.modules.slice().dupe(allocator);
+        return collections.deepCopy(self.modules.slice(), allocator);
     }
 
     /// Threaded recursive prepassing. Uses mutexes.
@@ -133,7 +128,7 @@ pub const Prepass = struct {
         const allocator = self.safeAlloc.allocator();
 
         var file = Module{
-            .ast = tokens.items(.start)[0],
+            .dataIndex = tokens.items(.start)[0],
             .name = name,
             .dependencies = DependencyList.initCapacity(allocator, @max(tokens.len / 32, 16)) catch {
                 self.hadErr.store(true, .release);
@@ -161,7 +156,14 @@ pub const Prepass = struct {
             switch (statement.type) {
                 .Import => {
                     const path = getModulePathWithExtension(allocator, statement.value, ast, self.context) catch {
-                        self.report("Couldn't get module path.", .{}, file.ast, null);
+                        self.report("Couldn't get module path.", .{}, file.dataIndex, null);
+                        fail = true;
+                        continue;
+                    };
+
+                    const module = getModuleName(statement.value, ast, self.context);
+                    file.dependencies.append(allocator, module) catch {
+                        self.report("Couldn't add dependency {s} to {s}.", .{module, file.name}, file.dataIndex, null);
                         fail = true;
                         continue;
                     };
@@ -177,33 +179,25 @@ pub const Prepass = struct {
                     };
 
                     const moduleTokens = scanner.scanAll() catch {
-                        self.report("Couldn't scan module at path {s}.", .{path}, file.ast, null);
+                        self.report("Couldn't scan module at path {s}.", .{path}, file.dataIndex, null);
                         fail = true;
                         continue;
                     };
 
                     var prs = parser.Parser.init(allocator, self.context, moduleTokens) catch {
-                        self.report("Couldn't parse module at path {s}.", .{path}, file.ast, null);
+                        self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex, null);
                         fail = true;
                         continue;
                     };
 
                     const imported = prs.parse() catch {
-                        self.report("Couldn't parse module at path {s}.", .{path}, file.ast, null);
+                        self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex, null);
                         fail = true;
                         continue;
                     };
-
-                    const module = getModuleName(statement.value, ast, self.context);
 
                     // ThreadPool already has a mutex.
                     self.pool.spawnWg(&self.wg, prepassImpl, .{self, self.context.getAST(imported), module});
-
-                    file.dependencies.append(allocator, module) catch {
-                        self.report("Couldn't add dependency {s} to {s}.", .{module, file.name}, file.ast, null);
-                        fail = true;
-                        continue;
-                    };
                 },
                 .VariableDefinition => {
                     const sigsStart = ast.extra[statement.value];
@@ -214,13 +208,13 @@ pub const Prepass = struct {
                         //if (file.symbols.len <= 16) {
                             //std.debug.print("Sig Start: {d}\n", .{sig.name});
                         //}
-                        const sigName = tokens.get(sig.name).lexeme(self.context, file.ast);
+                        const sigName = tokens.get(sig.name).lexeme(self.context, file.dataIndex);
 
                         const idx = file.symbols.addOne(allocator) catch {
                             self.report(
                                 "Couldn't add symbol {s} to module map. System is out of memory.",
                                 .{sigName},
-                                file.ast,
+                                file.dataIndex,
                                 sig.name,
                             );
                             fail = true;
@@ -231,7 +225,7 @@ pub const Prepass = struct {
                             self.report(
                                 "Couldn't add symbol {s} to module map. System is out of memory.",
                                 .{sigName},
-                                file.ast,
+                                file.dataIndex,
                                 sig.name,
                             );
                             fail = true;
@@ -239,6 +233,7 @@ pub const Prepass = struct {
                         };
 
                         file.symbols.set(idx, .{
+                            .public = sig.public,
                             .name = sig.name,
                             .value = ast.extra[statement.value + 2],
                         });
@@ -248,7 +243,7 @@ pub const Prepass = struct {
                     self.report(
                         "Only definitions are allowed at top-level.",
                         .{},
-                        file.ast,
+                        file.dataIndex,
                         null
                     );
                     fail = true;
@@ -274,6 +269,10 @@ pub const Prepass = struct {
             return;
         };
         self.modules.set(index, file);
+
+        if (self.moduleMap.count() > defines.rehashLimit) {
+            self.moduleMap.rehash(std.hash_map.StringContext{});
+        }
     }
 
     fn getModulePathWithExtension(allocator: std.mem.Allocator, id: u32, ast: parser.AST, context: *Context) Error![]const u8 {
@@ -286,11 +285,11 @@ pub const Prepass = struct {
     }
 
     /// Returned path is owned by the allocator.
-    fn getModulePath(allocator: std.mem.Allocator, id: types.ExpressionPtr, ast: parser.AST, context: *Context) Error![]const u8 {
+    fn getModulePath(allocator: std.mem.Allocator, id: defines.ExpressionPtr, ast: parser.AST, context: *Context) Error![]const u8 {
         const tokens = context.getTokens(ast.tokens);
         const file = tokens.items(.start)[0];
 
-        var parts = arraylist.ReverseStackArray([]const u8, std.fs.max_path_bytes).init();
+        var parts = collections.ReverseStackArray([]const u8, std.fs.max_path_bytes).init();
         var current = id;
 
         while (true) {
@@ -317,7 +316,7 @@ pub const Prepass = struct {
         return std.fs.path.join(allocator, parts.items) catch error.AllocatorFailure;
     }
 
-    fn getModuleName(id: types.ExpressionPtr, ast: parser.AST, context: *Context) []const u8 {
+    fn getModuleName(id: defines.ExpressionPtr, ast: parser.AST, context: *Context) []const u8 {
         const tokens = context.getTokens(ast.tokens);
         const file = tokens.items(.start)[0];
         const expr = ast.expressions.get(id);
@@ -332,7 +331,7 @@ pub const Prepass = struct {
         return context.getFile(file)[start..end];
     }
 
-    fn getModuleNameStartIndex(id: types.ExpressionPtr, ast: parser.AST, context: *Context) u32 {
+    fn getModuleNameStartIndex(id: defines.ExpressionPtr, ast: parser.AST, context: *Context) u32 {
         const tokens = context.getTokens(ast.tokens);
         var current = id;
         var start = tokens.len;

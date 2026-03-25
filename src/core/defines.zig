@@ -1,9 +1,11 @@
 const std = @import("std"); 
 const common = @import("common.zig");
 
+const Settings = common.CompilerSettings;
+
 //pub const Lock = std.Thread.Mutex;
 pub const Lock =
-    if (common.CompilerSettings.threading) std.Thread.RwLock
+    if (Settings.threading) std.Thread.RwLock
     else struct {
         pub fn lock(_: *Lock) void {}
         pub fn unlock(_: *Lock) void {}
@@ -13,7 +15,7 @@ pub const Lock =
     };
 
 pub const ThreadPool =
-    if (common.CompilerSettings.threading) std.Thread.Pool
+    if (Settings.threading) std.Thread.Pool
     else struct {
         pub fn init(_: *ThreadPool, _: anytype) common.CompilerError!void { }
         pub fn spawnWg(_: *ThreadPool, _: *WaitGroup, function: anytype, args: anytype) void {
@@ -22,7 +24,7 @@ pub const ThreadPool =
     };
 
 pub const WaitGroup =
-    if (common.CompilerSettings.threading) std.Thread.WaitGroup
+    if (Settings.threading) std.Thread.WaitGroup
     else struct {
         pub fn wait(_: *WaitGroup) void {}
     };
@@ -45,3 +47,5 @@ pub const SignaturePtr = u32;
 
 pub const SymbolPtr = u32;
 pub const ModulePtr = u32;
+
+pub const rehashLimit = 512;

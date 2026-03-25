@@ -4,20 +4,20 @@
 const std = @import("std");
 const common = @import("../core/common.zig");
 const lexer = @import("../lexer/lexer.zig");
-const arraylist = @import("../util/arraylist.zig");
-const types = @import("../core/types.zig");
+const collections = @import("../util/collections.zig");
+const defines = @import("../core/defines.zig");
 
 const Allocator = std.mem.Allocator;
-const ExpressionResult = common.CompilerError!types.ExpressionPtr;
+const ExpressionResult = common.CompilerError!defines.ExpressionPtr;
 
-pub const StatementResult = common.CompilerError!types.StatementPtr;
+pub const StatementResult = common.CompilerError!defines.StatementPtr;
 
-pub const VariableSignatureMap = arraylist.MultiArrayList(VariableSignature);
-pub const ExpressionMap = arraylist.MultiArrayList(Expression);
-pub const StatementMap = arraylist.MultiArrayList(Statement);
+pub const VariableSignatureMap = collections.MultiArrayList(VariableSignature);
+pub const ExpressionMap = collections.MultiArrayList(Expression);
+pub const StatementMap = collections.MultiArrayList(Statement);
 
 // Because manually tagged unions are more
-// performant with arraylist.MultiArrayList(T)
+// performant with collections.MultiArrayList(T)
 pub const Expression = struct {
     pub const Type = enum {
         Assignment,
@@ -43,11 +43,11 @@ pub const Expression = struct {
     };
 
     type: Type,
-    value: types.OpaquePtr,
+    value: defines.OpaquePtr,
 };
 
 // Because manually tagged unions are more
-// performant with arraylist.MultiArrayList(T)
+// performant with collections.MultiArrayList(T)
 pub const Statement = struct {
     pub const Type = enum {
         Block, // ok
@@ -65,35 +65,24 @@ pub const Statement = struct {
     };
 
     type: Type,
-    value: types.OpaquePtr,
+    value: defines.OpaquePtr,
 };
 
 pub const VariableSignature = struct {
     public: bool,
-    name: types.TokenPtr,
-    type: types.ExpressionPtr,
+    name: defines.TokenPtr,
+    type: defines.ExpressionPtr,
 };
 
 pub const AST = struct {
     const Self = @This();
 
-    tokens: types.TokenPtr,
+    tokens: defines.TokenPtr,
     expressions: ExpressionMap.Slice,
     statements: StatementMap.Slice,
     signatures: VariableSignatureMap.Slice,
-    statementMask: std.ArrayList(types.StatementPtr).Slice,
-    extra: std.ArrayList(types.OpaquePtr).Slice,
-
-    pub fn dupe(self: *const Self, allocator: Allocator) common.CompilerError!Self {
-        return .{
-            .tokens = self.tokens,
-            .expressions = try self.expressions.dupe(allocator),
-            .statements = try self.statements.dupe(allocator),
-            .signatures = try self.signatures.dupe(allocator),
-            .statementMask = allocator.dupe(types.StatementPtr, self.statementMask) catch return error.AllocatorFailure,
-            .extra = allocator.dupe(types.OpaquePtr, self.extra) catch return error.AllocatorFailure,
-        };
-    }
+    statementMask: std.ArrayList(defines.StatementPtr).Slice,
+    extra: std.ArrayList(defines.OpaquePtr).Slice,
 
     pub fn eql(self: *const Self, other: *const Self) bool {
         return
@@ -101,8 +90,8 @@ pub const AST = struct {
             and self.expressions.eql(&other.expressions)
             and self.statements.eql(&other.statements)
             and self.signatures.eql(&other.signatures)
-            and std.mem.eql(types.StatementPtr, self.statementMask, other.statementMask)
-            and std.mem.eql(types.OpaquePtr, self.extra, other.extra);
+            and std.mem.eql(defines.StatementPtr, self.statementMask, other.statementMask)
+            and std.mem.eql(defines.OpaquePtr, self.extra, other.extra);
     }
 
     pub fn print(self: *const Self, context: *common.CompilerContext) void {
@@ -163,7 +152,7 @@ pub const Parser = struct {
     const Self = @This();
 
     tokens: lexer.TokenList.Slice,
-    current: types.TokenPtr,
+    current: defines.TokenPtr,
 
     arena: std.heap.ArenaAllocator,
 
@@ -171,15 +160,15 @@ pub const Parser = struct {
     statementMap: StatementMap,
     signaturePool: VariableSignatureMap,
 
-    statementMask: std.ArrayList(types.StatementPtr),
+    statementMask: std.ArrayList(defines.StatementPtr),
 
-    extra: std.ArrayList(types.OpaquePtr),
-    scratch: std.ArrayList(types.OpaquePtr),
+    extra: std.ArrayList(defines.OpaquePtr),
+    scratch: std.ArrayList(defines.OpaquePtr),
 
-    file: types.FilePtr,
+    file: defines.FilePtr,
     context: *common.CompilerContext,
 
-    pub fn init(base: Allocator, context: *common.CompilerContext, tokensPtr: types.TokenListPtr) common.CompilerError!Parser {
+    pub fn init(base: Allocator, context: *common.CompilerContext, tokensPtr: defines.TokenListPtr) common.CompilerError!Parser {
         var arena = std.heap.ArenaAllocator.init(base);
         const tokens = context.getTokens(tokensPtr);
 
@@ -187,20 +176,20 @@ pub const Parser = struct {
             .signaturePool = try VariableSignatureMap.init(arena.allocator(), tokens.len / 2),
             .expressionMap = try ExpressionMap.init(arena.allocator(), tokens.len / 2),
             .statementMap = try StatementMap.init(arena.allocator(), tokens.len / 4),
-            .statementMask = std.ArrayList(types.StatementPtr).initCapacity(arena.allocator(), tokens.len / 4) catch return error.AllocatorFailure,
+            .statementMask = std.ArrayList(defines.StatementPtr).initCapacity(arena.allocator(), tokens.len / 4) catch return error.AllocatorFailure,
             .file = tokens.items(.start)[0],
             .context = context,
             .tokens = tokens,
             .current = 1,
             .arena = arena,
-            .extra = std.ArrayList(types.OpaquePtr).initCapacity(arena.allocator(), tokens.len) catch return error.AllocatorFailure,
-            .scratch = std.ArrayList(types.OpaquePtr).initCapacity(arena.allocator(), 128) catch return error.AllocatorFailure,
+            .extra = std.ArrayList(defines.OpaquePtr).initCapacity(arena.allocator(), tokens.len) catch return error.AllocatorFailure,
+            .scratch = std.ArrayList(defines.OpaquePtr).initCapacity(arena.allocator(), 128) catch return error.AllocatorFailure,
         };
     }
 
     /// Returns a final table containing all info about the parsing.
     /// Parser is undefined and should be reinitialized after the call.
-    pub fn parse(self: *Self) common.CompilerError!types.ASTPtr {
+    pub fn parse(self: *Self) common.CompilerError!defines.ASTPtr {
         defer self.arena.deinit();
 
         // any type
@@ -209,7 +198,7 @@ pub const Parser = struct {
             .value = 0,
         });
 
-        var errCount: types.OpaquePtr = 0;
+        var errCount: defines.OpaquePtr = 0;
         var lastErr: common.CompilerError = undefined;
 
         while (!self.isAtEnd()) {
@@ -336,7 +325,7 @@ pub const Parser = struct {
         _ = try self.consume(.RBrace, error.MissingBrace, "Missing enclosing brace '}' after block.");
         const stmts = try self.commitScratch(scratchStart);
 
-        const start: types.OpaquePtr = @intCast(self.extra.items.len);
+        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), stmts.start) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), stmts.end) catch return error.AllocatorFailure;
 
@@ -386,7 +375,7 @@ pub const Parser = struct {
 
         const body = try self.statement();
 
-        var otherwise: ?types.StatementPtr = null;
+        var otherwise: ?defines.StatementPtr = null;
         if (self.match(&.{.Else})) {
             switch (self.tokens.items(.type)[self.peek()]) {
                 .LBrace, .If => { },
@@ -399,7 +388,7 @@ pub const Parser = struct {
             otherwise.? = try self.statement();
         }
 
-        const start: types.OpaquePtr = @intCast(self.extra.items.len);
+        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), condition) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), body) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), if (otherwise) |_| 1 else 0) catch return error.AllocatorFailure;
@@ -426,7 +415,7 @@ pub const Parser = struct {
 
         const body = try self.statement();
 
-        const start: types.OpaquePtr = @intCast(self.extra.items.len);
+        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), condition) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), body) catch return error.AllocatorFailure;
         
@@ -477,7 +466,7 @@ pub const Parser = struct {
         const expr = try self.expression();
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
-        const start: types.OpaquePtr = @intCast(self.extra.items.len);
+        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), signatures.start) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), signatures.end) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
@@ -534,7 +523,7 @@ pub const Parser = struct {
         if (self.match(&.{.Equal})) {
             const rhs = try self.ifExpression();
 
-            const start: types.OpaquePtr = @intCast(self.extra.items.len);
+            const start: defines.OpaquePtr = @intCast(self.extra.items.len);
             self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
             self.extra.append(self.allocator(), rhs) catch return error.AllocatorFailure;
 
@@ -561,7 +550,7 @@ pub const Parser = struct {
         _ = try self.consume(.Else, error.MissingBranch, "Expected an 'else' branch in conditional expression.");
         const otherwise = try self.expression();
 
-        const start: types.OpaquePtr = @intCast(self.extra.items.len);
+        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), condition) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), then) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), otherwise) catch return error.AllocatorFailure;
@@ -681,7 +670,7 @@ pub const Parser = struct {
 
             const rhs = try self.unary();
 
-            const start: types.OpaquePtr = @intCast(self.extra.items.len);
+            const start: defines.OpaquePtr = @intCast(self.extra.items.len);
             self.extra.append(self.allocator(), @intFromEnum(operator)) catch return error.AllocatorFailure;
             self.extra.append(self.allocator(), rhs) catch return error.AllocatorFailure;
 
@@ -712,7 +701,7 @@ pub const Parser = struct {
                 _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' in function call.");
                 const args = try self.commitScratch(argsStart);
 
-                const start: types.OpaquePtr = @intCast(self.extra.items.len);
+                const start: defines.OpaquePtr = @intCast(self.extra.items.len);
                 self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
                 self.extra.append(self.allocator(), args.start) catch return error.AllocatorFailure;
                 self.extra.append(self.allocator(), args.end) catch return error.AllocatorFailure;
@@ -732,7 +721,7 @@ pub const Parser = struct {
 
                 const member = self.previous();
 
-                const start: types.OpaquePtr = @intCast(self.extra.items.len);
+                const start: defines.OpaquePtr = @intCast(self.extra.items.len);
                 self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
                 self.extra.append(self.allocator(), member) catch return error.AllocatorFailure;
 
@@ -746,7 +735,7 @@ pub const Parser = struct {
                 const index = try self.expression();
                 _ = try self.consume(.RBracket, error.MissingBracket, "Expected closing bracket ']'.");
 
-                const start: types.OpaquePtr = @intCast(self.extra.items.len);
+                const start: defines.OpaquePtr = @intCast(self.extra.items.len);
                 self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
                 self.extra.append(self.allocator(), index) catch return error.AllocatorFailure;
 
@@ -791,7 +780,7 @@ pub const Parser = struct {
                 _ = try self.consume(.RParen, error.MissingBrace, "Expected enclosing parenthesis ')' in expression list.");
                 const expressions = try self.commitScratch(exprsStart);
 
-                const start: types.OpaquePtr = @intCast(self.extra.items.len);
+                const start: defines.OpaquePtr = @intCast(self.extra.items.len);
                 self.extra.append(self.allocator(), expressions.start) catch return error.AllocatorFailure;
                 self.extra.append(self.allocator(), expressions.end) catch return error.AllocatorFailure;
 
@@ -820,7 +809,7 @@ pub const Parser = struct {
         while (self.match(&.{.DoubleColon})) {
             const member = try self.consume(.Identifier, error.MissingIdentifier, "Expected member name in scope resolution.");
             
-            const start: types.OpaquePtr = @intCast(self.extra.items.len);
+            const start: defines.OpaquePtr = @intCast(self.extra.items.len);
             self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
             self.extra.append(self.allocator(), member) catch return error.AllocatorFailure;
 
@@ -860,7 +849,7 @@ pub const Parser = struct {
         self.current -= 1;
         const body = try self.statement();
 
-        const start: types.OpaquePtr = @intCast(self.extra.items.len);
+        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;
@@ -881,10 +870,10 @@ pub const Parser = struct {
         // Check unionDefinition for details.
         // TODO: Fix this.
         // TODO: Maybe two loops using scratch would be better...
-        // var variablesTmp = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
-        // var definitions = std.ArrayList(types.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
-        var variablesTmp = arraylist.ReverseStackArray(types.OpaquePtr, 512).init();
-        var definitions = arraylist.ReverseStackArray(types.OpaquePtr, 512).init();
+        // var variablesTmp = std.ArrayList(defines.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+        // var definitions = std.ArrayList(defines.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
+        var variablesTmp = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
+        var definitions = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
 
         while (!self.check(.RBrace)) {
             switch (self.tokens.items(.type)[self.peek()]) {
@@ -927,7 +916,7 @@ pub const Parser = struct {
         const variables = try self.commitFromSlice(variablesTmp.items);
         const defs = try self.commitFromSlice(definitions.items);
 
-        const start: types.OpaquePtr = @intCast(self.extra.items.len);
+        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), variables.start) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), variables.end) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), defs.start) catch return error.AllocatorFailure;
@@ -947,8 +936,8 @@ pub const Parser = struct {
 
         // Check unionDefinition for details.
         // TODO: Fix this.
-        var variablesTmp = arraylist.ReverseStackArray(types.OpaquePtr, 512).init();
-        var definitions = arraylist.ReverseStackArray(types.OpaquePtr, 512).init();
+        var variablesTmp = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
+        var definitions = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
 
         while (!self.check(.RBrace)) {
             switch (self.tokens.items(.type)[self.peek()]) {
@@ -987,7 +976,7 @@ pub const Parser = struct {
         const variables = try self.commitFromSlice(variablesTmp.items);
         const defs = try self.commitFromSlice(definitions.items);
 
-        const start: types.OpaquePtr = @intCast(self.extra.items.len);
+        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), variables.start) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), variables.end) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), defs.start) catch return error.AllocatorFailure;
@@ -1004,7 +993,7 @@ pub const Parser = struct {
 
     fn unionDefinition(self: *Self) ExpressionResult {
         var tagged: u32 = 0;
-        var tag: ?types.ExpressionPtr = null;
+        var tag: ?defines.ExpressionPtr = null;
 
         if (self.match(&.{.LParen})) {
             tagged = 1;
@@ -1019,8 +1008,8 @@ pub const Parser = struct {
         // For some reason, variablesTmp overwrites the extra buffer.
         // Fixed buffer for temporary fix.
         // TODO: fix this
-        var variablesTmp = arraylist.ReverseStackArray(types.OpaquePtr, 512).init();
-        var definitions = arraylist.ReverseStackArray(types.OpaquePtr, 512).init();
+        var variablesTmp = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
+        var definitions = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
 
         while (!self.check(.RBrace)) {
             switch (self.tokens.items(.type)[self.peek()]) {
@@ -1059,7 +1048,7 @@ pub const Parser = struct {
         const variables = try self.commitFromSlice(variablesTmp.items);
         const defs = try self.commitFromSlice(definitions.items);
 
-        const start: types.OpaquePtr = @intCast(self.extra.items.len);
+        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), tagged) catch return error.AllocatorFailure;
         if (tagged == 1) {
             if (tag) |t| {
@@ -1123,7 +1112,7 @@ pub const Parser = struct {
                 _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
                 const returns = try self.ifExpression();
 
-                const start: types.OpaquePtr = @intCast(self.extra.items.len);
+                const start: defines.OpaquePtr = @intCast(self.extra.items.len);
                 self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
                 self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
                 self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;
@@ -1174,11 +1163,11 @@ pub const Parser = struct {
         return self.arena.allocator();
     }
 
-    fn commonBinary(self: *Self, expr: types.ExpressionPtr, comptime next: anytype) ExpressionResult {
+    fn commonBinary(self: *Self, expr: defines.ExpressionPtr, comptime next: anytype) ExpressionResult {
         const operator = self.tokens.items(.type)[self.previous()];
         const rhs = try next(self);
 
-        const binaryStart: types.OpaquePtr = @intCast(self.extra.items.len);
+        const binaryStart: defines.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), @intFromEnum(operator)) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), rhs) catch return error.AllocatorFailure;
@@ -1214,8 +1203,8 @@ pub const Parser = struct {
         }
     }
 
-    fn commitFromSlice(self: *Self, items: []const types.OpaquePtr) common.CompilerError!types.Range {
-        const start: types.OpaquePtr = @intCast(self.extra.items.len);
+    fn commitFromSlice(self: *Self, items: []const defines.OpaquePtr) common.CompilerError!defines.Range {
+        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
         self.extra.appendSlice(self.allocator(), items) catch return error.AllocatorFailure;
         return .{
             .start = start,
@@ -1223,13 +1212,13 @@ pub const Parser = struct {
         };
     }
 
-    fn commitScratch(self: *Self, scratchStart: usize) common.CompilerError!types.Range {
+    fn commitScratch(self: *Self, scratchStart: usize) common.CompilerError!defines.Range {
         const span = try self.commitFromSlice(self.scratch.items[scratchStart..]);
         self.scratch.shrinkRetainingCapacity(@intCast(scratchStart));
         return span;
     }
 
-    fn alloc(self: *Self, comptime T: type) common.CompilerError!types.OpaquePtr {
+    fn alloc(self: *Self, comptime T: type) common.CompilerError!defines.OpaquePtr {
         if (comptime T == Expression) {
             return @intCast(self.expressionMap.addOne(self.allocator()) catch return error.AllocatorFailure);
         } else if (comptime T == Statement) {
@@ -1241,9 +1230,12 @@ pub const Parser = struct {
         }
     }
 
-    fn variableSignature(self: *Self, public: bool, enforceType: bool) common.CompilerError!types.SignaturePtr {
-        const name = try self.consume(.Identifier, error.MissingIdentifier, "Expected an identifier at variable signature.");
-        var typename: types.ExpressionPtr = undefined;
+    fn variableSignature(self: *Self, public: bool, enforceType: bool) common.CompilerError!defines.SignaturePtr {
+        const name = 
+            if (self.match(&.{.Identifier, .Discard})) self.previous()
+            else return error.MissingIdentifier;
+
+        var typename: defines.ExpressionPtr = undefined;
 
         if (!enforceType and !self.check(.Colon)) {
             typename = 0;
@@ -1262,19 +1254,19 @@ pub const Parser = struct {
         return signature;
     }
 
-    fn consume(self: *Self, tokenType: lexer.TokenType, err: common.CompilerError, message: []const u8) common.CompilerError!types.TokenPtr {
+    fn consume(self: *Self, tokenType: lexer.TokenType, err: common.CompilerError, message: []const u8) common.CompilerError!defines.TokenPtr {
         if (self.check(tokenType)) return self.advance();
 
         self.report("{s}\n\tExpected {s}, Received {s}", .{ message, @tagName(tokenType), @tagName(self.tokens.items(.type)[self.peek()]) });
         return err;
     }
 
-    fn previous(self: *Self) types.TokenPtr {
+    fn previous(self: *Self) defines.TokenPtr {
         if (self.current == 0) unreachable;
         return self.current - 1;
     }
 
-    fn peek(self: *Self) types.TokenPtr {
+    fn peek(self: *Self) defines.TokenPtr {
         return self.current;
     }
 
@@ -1283,7 +1275,7 @@ pub const Parser = struct {
         return self.tokens.items(.type)[self.peek()] == .EOF;
     }
 
-    fn advance(self: *Self) types.TokenPtr {
+    fn advance(self: *Self) defines.TokenPtr {
         if (!self.isAtEnd()) self.current += 1;
         return self.previous();
     }

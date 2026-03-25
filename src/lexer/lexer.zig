@@ -1,9 +1,9 @@
 const std = @import("std");
 const common = @import("../core/common.zig");
-const arraylist = @import("../util/arraylist.zig");
-const types = @import("../core/types.zig");
+const collections = @import("../util/collections.zig");
+const defines = @import("../core/defines.zig");
 
-pub const TokenList = arraylist.MultiArrayList(Token);
+pub const TokenList = collections.MultiArrayList(Token);
 
 pub const TokenType = enum(u8) {
     LParen, RParen,
@@ -33,14 +33,14 @@ pub const TokenType = enum(u8) {
 };
 
 pub const Position = struct {
-    line: types.Offset,
-    column: types.Offset,
+    line: defines.Offset,
+    column: defines.Offset,
 };
 
 pub const Token = struct {
     type: TokenType,
-    start: types.Offset,
-    end: types.Offset,
+    start: defines.Offset,
+    end: defines.Offset,
 
     const Self = @This();
 
@@ -50,21 +50,21 @@ pub const Token = struct {
         .end = 0,
     };
 
-    pub fn toString(self: *const Self, allocator: std.mem.Allocator, file: types.FilePtr) []const u8 {
+    pub fn toString(self: *const Self, allocator: std.mem.Allocator, file: defines.FilePtr) []const u8 {
         const lex = self.lexeme(file);
         const length =  @tagName(self.type).len + lex.len + 4;
         const buffer = allocator.alloc(u8, length) catch return "";
         return std.fmt.bufPrint(buffer, "<{s}: {s}>", .{@tagName(self.type), lex}) catch unreachable;
     }
 
-    pub fn lexeme(self: *const Self, context: *common.CompilerContext, file: types.FilePtr) []const u8 {
+    pub fn lexeme(self: *const Self, context: *common.CompilerContext, file: defines.FilePtr) []const u8 {
         return context.getFile(file)[self.start..self.end];
     }
 
-    pub fn position(self: *const Self, context: *common.CompilerContext, file: types.FilePtr) Position {
+    pub fn position(self: *const Self, context: *common.CompilerContext, file: defines.FilePtr) Position {
         const source = context.getFile(file)[0..self.start];
-        var line: types.Offset = 1;
-        var col: types.Offset = 0;
+        var line: defines.Offset = 1;
+        var col: defines.Offset = 0;
 
         for (source) |ch| {
             if (ch == '\n') {
@@ -110,12 +110,12 @@ pub const Scanner = struct {
     });
 
     tokens: TokenList,
-    file: types.FilePtr,
+    file: defines.FilePtr,
     source: []const u8,
 
-    start: types.Offset,
-    current: types.Offset,
-    end: types.Offset,
+    start: defines.Offset,
+    current: defines.Offset,
+    end: defines.Offset,
 
     arena: std.heap.ArenaAllocator,
     context: *common.CompilerContext,
@@ -154,7 +154,7 @@ pub const Scanner = struct {
         return self;
     }
 
-    pub fn scanAll(self: *Self) common.CompilerError!types.TokenListPtr {
+    pub fn scanAll(self: *Self) common.CompilerError!defines.TokenListPtr {
         while (!self.isAtEnd()) {
             try self.scanToken();
             self.skipWhitespace();

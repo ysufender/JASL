@@ -1,6 +1,7 @@
 const std = @import("std");
 const common = @import("core/common.zig");
 const perfAllc = @import("util/allocator.zig");
+const dependency = @import("parser/dependency.zig");
 
 const Lexer = @import("lexer/lexer.zig").Scanner;
 const Parser = @import("parser/parser.zig").Parser;
@@ -18,7 +19,7 @@ pub fn main() !void {
 
         return common.log.err("Compiler exited with code {d} <{s}>", .{@intFromError(err), @errorName(err)});
     };
-    common.log.info("Compiler exited succesfully.", .{});
+    common.log.info("Compiler exited successfully.", .{});
 }
 
 fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
@@ -41,6 +42,9 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
 
     var prepass = try Prepass.init(&context, ast);
     const modules = try prepass.prepass(allocator);
+
+    var resolver = dependency.Resolver.init(&context, &modules);
+    const dependenciesList = try resolver.generate(allocator);
 
     if (true) {
         var iterator = modules.iterator();
@@ -71,15 +75,26 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
         common.log.info("\tTotal Tokens:                    {d}", .{totalTokens});
         common.log.info("\tTotal Expressions:               {d}", .{totalExpressions});
         common.log.info("\tTotal Extras:                    {d}", .{totalExtras});
+        common.log.info("", .{});
 
         common.log.info("\tProcessed Files:", .{});
         for (context.filenameMap.items) |file| {
             common.log.info("\t\t{s}", .{file});
         }
+        common.log.info("", .{});
 
-        var it = modules.iterator();
-        while (it.next()) |module| {
-            module.print(&context);
+        // var it = modules.iterator();
+        // while (it.next()) |_| {
+        //      module.print(&context);
+        // }
+        // common.log.info("", .{});
+
+        common.log.info("Dependency Graph:", .{});
+        for (dependenciesList.levels, 0..) |dependencies, i| {
+            common.log.info("\tLevel {d}", .{i});
+            for (dependencies.items) |mod| {
+                common.log.info("\t\t{s} at {s}", .{mod.name, context.getFileName(mod.path)});
+            }
         }
     }
 }

@@ -1,4 +1,6 @@
 const std = @import("std");
+const collections = @import("collections.zig");
+
 const Allocator = std.mem.Allocator;
 const CompilerError = @import("../core/common.zig").CompilerError;
 
@@ -41,7 +43,7 @@ pub fn MultiArrayList(comptime T: type) type {
             idx: u32 = 0,
 
             pub fn next(self: *Iterator) ?T {
-                if (self.idx >= self.ctx.len) {
+                if (self.eos()) {
                     return null;
                 }
 
@@ -51,6 +53,10 @@ pub fn MultiArrayList(comptime T: type) type {
 
             pub fn eos(self: *const Iterator) bool {
                 return self.idx >= self.ctx.len;
+            }
+
+            pub fn reset(self: *Iterator) void {
+                self.idx = 0;
             }
         };
 
@@ -94,56 +100,6 @@ pub fn MultiArrayList(comptime T: type) type {
             pub fn iterator(self: *const Slice) Iterator {
                 return .{
                     .ctx = self.*,
-                };
-            }
-
-            pub fn dupe(self: *const Slice, allocator: Allocator) CompilerError!Slice {
-                var new: Inner = undefined;
-
-                if (@as(?[]const u8,
-                    if (std.meta.hasMethod(T, "dupe")) "dupe"
-                    else if (std.meta.hasMethod(T, "clone")) "clone"
-                    else null
-                )) |name| {
-                    inline for (fields) |field| {
-                        @field(new, field.name) =
-                            allocator.alloc(field.type, self.len)
-                            catch return error.AllocatorFailure;
-                    }
-
-                    for (0..self.len) |i| {
-                        const item = self.get(@intCast(i));
-                        const newItem =
-                            @field(T, name)(&item, allocator)
-                            catch return error.AllocatorFailure;
-
-                        inline for (fields) |field| {
-                            @field(new, field.name)[i] = @field(newItem, field.name);
-                        }
-                    }
-                }
-                else {
-                    inline for (newFields) |field| {
-                        if (@as(?[]const u8,
-                            if (std.meta.hasMethod(field.type, "dupe")) "dupe"
-                            else if (std.meta.hasMethod(field.type, "clone")) "clone"
-                            else null
-                        )) |name| {
-                            @field(new, field.name) =
-                                @field(field.type, name)(@field(self.inner, field.name), allocator)
-                                catch return error.AllocatorFailure;
-                        }
-                        else {
-                            @field(new, field.name) =
-                                allocator.dupe(@typeInfo(field.type).pointer.child, @field(self.inner, field.name)[0..self.len])
-                                catch return error.AllocatorFailure;
-                        }
-                    }
-                }
-
-                return .{
-                    .inner = new,
-                    .len = self.len,
                 };
             }
 
@@ -299,32 +255,6 @@ pub fn MultiArrayList(comptime T: type) type {
         pub fn iterator(self: *const Self) Iterator {
             return .{ 
                 .ctx = self.slice(),
-            };
-        }
-
-        pub fn dupe(self: *const Self, allocator: Allocator) CompilerError!Self {
-            var new: Inner = undefined;
-
-            inline for (newFields) |field| {
-                if (@as(?[]const u8,
-                    if (std.meta.hasMethod(field.type, "dupe")) "dupe"
-                    else if (std.meta.hasMethod(field.type, "clone")) "clone"
-                    else null
-                )) |name| {
-                    @field(new, field.name) =
-                        @field(field.type, name)(@field(self.inner, field.name), allocator)
-                        catch return error.AllocatorFailure;
-                }
-                else {
-                    @field(new, field.name) =
-                        allocator.dupe(@typeInfo(field.type).pointer.child, @field(self.inner, field.name))
-                        catch return error.AllocatorFailure;
-                }
-            }
-
-            return .{
-                .inner = new,
-                .len = self.len,
             };
         }
     };
