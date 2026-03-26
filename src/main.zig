@@ -83,19 +83,8 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
         }
         common.log.info("", .{});
 
-        // var it = modules.iterator();
-        // while (it.next()) |_| {
-        //      module.print(&context);
-        // }
-        // common.log.info("", .{});
-
         common.log.info("Dependency Graph:", .{});
-        for (dependenciesList.levels, 0..) |dependencies, i| {
-            common.log.info("\tLevel {d}", .{i});
-            for (dependencies.items) |mod| {
-                common.log.info("\t\t{s} at {s}", .{mod.name, context.getFileName(mod.path)});
-            }
-        }
+        _ = dependenciesList;
     }
 }
 

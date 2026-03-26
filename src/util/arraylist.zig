@@ -55,6 +55,12 @@ pub fn MultiArrayList(comptime T: type) type {
                 return self.idx >= self.ctx.len;
             }
 
+            /// Return the last index returned
+            pub fn last(self: *const Iterator) u32 {
+                return @max(self.idx - 1, 0);
+            }
+
+            /// Roll back to index 0
             pub fn reset(self: *Iterator) void {
                 self.idx = 0;
             }

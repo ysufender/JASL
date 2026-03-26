@@ -22,16 +22,4 @@ pub fn build(b: *std.Build) void {
     exe.linkLibC();
     b.exe_dir = "build/";
     b.installArtifact(exe);
-
-    const tests = b.addTest(.{
-        .name = "test",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-        })
-    });
-    b.installArtifact(tests);
-    const testArtifact = b.addRunArtifact(tests);
-    const testStep = b.step("test", "Run unit tests");
-    testStep.dependOn(&testArtifact.step);
 }

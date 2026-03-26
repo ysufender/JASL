@@ -17,44 +17,17 @@ const LevelList = []const Level;
 pub const Graph = struct {
     pub const Node = struct {
         name: []const u8,
-        path: u32,
+        depends: []const *const Node,
 
-        /// To prevent collections.deepCopy from copying the name
-        /// since it is already a slice into context.
-        pub fn dupe(self: *const Node, _: std.mem.Allocator) Error!Node {
+        pub fn dupe(self: *const Node, allocator: std.mem.Allocator) Error!Node {
             return .{
                 .name = self.name,
-                .path = self.path,
+                .depends = try collections.deepCopy(self.depends, allocator),
             };
         }
     };
 
-//    pub const Iterator = struct {
-//        items: LevelList,
-//        level: u32,
-//        cur: u32,
-//
-//        pub fn init(items: LevelList) Iterator {
-//            return .{
-//                .items = items,
-//                .level = 0,
-//                .cur = 0,
-//            };
-//        }
-//
-//        pub fn next(self: *Iterator) ?*Node {
-//            self.level += @intCast(self.cur >= self.items[self.level].len);
-//
-//            if (self.level >= self.items.items.len) {
-//                return null;
-//            }
-//
-//            defer self.cur += 1;
-//            return self.items[self.level][self.cur];
-//        }
-//    };
-
-    levels: LevelList,
+    head: *const Node = @ptrFromInt(@alignOf(*Node)),
 };
 
 pub const Resolver = struct {
@@ -63,56 +36,61 @@ pub const Resolver = struct {
     modules: *const ModuleList.Slice,
     context: *Context,
     arena: std.heap.ArenaAllocator,
+    resolved: std.StringHashMap(void),
+    lock: defines.Lock,
 
     pub fn init(context: *Context, modules: *const ModuleList.Slice) Self {
         return .{
             .context = context,
             .modules = modules,
             .arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator),
+            .resolved = undefined,
+            .lock = .{},
         };
     }
 
-    pub fn generate(self: *Self, allocator: std.mem.Allocator) Error!Graph {
+    pub fn generate(self: *Self, owner: std.mem.Allocator) Error!Graph {
+        const allocator = self.arena.allocator();
+        self.resolved = .init(allocator);
         defer self.arena.deinit();
 
+        self.resolved = .init(allocator);
+        self.resolved.ensureTotalCapacity(self.modules.len) catch return error.AllocatorFailure;
+
+        var graph = Graph{};
+
         var maxLevel: u32 = 0;
-        var countsPerLevel: []u32 = undefined; 
 
         // Detect max dependency count and preallocate the levels array.
-        var iterator = self.modules.iterator();
-        while (iterator.next()) |module| {
-            maxLevel = @intCast(@max(maxLevel, module.dependencies.items.len));
+        for (self.modules.items(.dependencies)) |deps| {
+            maxLevel = @intCast(@max(maxLevel, deps.items.len));
         }
 
-        countsPerLevel = self.arena.allocator().alloc(u32, maxLevel + 1) catch return error.AllocatorFailure;
-        for (0..countsPerLevel.len) |i| {
-            countsPerLevel[i] = 0;
+        for (self.modules.items(.dependencies), 0..) |deps, i| {
+            if (deps.items.len < maxLevel) {
+                @branchHint(.likely);
+                continue;
+            }
+
+            if (self.resolved.contains(self.modules.items(.name)[i])) {
+                continue;
+            }
+
+            graph.head = try self.generateNode(@intCast(i));
         }
 
-        // Then detect counts per level.
-        iterator.reset();
-        while (iterator.next()) |module| {
-            countsPerLevel[module.dependencies.items.len] += 1;
-        }
+        return collections.deepCopy(graph, owner);
+    }
 
-        // And bulk-allocate necessary node space.
-        const levels = self.arena.allocator().alloc(Level, maxLevel + 1) catch return error.AllocatorFailure;
+    fn generateNode(self: *Self, _: u32) Error!*const Graph.Node {
+        const allocator = self.arena.allocator();
 
-        for (0..levels.len) |i| {
-            const levelBuf = self.arena.allocator().alloc(Graph.Node, countsPerLevel[i]) catch return error.AllocatorFailure;
-            levels[i] = .initBuffer(levelBuf);
-        }
-
-        iterator.reset();
-        while (iterator.next()) |module| {
-            levels[module.dependencies.items.len].appendAssumeCapacity(.{
-                .name = module.name,
-                .path = module.dataIndex,
-            });
-        }
-
-        return .{
-            .levels = try collections.deepCopySlice(Level, levels, allocator),
+        const node = allocator.create(Graph.Node) catch return error.AllocatorFailure;
+        node.* = .{
+            .name = "",
+            .depends = &.{},
         };
+
+        return node;
     }
 };
