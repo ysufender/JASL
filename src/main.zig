@@ -2,6 +2,7 @@ const std = @import("std");
 const common = @import("core/common.zig");
 const perfAllc = @import("util/allocator.zig");
 const dependency = @import("parser/dependency.zig");
+const collections = @import("util/collections.zig");
 
 const Lexer = @import("lexer/lexer.zig").Scanner;
 const Parser = @import("parser/parser.zig").Parser;
@@ -25,6 +26,7 @@ pub fn main() !void {
 fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     // Init Context
     var context = try common.CompilerContext.init(allocator);
+    defer context.deinit();
 
     var lexer = try Lexer.init(
         allocator,
@@ -47,7 +49,7 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     const dependenciesList = try resolver.generate(allocator);
 
     if (true) {
-        var iterator = modules.iterator();
+        var iterator = modules.modules.iterator();
         var totalModules: usize = 0;
         var totalTopLevels: usize = 0;
         while (iterator.next()) |module| {
@@ -83,8 +85,19 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
         }
         common.log.info("", .{});
 
+        var miterator = modules.modules.iterator();
+        while (miterator.next()) |mod| {
+            mod.print(&context);
+        }
+
         common.log.info("Dependency Graph:", .{});
-        _ = dependenciesList;
+        var diterator = collections.SliceIterator(.Backward, dependenciesList.nodes);
+        while (diterator.next()) |dep| {
+            common.log.info("\t{s}:", .{dep.name});
+            for (dep.depends) |depDep| {
+                common.log.info("\t\tDepends on {s} {d}", .{dependenciesList.nodes[depDep].name, depDep});
+            }
+        }
     }
 }
 

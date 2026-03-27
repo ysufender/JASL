@@ -1,0 +1,14 @@
+import builtin;
+
+// Thin wrapper around a normal array, with optional
+// extra allocation. Unmanaged.
+pub let ArrayList = fn (T: type, extra: bool) -> type {
+    return struct {
+        let Self = builtin::this();
+
+        pub items: []mut T,
+        capacity: u32,
+
+        pub let empty = Self(undefined, 0);
+    };
+};

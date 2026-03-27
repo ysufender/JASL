@@ -1,0 +1,11 @@
+let OptionEnum = enum {
+    Some,
+    None,
+};
+
+pub let Option = fn (T: type) -> type {
+    return union(OptionEnum) {
+        None: void,
+        Some: T,
+    };
+};

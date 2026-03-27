@@ -60,6 +60,10 @@ pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Self {
     };
 }
 
+pub fn deinit(self: *Self) void {
+    self.arena.deinit();
+}
+
 pub fn openRead(self: *Self, file: []const u8) CompilerError!defines.FilePtr {
     const path = try self.realpath(file);
 

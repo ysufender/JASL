@@ -15,9 +15,11 @@ const LevelList = []const Level;
 /// should be handled in typechecking by waiting for dependencies
 /// to be handle e.g. marking unknowns as waiting/resolved etc..
 pub const Graph = struct {
+    const Self = @This();
+
     pub const Node = struct {
         name: []const u8,
-        depends: []const *const Node,
+        depends: []const defines.Offset,
 
         pub fn dupe(self: *const Node, allocator: std.mem.Allocator) Error!Node {
             return .{
@@ -27,70 +29,83 @@ pub const Graph = struct {
         }
     };
 
-    head: *const Node = @ptrFromInt(@alignOf(*Node)),
+    nodes: []Node,
+
+    pub fn init(allocator: std.mem.Allocator, size: u32) Error!Self {
+        return .{
+            .nodes = allocator.alloc(Node, size) catch return error.AllocatorFailure,
+        };
+    }
 };
 
 pub const Resolver = struct {
     const Self = @This();
 
-    modules: *const ModuleList.Slice,
+    modules: *const ModuleList,
     context: *Context,
     arena: std.heap.ArenaAllocator,
-    resolved: std.StringHashMap(void),
+    resolved: std.StringHashMapUnmanaged(defines.Offset),
     lock: defines.Lock,
 
-    pub fn init(context: *Context, modules: *const ModuleList.Slice) Self {
+    pub fn init(context: *Context, modules: *const ModuleList) Self {
         return .{
             .context = context,
             .modules = modules,
             .arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator),
-            .resolved = undefined,
+            .resolved = .empty,
             .lock = .{},
         };
     }
 
     pub fn generate(self: *Self, owner: std.mem.Allocator) Error!Graph {
         const allocator = self.arena.allocator();
-        self.resolved = .init(allocator);
         defer self.arena.deinit();
 
-        self.resolved = .init(allocator);
-        self.resolved.ensureTotalCapacity(self.modules.len) catch return error.AllocatorFailure;
+        self.resolved.ensureTotalCapacity(allocator, self.modules.modules.len) catch return error.AllocatorFailure;
 
-        var graph = Graph{};
+        var graph = try Graph.init(allocator, self.modules.modules.len);
 
         var maxLevel: u32 = 0;
 
         // Detect max dependency count and preallocate the levels array.
-        for (self.modules.items(.dependencies)) |deps| {
+        for (self.modules.modules.items(.dependencies)) |deps| {
             maxLevel = @intCast(@max(maxLevel, deps.items.len));
         }
 
-        for (self.modules.items(.dependencies), 0..) |deps, i| {
+        for (self.modules.modules.items(.dependencies), 0..) |deps, i| {
             if (deps.items.len < maxLevel) {
                 @branchHint(.likely);
                 continue;
             }
 
-            if (self.resolved.contains(self.modules.items(.name)[i])) {
-                continue;
-            }
-
-            graph.head = try self.generateNode(@intCast(i));
+            _ = try self.generateNode(@intCast(i), 0, &graph);
         }
 
         return collections.deepCopy(graph, owner);
     }
 
-    fn generateNode(self: *Self, _: u32) Error!*const Graph.Node {
+    fn generateNode(self: *Self, moduleIndex: u32, graphIndex: u32, graph: *Graph) Error!u32 {
         const allocator = self.arena.allocator();
 
-        const node = allocator.create(Graph.Node) catch return error.AllocatorFailure;
-        node.* = .{
-            .name = "",
-            .depends = &.{},
-        };
+        const name = self.modules.modules.items(.name)[moduleIndex];
 
-        return node;
+        if (self.resolved.get(name)) |node| {
+            return node;
+        }
+
+        const dependencies = self.modules.modules.items(.dependencies)[moduleIndex].items;
+
+        var depends = allocator.alloc(defines.Offset, dependencies.len) catch return error.AllocatorFailure;
+        self.resolved.putAssumeCapacityNoClobber(name, graphIndex);
+
+        for (dependencies, 0..) |dependency, i| {
+            depends[i] = try self.generateNode(self.modules.ids.get(dependency).?, graphIndex + 1, graph);
+        }
+ 
+        graph.nodes[graphIndex] = .{
+            .name = name,
+            .depends = depends,
+        };
+        return graphIndex;
     }
 };

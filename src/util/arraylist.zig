@@ -80,7 +80,7 @@ pub fn MultiArrayList(comptime T: type) type {
 
                 var ret: T = undefined;
 
-                inline for (info.fields) |field| {
+                inline for (fields) |field| {
                     @field(ret, field.name) = @field(self.inner, field.name)[0..self.len][index];
                 }
 
@@ -88,12 +88,12 @@ pub fn MultiArrayList(comptime T: type) type {
             }
 
             pub fn capacity(self: *const Slice) u32 {
-                return @intCast(@field(self.inner, info.fields[0].name).len);
+                return @intCast(@field(self.inner, fields[0].name).len);
             }
 
             /// Frees all owned memory, slice shouldn't be used after free.
             pub fn free(self: *Slice, allocator: Allocator) void {
-                inline for (info.fields) |field| {
+                inline for (fields) |field| {
                     allocator.free(@field(self.inner, field.name));
                 }
 
@@ -115,7 +115,7 @@ pub fn MultiArrayList(comptime T: type) type {
                 }
 
                 for (0..self.len) |i| {
-                    inline for (info.fields) |field| {
+                    inline for (fields) |field| {
                         if (
                             @field(self.inner, field.name)[i] != @field(other.inner, field.name)[i]
                         ) {
@@ -137,7 +137,7 @@ pub fn MultiArrayList(comptime T: type) type {
                 .inner = undefined,
             };
 
-            inline for (info.fields) |field| {
+            inline for (fields) |field| {
                 @field(self.inner, field.name) = allocator.alloc(field.type, cap) catch return error.AllocatorFailure;
             }
 
@@ -151,7 +151,7 @@ pub fn MultiArrayList(comptime T: type) type {
                 return;
             }
 
-            inline for (info.fields) |field| {
+            inline for (fields) |field| {
                 var new: []field.type = undefined;
 
                 if (@field(self.inner, field.name).len != 0) {
@@ -196,7 +196,7 @@ pub fn MultiArrayList(comptime T: type) type {
 
         pub fn appendAssumeCapacity(self: *Self, element: T) void {
             defer self.len += 1;
-            inline for (info.fields) |array| {
+            inline for (fields) |array| {
                 @field(self.inner, array.name)[self.len] = @field(element, array.name);
             }
         }
@@ -210,7 +210,7 @@ pub fn MultiArrayList(comptime T: type) type {
 
             var ret: T = undefined;
 
-            inline for (info.fields) |field| {
+            inline for (fields) |field| {
                 @field(ret, field.name) = @field(self.inner, field.name)[0..self.len][index];
             }
 
@@ -218,13 +218,13 @@ pub fn MultiArrayList(comptime T: type) type {
         }
 
         pub fn set(self: *Self, index: u32, value: T) void {
-            inline for (info.fields) |field| {
+            inline for (fields) |field| {
                 @field(self.inner, field.name)[index] = @field(value, field.name);
             }
         }
 
         pub fn capacity(self: *Self) u32 {
-            return @intCast(@field(self.inner, info.fields[0].name).len);
+            return @intCast(@field(self.inner, fields[0].name).len);
         }
 
         /// Clears all internal data and releases the ownership
@@ -255,6 +255,19 @@ pub fn MultiArrayList(comptime T: type) type {
             return .{
                 .len = self.len,
                 .inner = inner,
+            };
+        }
+
+        pub fn mutableSlice(self: *const Self) Self {
+            var ret: Inner = undefined;
+
+            inline for (fields) |field| {
+                @field(ret, field.name) = @field(self.inner, field.name)[0..self.len];
+            }
+
+            return .{
+                .inner = ret,
+                .len = self.len,
             };
         }
 

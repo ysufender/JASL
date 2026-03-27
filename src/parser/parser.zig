@@ -1302,17 +1302,6 @@ pub const Parser = struct {
         const position = token.position(self.context, self.file);
         common.log.err("\t{s} {d}:{d}", .{ self.context.getFileName(self.file), position.line, position.column});
     }
-
-    fn getAST(self: *const Self) AST {
-        return .{
-            .extra = self.extra.items,
-            .tokens = self.tokens,
-            .statementMask = self.statementMask.items,
-            .signatures = self.signaturePool.slice(),
-            .expressions = self.expressionMap.slice(),
-            .statements = self.statementMap.slice(),
-        };
-    }
 };
 
 //

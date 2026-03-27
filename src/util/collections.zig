@@ -123,6 +123,70 @@ pub fn deepCopy(item: anytype, allocator: Allocator) Error!@TypeOf(item) {
     unreachable;
 }
 
+const IteratorTypeEnum = enum {
+    Forward,
+    Backward
+};
+
+fn IteratorType(T: type, Type: IteratorTypeEnum) type {
+    return struct {
+        const Self = @This();
+
+        items: []const T,
+        cur: u32,
+
+        pub fn next(self: *Self) ?T {
+            if (self.eos()) {
+                return null;
+            }
+
+            switch (Type) {
+                .Backward => {
+                    self.cur -= 1;
+                    return self.items[self.cur];
+                },
+                .Forward => {
+                    defer self.cur += 1;
+                    return self.items[self.cur];
+                },
+            }
+        }
+
+        pub fn eos(self: *const Self) bool {
+            return switch (Type) {
+                .Backward => self.cur <= 0,
+                .Forward => self.cur >= self.items.len,
+            };
+        }
+
+        pub fn reset(self: *Self) void {
+            self.cur = switch (Type) {
+                .Backward => self.items.len,
+                .Forward => 0,
+            };
+        }
+    };
+}
+
+pub fn SliceIterator(comptime Type: IteratorTypeEnum, items: anytype) IteratorType(@typeInfo(@TypeOf(items)).pointer.child, Type) {
+    const T = @TypeOf(items);
+    const info = @typeInfo(T);
+
+    return switch (info) {
+        .pointer => |p| switch (p.size) {
+            .slice => .{
+                .items = items,
+                .cur = switch (Type) {
+                    .Backward => @intCast(items.len),
+                    .Forward => 0,
+                },
+            },
+            else => @compileError("ReverseIterator requires a known-length slice."),
+        },
+        else => @compileError("ReverseIterator requires a known-length slice."),
+    };
+}
+
 //
 // Tests
 //

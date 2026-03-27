@@ -48,7 +48,33 @@ pub const Module = struct {
     }
 };
 
-pub const ModuleList = collections.MultiArrayList(Module);
+pub const ModuleList = struct {
+    const Self = @This();
+    pub const List = collections.MultiArrayList(Module);
+    pub const Map = std.StringHashMapUnmanaged(u32);
+
+    modules: List,
+    ids: Map,
+
+    pub fn init(allocator: std.mem.Allocator, cap: u32) Error!Self {
+        var ids = Map.empty;
+
+        ids.ensureTotalCapacity(allocator, cap) catch return error.AllocatorFailure;
+
+        return .{
+            .modules = try List.init(allocator, cap),
+            .ids = ids,
+        };
+    }
+
+    pub fn dupe(self: *const Self, allocator: std.mem.Allocator) Error!Self {
+        return .{
+            .modules = try collections.deepCopy(self.modules.mutableSlice(), allocator),
+            .ids= try collections.deepCopy(self.ids, allocator),
+        };
+    }
+};
+
 pub const SymbolList = collections.MultiArrayList(Module.Symbol);
 pub const SymbolMap = std.StringHashMapUnmanaged(defines.SymbolPtr);
 pub const ModuleMap = std.StringHashMapUnmanaged(defines.ModulePtr);
@@ -62,7 +88,6 @@ pub const Prepass = struct {
     safeAlloc: std.heap.ThreadSafeAllocator,
 
     /// Maps the module names (scoping::expressions::mhm) to ModulePtr's
-    moduleMap: ModuleMap,
     modules: ModuleList,
     context: *Context,
     lock: defines.Lock,
@@ -74,14 +99,10 @@ pub const Prepass = struct {
     pub fn init(context: *Context, initial: defines.ASTPtr) Error!Self {
         var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
 
-        var moduleMap = ModuleMap.empty;
-        moduleMap.ensureTotalCapacity(arena.allocator(), 128) catch return error.AllocatorFailure;
-
         return .{
             .initial = context.getAST(initial),
             .arena = arena,
             .context = context,
-            .moduleMap = moduleMap,
             .modules = try ModuleList.init(arena.allocator(), 128),
             .lock = .{},
             .pool = undefined,
@@ -92,7 +113,7 @@ pub const Prepass = struct {
     }
 
     /// Returns a module list slice containing all modules. Releases the ownership.
-    pub fn prepass(self: *Self, allocator: std.mem.Allocator) Error!ModuleList.Slice {
+    pub fn prepass(self: *Self, allocator: std.mem.Allocator) Error!ModuleList {
         self.safeAlloc = .{
             .child_allocator = self.arena.allocator(),
         };
@@ -110,11 +131,11 @@ pub const Prepass = struct {
             return error.ThreadingError;
         }
 
-        for (0..self.modules.len) |i| {
-            self.modules.items(.dependencies)[i].shrinkAndFree(self.safeAlloc.allocator(), self.modules.items(.dependencies)[i].items.len);
+        for (0..self.modules.modules.len) |i| {
+            self.modules.modules.items(.dependencies)[i].shrinkAndFree(self.safeAlloc.allocator(), self.modules.modules.items(.dependencies)[i].items.len);
         }
 
-        return collections.deepCopy(self.modules.slice(), allocator);
+        return collections.deepCopy(self.modules, allocator);
     }
 
     /// Threaded recursive prepassing. Uses mutexes.
@@ -260,18 +281,18 @@ pub const Prepass = struct {
         self.lock.lock();
         defer self.lock.unlock();
 
-        const index = self.modules.addOne(allocator) catch {
+        const index = self.modules.modules.addOne(allocator) catch {
             self.hadErr.store(true, .release);
             return;
         };
-        self.moduleMap.put(allocator, file.name, index) catch {
+        self.modules.ids.put(allocator, file.name, index) catch {
             self.hadErr.store(true, .release);
             return;
         };
-        self.modules.set(index, file);
+        self.modules.modules.set(index, file);
 
-        if (self.moduleMap.count() > defines.rehashLimit) {
-            self.moduleMap.rehash(std.hash_map.StringContext{});
+        if (self.modules.ids.count() > defines.rehashLimit) {
+            self.modules.ids.rehash(std.hash_map.StringContext{});
         }
     }
 
