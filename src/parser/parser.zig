@@ -1138,12 +1138,8 @@ pub const Parser = struct {
             .Enum => return self.enumDefinition(),
             .Union => return self.unionDefinition(),
             .Identifier => {
-                const expr = try self.alloc(Expression);
-                self.expressionMap.set(expr, .{
-                    .type = .ValueType,
-                    .value = self.previous(),
-                });
-                return expr;
+                self.current -= 1;
+                return self.scoping();
             },
 
             else => {

@@ -1,0 +1,7 @@
+import builtin;
+
+pub let assert = fn (cnd: bool) -> void {
+    if !cnd {
+        builtin::unreachable();
+    }
+};

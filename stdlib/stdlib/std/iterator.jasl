@@ -1,0 +1,257 @@
+/*
+    This file is a part of the JASL Standard Library,
+    and is licensed under MIT License.
+
+    Any user code that imports this module agrees that it
+    will satisfy the specifications stated further.
+
+    DISCLAIMER:
+        The traits and conventions mentioned in this document
+        are to be obeyed, otherwise neither JASL STDLib nor the
+        compiler can guarantee a well defined program.
+
+    Name:
+        std::iterator
+    Public Symbols:
+        Iterator,
+        Map,
+        Filter
+    Description:
+        Defines a comptime Iterator trait and
+        implements two comptime generator functions,
+        Map and Filter using the said trait.
+*/
+
+import builtin;
+import std;
+
+/*
+    Iterator trait expects the Iterator to have two definitions:
+        next = fn (*mut Iterator) -> std::Option(Of)
+        eos = fn (*mut Iterator) -> bool
+        peek = fn (*mut Iterator) -> std::Option(Of)
+
+    Where:
+        "next" yields std::Option(Of)::Some(_) as long as the iterator
+        has not met an end, and std::Option(Of)::None if it has reached the end
+        of stream.
+
+        "eos" yields true if and only if "next" would return std::Option(Of)::None.
+
+        "peek" never alters the sequence and returns what a call to "next" would return.
+        
+        Iterator never modifies the data it is iterating over.
+
+        Iterator is trivially copyable, e.g. a shallow copy yields an independent iteration
+        state.
+
+    But:
+        This trait does not expect the "peek" and "eos" to not modify the underlying
+        iterator, it only expects Iterator to not alter the expected sequence it should
+        yield, eg. not change the order and values it will yield.
+
+        In other words, "peek" and "eos" may iterate over the underlying iterator (if any), however
+        they must not alter the yielded sequence that is expected from the Iterator, and must
+        not introduce additional total work required to fully consume the Iterator. They may shift
+        the cost around each other. See Filter.
+
+    TLDR:
+        This trait is more like a Stream than a classic Iterator, but it guarantees
+        a non-modifying, single pass and constant total operation cost Iterator if
+        this specification is abided by.
+
+*/
+pub let Iterator = fn (Iter: type, Of: type) -> type {
+    let compatible =
+        builtin::hasFn(Iter, "next")
+        and builtin::hasFn(Iter, "peek")
+        and builtin::hasFn(Iter, "eos");
+
+    if !compatible {
+        builtin::compileError("Given type lacks the basic constraints of an iterator:
+    Expected definitions 'next', 'peek' and 'eos' within the namespace of the type.", ());
+    }
+
+    let typechecks = 
+        (builtin::returnTypes(Iter, "next") == (std::Option(Of)))
+        and (builtin::returnTypes(Iter, "eos") == (bool))
+        and (builtin::returnTypes(Iter, "peek") == (std::Option(Of)))
+        and (builtin::argTypes(Iter, "next") == (*mut Iter))
+        and (builtin::argTypes(Iter, "peek") == (*mut Iter))
+        and (builtin::argTypes(Iter, "eos") == (*mut Iter));
+
+    if !typechecks {
+        builtin::compileError("Given iterator is not in the expected format:
+    Expected an iterator with:
+        next = fn (*mut {s}) -> std::Option({any})
+        eos = fn (*mut {s}) -> bool
+        peek = fn (*mut {s}) -> std::Option({any})
+
+    Received:
+        next = fn {any} -> {any}
+        eos = fn {any} -> {any}
+        peek = fn {any} -> {any}",
+            (
+                builtin::typename(Iter).basename,
+                Of,
+                builtin::typename(Iter).basename,
+                builtin::typename(Iter).basename,
+                Of,
+                builtin::argTypes(Iter),
+                builtin::returnTypes(Iter),
+                builtin::argTypes(Iter),
+                builtin::returnTypes(Iter),
+                builtin::argTypes(Iter),
+                builtin::returnTypes(Iter),
+            )
+        );
+    }
+
+    return Iter;
+};
+
+pub let len = fn (P: type, I: type) -> *fn (I) -> u32 {
+    return fn (iterator: Iterator(I, P)) -> u32 {
+        let length: mut u32 = 0;
+        while !iterator.eos() {
+            length = length + 1;
+            _ = iterator.next();
+        }
+
+        return length;
+    };
+};
+
+pub let Map = fn (P: type, R: type, I: type) -> type {
+    return Iterator(struct {
+        let Self = builtin::this();
+        let Next = std::Option(R);
+
+        iterator: mut Iterator(I, P),
+        func: *fn (P) -> R,
+
+        pub let next = fn (self: *mut Self) -> Next {
+            if self.eos() {
+                return Next::None();
+            }
+
+            return Next::Some(self.func(self.iterator.next().Some));
+        };
+
+        pub let peek = fn (self: *mut Self) -> Next {
+            let maybeNext = self.iterator.peek();
+
+            return
+                if maybeNext.some() Next::Some(self.func(maybeNext.Some))
+                else Next::None();
+        };
+
+        pub let eos = fn (self: *mut Self) -> bool {
+            return self.iterator.eos();
+        };
+    }, R);()
+};
+
+pub let Filter = fn (P: type, I: type) -> type {
+    return Iterator(struct {
+        let Self = builtin::this();
+        let Next = std::Option(P);
+
+        iterator: mut Iterator(I, P),
+        func: *fn (P) -> bool,
+
+        pub let next = fn (self: *mut Self) -> Next {
+            while !self.eos() {
+                let n = self.iterator.next();
+
+                if self.func(n.Some) {
+                    return n;
+                }
+            }
+
+            return Next::None();
+        };
+
+        pub let peek = fn (self: *mut Self) -> Next {
+            while !self.iterator.eos() {
+                let maybeNext = self.iterator.peek();
+
+                if
+                    maybeNext.some()
+                    and self.func(maybeNext.Some) {
+                    return maybeNext;
+                }
+
+                _ = self.iterator.next();
+            }
+
+            return Next::None();
+        };
+ 
+
+        pub let eos = fn (self: *mut Self) -> bool {
+            return self.peek().none();
+        };
+    }, P);
+};
+
+/*
+    Zip yields a sequence of length min(len(leftIterator), len(rightIterator)),
+    reaching eos as soon as one of the iterators reach eos.
+    Zip does not assert that len(leftIterator) == len(rightIterator).
+*/
+pub let Zip = fn (P: type, R: type, PI: type, RI: type) -> type {
+    let Pair = std::Pair(P, R);
+
+    return Iterator(struct {
+        let Self = builtin::this();
+        let Next = std::Option(Pair);
+
+        leftIterator: mut Iterator(PI, P),
+        rightIterator: mut Iterator(RI, R),
+
+        pub let next = fn (self: *mut Self) -> Next {
+            return
+                if self.eos() Next::None()
+                else Next::Some(Pair(self.leftIterator.next().Some, self.rightIterator.next().Some));
+        };
+
+        pub let peek = fn (self: *mut Self) -> Next {
+            return
+                if self.eos() Next::None()
+                else Next::Some(Pair(self.leftIterator.peek().Some, self.rightIterator.peek().Some));
+        };
+
+        pub let eos = fn (self: *mut Self) -> {
+            return self.leftIterator.eos() or self.rightIterator.eos();
+        };
+    }, Pair);
+};
+
+pub let Range = struct {
+    let Self = builtin::this();
+    let Next = std::Option(u32);
+
+    start: mut u32,
+    end: u32,
+    by: u32,
+
+    pub let next = fn (self: *mut Self) -> Next {
+        if self.eos() {
+            return Next::None();
+        }
+
+        self.start = self.start + self.by;
+        return Next::Some(self.start - self.by);
+    };
+
+    pub let peek = fn (self: *mut Self) -> Next {
+        return
+            if self.eos() Next::None()
+            else Next::Some(self.start);
+    };
+
+    pub let eos = fn (self: *mut Self) -> bool {
+        return self.start >= self.end;
+    };
+};

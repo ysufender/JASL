@@ -1,0 +1,12 @@
+import std::comptime;
+import std;
+
+let Main = std::Optional(i32);
+
+let main = fn () -> Main {
+    std::comptime::Call(*fn () -> void, someFn, ());
+
+    return Main::None();
+};
+
+let someFn = fn () -> void { };

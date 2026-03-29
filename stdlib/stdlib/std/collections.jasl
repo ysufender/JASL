@@ -1,0 +1,63 @@
+/*
+    This file is a part of the JASL Standard Library,
+    and is licensed under MIT License.
+
+    DISCLAIMER:
+        The traits and conventions mentioned in this document
+        are to be obeyed, otherwise neither JASL STDLib nor the
+        compiler can guarantee a well defined program.
+
+    Name:
+        std::collections
+    Public Symbols:
+        ArrayList,
+        Array,
+    Description:
+        Defines simple collection types using primitive language
+        features and data types.
+*/
+
+import builtin;
+
+/*
+    WIP
+
+    ArrayList expects the user to:
+        Not index into the items before ensuring the lenght of it,
+
+        Use the same allocator throughout the lifetime of the collection,
+*/
+pub let ArrayList = fn (T: type, type: enum { Compact, Overhead, }) -> type {
+    return struct {
+        let Self = builtin::this();
+
+        pub items: []mut T,
+        capacity: u32,
+
+        pub let empty = Self((), 0);
+    };
+};
+
+/*
+    Use std::Comptime(ArrayType(T, N)) in the function body to enforce comptime.
+
+    Example:
+        let someFn = fn (arr: ArrayType(u32, 5)) -> u32 {
+            std::Comptime(ArrayType(u32, 5), arr);
+
+            return arr.items[0];
+        };
+*/
+pub let ArrayType = fn (T: type, N: u32) -> type {
+    return struct {
+        items: []mut T,
+    };
+};
+
+pub let Array(T: type, N: u32, Init: []mut T) -> ArrayType(T, N) {
+    if Init.len != N {
+        builtin::compileError("Expected {d} sized initializer, received {d}", (N, Init.len));
+    }
+
+    return ArrayType(T, N)(Init);
+};

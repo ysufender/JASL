@@ -22,6 +22,8 @@ pub const Graph = struct {
         depends: []const defines.Offset,
 
         pub fn dupe(self: *const Node, allocator: std.mem.Allocator) Error!Node {
+            std.debug.print("{s} {any}\n", .{self.name, self.depends});
+
             return .{
                 .name = self.name,
                 .depends = try collections.deepCopy(self.depends, allocator),
@@ -58,34 +60,24 @@ pub const Resolver = struct {
     }
 
     pub fn generate(self: *Self, owner: std.mem.Allocator) Error!Graph {
-        const allocator = self.arena.allocator();
         defer self.arena.deinit();
+
+        const allocator = self.arena.allocator();
 
         self.resolved.ensureTotalCapacity(allocator, self.modules.modules.len) catch return error.AllocatorFailure;
 
         var graph = try Graph.init(allocator, self.modules.modules.len);
 
-        var maxLevel: u32 = 0;
-
-        // Detect max dependency count and preallocate the levels array.
-        for (self.modules.modules.items(.dependencies)) |deps| {
-            maxLevel = @intCast(@max(maxLevel, deps.items.len));
-        }
-
-        for (self.modules.modules.items(.dependencies), 0..) |deps, i| {
-            if (deps.items.len < maxLevel) {
-                @branchHint(.likely);
-                continue;
-            }
-
+        for (0..self.modules.modules.len) |i| {
             _ = try self.generateNode(@intCast(i), 0, &graph);
         }
-
+        
         return collections.deepCopy(graph, owner);
     }
 
-    fn generateNode(self: *Self, moduleIndex: u32, graphIndex: u32, graph: *Graph) Error!u32 {
+    fn generateNode(self: *Self, moduleIndex: u32, _graphIndex: u32, graph: *Graph) Error!u32 {
         const allocator = self.arena.allocator();
+        var graphIndex = _graphIndex;
 
         const name = self.modules.modules.items(.name)[moduleIndex];
 
@@ -97,15 +89,16 @@ pub const Resolver = struct {
 
         var depends = allocator.alloc(defines.Offset, dependencies.len) catch return error.AllocatorFailure;
         self.resolved.putAssumeCapacityNoClobber(name, graphIndex);
-
-        for (dependencies, 0..) |dependency, i| {
-            depends[i] = try self.generateNode(self.modules.ids.get(dependency).?, graphIndex + 1, graph);
-        }
- 
         graph.nodes[graphIndex] = .{
             .name = name,
             .depends = depends,
         };
+
+        for (dependencies, 0..) |dependency, i| {
+            defer graphIndex += 1;
+            depends[i] = try self.generateNode(self.modules.ids.get(dependency).?, graphIndex, graph);
+        }
+ 
         return graphIndex;
     }
 };
