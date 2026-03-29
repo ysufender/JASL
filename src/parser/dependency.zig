@@ -22,8 +22,6 @@ pub const Graph = struct {
         depends: []const defines.Offset,
 
         pub fn dupe(self: *const Node, allocator: std.mem.Allocator) Error!Node {
-            std.debug.print("{s} {any}\n", .{self.name, self.depends});
-
             return .{
                 .name = self.name,
                 .depends = try collections.deepCopy(self.depends, allocator),
@@ -71,6 +69,8 @@ pub const Resolver = struct {
         for (0..self.modules.modules.len) |i| {
             _ = try self.generateNode(@intCast(i), 0, &graph);
         }
+
+        std.debug.print("ModLen: {d}\n", .{graph.nodes.len});
         
         return collections.deepCopy(graph, owner);
     }

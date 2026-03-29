@@ -33,3 +33,10 @@ pub let Result = fn (T: type, E: type) -> type {
         };
     };
 };
+
+pub let Pair = fn (T: type, P: type) -> type {
+    return struct {
+        pub first: T,
+        pub second: P,
+    };
+};

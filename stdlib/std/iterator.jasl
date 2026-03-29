@@ -149,7 +149,7 @@ pub let Map = fn (P: type, R: type, I: type) -> type {
         pub let eos = fn (self: *mut Self) -> bool {
             return self.iterator.eos();
         };
-    }, R);()
+    }, R);
 };
 
 pub let Filter = fn (P: type, I: type) -> type {
@@ -222,7 +222,7 @@ pub let Zip = fn (P: type, R: type, PI: type, RI: type) -> type {
                 else Next::Some(Pair(self.leftIterator.peek().Some, self.rightIterator.peek().Some));
         };
 
-        pub let eos = fn (self: *mut Self) -> {
+        pub let eos = fn (self: *mut Self) -> bool {
             return self.leftIterator.eos() or self.rightIterator.eos();
         };
     }, Pair);
@@ -254,4 +254,37 @@ pub let Range = struct {
     pub let eos = fn (self: *mut Self) -> bool {
         return self.start >= self.end;
     };
+};
+
+pub let Slice = fn (T: type) -> type {
+    return struct {
+        let Self = builtin::this();
+        let Next = std::Option(T);
+
+        items: mut []T,
+
+        pub let next = fn (self: *mut Self) -> Next {
+            if self.eos() {
+                return Next::None();
+            }
+
+            let item = self.items[0];
+            self.items = self.items.subslice(0, self.items.len);
+            return Next::Some(item);
+        };
+
+        pub let peek = fn (self: *mut Self) -> Next  {
+            return
+                if self.eos() Next::None()
+                else Next::Some(self.items[0]);
+        };
+
+        pub let eos = fn (self: *mut Self) -> bool {
+            return self.items.len == 0;
+        };
+    };
+};
+
+pub let Collect = fn (P: type, I: type) -> *fn (Iterator(I, P)) -> []P {
+    // WIP
 };

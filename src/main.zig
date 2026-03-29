@@ -48,7 +48,7 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     var resolver = dependency.Resolver.init(&context, &modules);
     const dependenciesList = try resolver.generate(allocator);
 
-    if (true) {
+    if (false) {
         var iterator = modules.modules.iterator();
         var totalModules: usize = 0;
         var totalTopLevels: usize = 0;

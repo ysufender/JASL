@@ -128,7 +128,43 @@ const IteratorTypeEnum = enum {
     Backward
 };
 
-fn IteratorType(T: type, Type: IteratorTypeEnum) type {
+fn Iterator(comptime I: type, comptime P: type) type {
+    const Method = struct {
+        name: []const u8,
+        args: []const type,
+        returnType: type,
+    };
+
+    const methods: []const Method = &.{
+        .{ .name = "next", .args = &.{}, .returnType = ?P },
+        .{ .name = "exhaust", .args = &.{std.mem.Allocator}, .returnType = Error![]P },
+    };
+
+    for (methods) |method| comptime {
+        if (
+            !std.meta.hasMethod(I, method.name)
+            or @typeInfo(@TypeOf(@field(I, method.name))).@"fn".return_type != method.returnType
+        ) {
+            @compileError(std.fmt.comptimePrint(
+                "Iterator {any} expected to have a method '{s}' with return type {any}"
+                ++
+                if (std.meta.hasMethod(I, method.name)) ", received return type {any} instead."
+                else ".",
+                if (std.meta.hasMethod(I, method.name)) .{I, method.name, method.returnType, @typeInfo(@TypeOf(@field(I, method.name))).@"fn".return_type}
+                else .{I, method.name, method.returnType}));
+        }
+
+        for (method.args, @typeInfo(std.meta.ArgsTuple(@TypeOf(@field(I, method.name)))).@"struct".fields[1..]) |expected, got| {
+            if (expected != got.type) {
+                @compileError(std.fmt.comptimePrint("Iterator {any} expected to have a method '{s}' with arg types {any}.", .{I, method.name, method.args}));
+            }
+        }
+    };
+
+    return I;
+} 
+
+pub fn SliceIteratorType(comptime T: type, comptime Type: IteratorTypeEnum) type {
     return struct {
         const Self = @This();
 
@@ -165,10 +201,13 @@ fn IteratorType(T: type, Type: IteratorTypeEnum) type {
                 .Forward => 0,
             };
         }
+
+        pub fn exhaust(_: *Self, _: Allocator) Error![]T {
+        }
     };
 }
 
-pub fn SliceIterator(comptime Type: IteratorTypeEnum, items: anytype) IteratorType(@typeInfo(@TypeOf(items)).pointer.child, Type) {
+pub fn SliceIterator(comptime Type: IteratorTypeEnum, items: anytype) SliceIteratorType(@typeInfo(@TypeOf(items)).pointer.child, Type) {
     const T = @TypeOf(items);
     const info = @typeInfo(T);
 
@@ -181,10 +220,63 @@ pub fn SliceIterator(comptime Type: IteratorTypeEnum, items: anytype) IteratorTy
                     .Forward => 0,
                 },
             },
-            else => @compileError("ReverseIterator requires a known-length slice."),
+            else => @compileError("SliceIterator requires a known-length slice."),
         },
-        else => @compileError("ReverseIterator requires a known-length slice."),
+        else => @compileError("SliceIterator requires a known-length slice."),
     };
+}
+
+pub fn MappingIterator(comptime I: type, comptime P: type, comptime R: type) type {
+    return struct {
+        const Self = @This();
+
+        iterator: Iterator(I, P),
+        func: *const fn (P) R,
+
+        pub fn next(self: *Self) ?R {
+            return
+                if (self.iterator.next()) |elem| self.func(elem)
+                else null;
+        }
+
+        pub fn exhaust(_: *Self) ![]R {
+        }
+    };
+}
+
+pub fn Map(comptime I: type, comptime P: type, comptime R: type, comptime func: *const fn (P) R, iterator: I) MappingIterator(I, P, R) {
+    return MappingIterator(I, P, R){
+        .func = func,
+        .iterator = iterator,
+    };
+}
+
+pub fn CollectingIterator(comptime I: type, comptime P: type) type {
+    return struct {
+        const Self = @This();
+
+        iterator: Iterator(I, P),
+
+        pub fn next(_: *Self) ?P { }
+
+        pub fn exhaust(self: *Self, allocator: std.mem.Allocator) Error![]P {
+            var agg = std.ArrayList(P).initCapacity(allocator, 128) catch return error.AllocatorFailure;
+
+            while (self.iterator.next()) |item| {
+                agg.append(allocator, item) catch return error.AllocatorFailure;
+            }
+
+            return agg.toOwnedSlice(allocator) catch error.AllocatorFailure;
+        }
+    };
+}
+
+pub fn Collect(comptime I: type, comptime P: type, iterator: I, allocator: std.mem.Allocator) Error![]P {
+    var it = Iterator(CollectingIterator(I, P), P){
+        .iterator = iterator,
+    };
+
+    return it.exhaust(allocator);
 }
 
 //

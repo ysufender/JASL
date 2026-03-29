@@ -1,9 +1,0 @@
-pub let this = fn () -> type { };
-pub let unreachable = fn () -> noreturn { };
-pub let tag = fn (_: any, _: any) -> bool { };
-
-pub let allocator = fn (T: type) -> type {
-    return struct {
-        pub let alloc = fn (size: u32) -> []T { };
-    };
-};

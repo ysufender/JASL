@@ -44,4 +44,5 @@ pub const CompilerError = error {
     PathNameTooLong,
     OutOfMemory,
     EmptyCharLiteral,
+    FileNotFound,
 };

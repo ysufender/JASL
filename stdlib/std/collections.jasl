@@ -23,9 +23,12 @@ import builtin;
     WIP
 
     ArrayList expects the user to:
-        Not index into the items before ensuring the lenght of it,
+        Not index into the items before ensuring the lenght of it.
 
-        Use the same allocator throughout the lifetime of the collection,
+        Use the same allocator throughout the lifetime of the collection.
+
+    Users Must Acknowledge:
+        "items" is the slice of the underlying buffer, without including the extra capacity.
 */
 pub let ArrayList = fn (T: type, type: enum { Compact, Overhead, }) -> type {
     return struct {
@@ -39,22 +42,27 @@ pub let ArrayList = fn (T: type, type: enum { Compact, Overhead, }) -> type {
 };
 
 /*
-    Use std::Comptime(ArrayType(T, N)) in the function body to enforce comptime.
+    DISCLAIMER:
+        ArrayType does not enforce comptime knownness of an array, instead
+        it provides a capability to ensure it is comptime known.
 
-    Example:
-        let someFn = fn (arr: ArrayType(u32, 5)) -> u32 {
-            std::Comptime(ArrayType(u32, 5), arr);
-
-            return arr.items[0];
-        };
+        Call instance.Comptime() to return the comptime slice, and ensure
+        the underlying slice is comptime known.
 */
 pub let ArrayType = fn (T: type, N: u32) -> type {
     return struct {
+        let Self = builtin::this();
+
         items: []mut T,
+
+        pub let Comptime = fn (self: Self) -> []mut T {
+            std::AssertComptime([]mut T, self.items);
+            return self.items;
+        };
     };
 };
 
-pub let Array(T: type, N: u32, Init: []mut T) -> ArrayType(T, N) {
+pub let Array = fn (T: type, N: u32, Init: []mut T) -> ArrayType(T, N) {
     if Init.len != N {
         builtin::compileError("Expected {d} sized initializer, received {d}", (N, Init.len));
     }

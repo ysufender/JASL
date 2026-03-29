@@ -42,8 +42,11 @@ pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Self {
     var arena = std.heap.ArenaAllocator.init(baseAllocator);
     const allocator = arena.allocator();
 
-    const settings = try CLI.parseCLI(allocator);
-    settings.print();
+    const settings = CLI.parseCLI(allocator) catch |err| {
+        log.err("Couldn't parse CLI input.", .{});
+        return err;
+    };
+    settings.print(baseAllocator);
 
     var resolved = ResolveMap.empty;
     resolved.ensureTotalCapacity(allocator, 512) catch return error.AllocatorFailure;
@@ -173,7 +176,24 @@ fn realpath(self: *Self, file: []const u8) CompilerError![]const u8 {
     self.lock.lock();
     defer self.lock.unlock();
 
-    return realpathAlloc(self.arena.allocator(), file);
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    var allocator = std.heap.FixedBufferAllocator.init(&buf);
+
+    var path: []const u8 = undefined;
+
+    path = std.fs.realpathAlloc(allocator.allocator(), file) catch {
+        loop: for (self.settings.includeDirs) |dir| {
+            path = std.fs.path.join(allocator.allocator(), &.{dir, file}) catch return error.AllocatorFailure;
+            defer allocator.allocator().free(path);
+
+            path = std.fs.realpathAlloc(allocator.allocator(), path) catch continue :loop;
+            return self.arena.allocator().dupe(u8, path) catch error.AllocatorFailure;
+        }
+
+        return error.FileNotFound;
+    };
+
+    return self.arena.allocator().dupe(u8, path) catch error.AllocatorFailure;
 }
 
 pub fn realpathAlloc(allocator: std.mem.Allocator, file: []const u8) CompilerError![]const u8 {
