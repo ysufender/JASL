@@ -35,6 +35,7 @@ pub const Expression = struct {
         MutableType, // ok
         PointerType, // ok
         SliceType, // ok
+        ArrayType, // ok
         FunctionType, // ok
         ValueType, // ok
         Scoping, // ok
@@ -1086,15 +1087,34 @@ pub const Parser = struct {
                 return expr;
             },
             .LBracket => {
-                _ = try self.consume(.RBracket, error.MissingBracket, "Expected enclosing bracket in slice type.");
-                const res = try self.typeExpression();
+                return if (!self.match(&.{.RBracket})) result: {
+                    const size = try self.ifExpression();
+                    _ = try self.consume(.RBracket, error.MissingBracket, "Expected enclosing bracket in array type.");
+                    const rest = try self.typeExpression();
 
-                const expr = try self.alloc(Expression);
-                self.expressionMap.set(expr, .{
-                    .type = .SliceType,
-                    .value = res,
-                });
-                return expr;
+                    const start: u32 = @intCast(self.extra.items.len);
+                    self.extra.append(self.allocator(), size) catch return error.AllocatorFailure;
+                    self.extra.append(self.allocator(), rest) catch return error.AllocatorFailure;
+
+                    const expr = try self.alloc(Expression);
+                    self.expressionMap.set(expr, .{
+                        .type = .ArrayType,
+                        .value = start,
+                    });
+
+                    break :result expr;
+                }
+                else result: {
+                    const rest = try self.typeExpression();
+
+                    const expr = try self.alloc(Expression);
+                    self.expressionMap.set(expr, .{
+                        .type = .SliceType,
+                        .value = rest,
+                    });
+
+                    break :result expr;
+                };
             },
             .Fn => {
                 _ = try self.consume(.LParen, error.MissingParenthesis, "Expected a type list in function pointer type expression.");
@@ -1228,7 +1248,7 @@ pub const Parser = struct {
 
     fn variableSignature(self: *Self, public: bool, enforceType: bool) common.CompilerError!defines.SignaturePtr {
         const name = 
-            if (self.match(&.{.Identifier, .Discard})) self.previous()
+            if (self.match(&.{.Identifier})) self.previous()
             else return error.MissingIdentifier;
 
         var typename: defines.ExpressionPtr = undefined;

@@ -5,6 +5,7 @@ const Allocator = std.mem.Allocator;
 
 pub const MultiArrayList = @import("arraylist.zig").MultiArrayList;
 pub const ReverseStackArray = @import("arraylist.zig").ReverseStackArray;
+pub const StaticStack = @import("stack.zig").StaticStack;
 
 fn determine(comptime ptr: type) struct {
     PtrType: std.builtin.Type.Pointer.Size,
@@ -123,12 +124,28 @@ pub fn deepCopy(item: anytype, allocator: Allocator) Error!@TypeOf(item) {
     unreachable;
 }
 
+pub fn Pair(comptime T: type) type {
+    return struct {
+        const Self = @This();
+
+        first: T,
+        second: T,
+
+        pub fn init(first: T, second: T) Self {
+            return .{
+                .first = first,
+                .second = second,
+            };
+        }
+    };
+}
+
 const IteratorTypeEnum = enum {
     Forward,
     Backward
 };
 
-fn Iterator(comptime I: type, comptime P: type) type {
+pub fn Iterator(comptime I: type, comptime P: type) type {
     const Method = struct {
         name: []const u8,
         args: []const type,

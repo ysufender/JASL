@@ -29,12 +29,45 @@ pub const Graph = struct {
         }
     };
 
+    pub const Iterator = struct {
+        nodes: []const Node,
+        index: u32,
+        dep: u32,
+        visited: std.DynamicBitSetUnmanaged,
+        history: collections.StaticStack(collections.Pair(u32)),
+
+        pub fn init(nodes: []const Node, allocator: std.mem.Allocator) Iterator {
+            return .{
+                .nodes = nodes,
+                .visited = std.DynamicBitSetUnmanaged.initFull(allocator, nodes.len),
+                .idx = 0,
+                .dep = 0,
+                .history = try collections.StaticStack(collections.Pair(u32)).init(nodes.len, allocator),
+            };
+        }
+
+        pub fn next(self: *Iterator) ?Node {
+            // TODO: Continue
+            if (self.dep < self.nodes[self.index].depends.len) {
+                const depIdx = self.nodes[self.index].depends[self.dep];
+                self.history.push(.init(self.index, self.dep)) catch {};
+                self.visited.set(depIdx);
+
+                self.index = depIdx;
+                self.dep = 0;
+            }
+        }
+    };
+
     nodes: []Node,
 
     pub fn init(allocator: std.mem.Allocator, size: u32) Error!Self {
         return .{
             .nodes = allocator.alloc(Node, size) catch return error.AllocatorFailure,
         };
+    }
+
+    pub fn iterator(self: *Self) collections.Iterator(Iterator, Node) {
     }
 };
 
@@ -67,17 +100,14 @@ pub const Resolver = struct {
         var graph = try Graph.init(allocator, self.modules.modules.len);
 
         for (0..self.modules.modules.len) |i| {
-            _ = try self.generateNode(@intCast(i), 0, &graph);
+            _ = try self.generateNode(@intCast(i), &graph);
         }
 
-        std.debug.print("ModLen: {d}\n", .{graph.nodes.len});
-        
         return collections.deepCopy(graph, owner);
     }
 
-    fn generateNode(self: *Self, moduleIndex: u32, _graphIndex: u32, graph: *Graph) Error!u32 {
+    fn generateNode(self: *Self, moduleIndex: u32, graph: *Graph) Error!u32 {
         const allocator = self.arena.allocator();
-        var graphIndex = _graphIndex;
 
         const name = self.modules.modules.items(.name)[moduleIndex];
 
@@ -88,17 +118,17 @@ pub const Resolver = struct {
         const dependencies = self.modules.modules.items(.dependencies)[moduleIndex].items;
 
         var depends = allocator.alloc(defines.Offset, dependencies.len) catch return error.AllocatorFailure;
-        self.resolved.putAssumeCapacityNoClobber(name, graphIndex);
-        graph.nodes[graphIndex] = .{
+        const idx = self.resolved.size;
+        self.resolved.putAssumeCapacityNoClobber(name, idx);
+
+        for (dependencies, 0..) |dependency, i| {
+            depends[i] = try self.generateNode(self.modules.ids.get(dependency).?, graph);
+        }
+ 
+        graph.nodes[idx] = .{
             .name = name,
             .depends = depends,
         };
-
-        for (dependencies, 0..) |dependency, i| {
-            defer graphIndex += 1;
-            depends[i] = try self.generateNode(self.modules.ids.get(dependency).?, graphIndex, graph);
-        }
- 
-        return graphIndex;
+        return idx;
     }
 };

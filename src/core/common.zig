@@ -45,4 +45,5 @@ pub const CompilerError = error {
     OutOfMemory,
     EmptyCharLiteral,
     FileNotFound,
+    IndexOutOfBounds,
 };

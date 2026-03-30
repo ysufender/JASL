@@ -297,8 +297,7 @@ pub const Prepass = struct {
     }
 
     fn getModulePathWithExtension(allocator: std.mem.Allocator, id: u32, ast: parser.AST, context: *Context) Error![]const u8 {
-        return Context.realpathAlloc(
-            allocator,
+        return context.realpath(
             std.fmt.allocPrint(allocator, "{s}.jasl", .{
                 try getModulePath(allocator, id, ast, context)
             }) catch return error.AllocatorFailure

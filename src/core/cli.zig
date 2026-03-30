@@ -108,19 +108,16 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
     }
 
     const collect = struct {
-        pub fn collect(count: u32, it: NMap.KeyIterator, _allocator: std.mem.Allocator) ![][]const u8 {
+        pub fn collect(count: u32, _it: NMap.KeyIterator, _allocator: std.mem.Allocator) ![][]const u8 {
+            var it = _it;
             const ret = _allocator.alloc([]const u8, count) catch return error.AllocatorFailure;
-            for (0..count) |i| {
-                ret[i] = it.items[i];
+            var i: u32 = 0;
+            while (it.next()) |n| : (i += 1) {
+                ret[i] = n.*;
             }
-
             return ret;
         }
     }.collect;
-
-    // TODO: Continue
-    std.debug.print("Hello {any}\n", .{includeDirs. });
-
 
     return blk: {
         if (maybeFile) |file| break :blk common.CompilerSettings{

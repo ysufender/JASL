@@ -1,6 +1,6 @@
-pub let AssertComptime = fn (T: type, Value: T) -> void { };
+pub let ensure = fn (T: type, Value: T) -> void { };
 
-pub let Call = fn (T: type, Fn: T, args: builtin::argTypes(T, builtin::typeInfo(T).Pointer.Child.Fn.name))
+pub let call = fn (T: type, Fn: T, args: builtin::argTypes(T, builtin::typeInfo(T).Pointer.Child.Fn.name))
     -> builtin::returnTypes(T, builtin::typeInfo(T).Pointer.Child.Fn.name) {
 
     return builtin::call(Fn, args);

@@ -1,6 +1,6 @@
 pub let this = fn () -> type { };
 pub let unreachable = fn () -> noreturn { };
-pub let tag = fn (_: any, _: any) -> bool { };
+pub let tag = fn (unionValue: any, tagValue: any) -> bool { };
 
 pub let allocator = fn (T: type) -> type {
     return struct {

@@ -31,6 +31,8 @@ import builtin;
         "items" is the slice of the underlying buffer, without including the extra capacity.
 */
 pub let ArrayList = fn (T: type, type: enum { Compact, Overhead, }) -> type {
+    // TODO: Complete after writing allocators
+
     return struct {
         let Self = builtin::this();
 

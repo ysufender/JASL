@@ -1,7 +1,16 @@
 import builtin;
+import std::comptime;
 
 pub let assert = fn (cnd: bool) -> void {
     if !cnd {
         builtin::unreachable();
+    }
+};
+
+pub let staticAssert = fn (cnd: bool) -> void {
+    std::Comptime(bool, cnd);
+
+    if !cdn {
+        builtin::compileError("Assertion failed.", ());
     }
 };
