@@ -91,7 +91,7 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
         }
 
         common.log.info("Dependency Graph:", .{});
-        var diterator = collections.SliceIterator(.Backward, dependenciesList.nodes);
+        var diterator = try dependenciesList.iterator(allocator);
         while (diterator.next()) |dep| {
             common.log.info("\t{s}:", .{dep.name});
             for (dep.depends) |depDep| {

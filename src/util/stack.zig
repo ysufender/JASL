@@ -33,5 +33,9 @@ pub fn StaticStack(comptime T: type) type {
             defer self.index -= 1;
             return self.values[self.index];
         }
+
+        pub fn empty(self: *const Self) bool {
+            return self.index == 0;
+        }
     };
 }

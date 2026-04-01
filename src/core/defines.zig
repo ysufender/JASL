@@ -1,11 +1,12 @@
 const std = @import("std"); 
 const common = @import("common.zig");
+const builtin = @import("builtin");
 
 const Settings = common.CompilerSettings;
 
 //pub const Lock = std.Thread.Mutex;
 pub const Lock =
-    if (Settings.threading) std.Thread.RwLock
+    if (!builtin.is_test) std.Thread.RwLock
     else struct {
         pub fn lock(_: *Lock) void {}
         pub fn unlock(_: *Lock) void {}
@@ -15,7 +16,7 @@ pub const Lock =
     };
 
 pub const ThreadPool =
-    if (Settings.threading) std.Thread.Pool
+    if (!builtin.is_test) std.Thread.Pool
     else struct {
         pub fn init(_: *ThreadPool, _: anytype) common.CompilerError!void { }
         pub fn spawnWg(_: *ThreadPool, _: *WaitGroup, function: anytype, args: anytype) void {
@@ -24,7 +25,7 @@ pub const ThreadPool =
     };
 
 pub const WaitGroup =
-    if (Settings.threading) std.Thread.WaitGroup
+    if (!builtin.is_test) std.Thread.WaitGroup
     else struct {
         pub fn wait(_: *WaitGroup) void {}
     };

@@ -3,8 +3,6 @@ const log = @import("log.zig");
 
 const Self = @This();
 
-pub const threading = true;
-
 inputFile: []const u8,
 workingDir: []const u8,
 includeDirs: [][]const u8,

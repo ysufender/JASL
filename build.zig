@@ -22,4 +22,18 @@ pub fn build(b: *std.Build) void {
     exe.linkLibC();
     b.exe_dir = "build/";
     b.installArtifact(exe);
+
+    const testing = b.addTest(.{
+        .name = "jtest",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/tests.zig"),
+            .target = target,
+            .optimize = .Debug,
+        }),
+    });
+    testing.step.dependOn(&exe.step);
+    b.installArtifact(testing);
+
+    const runTest = b.step("test", "Execute unit tests");
+    runTest.dependOn(&testing.step);
 }

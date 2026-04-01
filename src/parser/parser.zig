@@ -97,6 +97,7 @@ pub const AST = struct {
 
     pub fn print(self: *const Self, context: *common.CompilerContext) void {
         const tokens = context.getTokens(self.tokens);
+        const file = tokens.items(.start)[0];
         std.debug.print("\nTokens:      ", .{});
         var titerator = tokens.iterator();
         var i: u32 = 0;
@@ -105,17 +106,17 @@ pub const AST = struct {
             if (i >= 16) {
                 break;
             }
-            std.debug.print("({d} {s} {d} {d}) ", .{titerator.idx - 1, @tagName(token.type), token.start, token.end});
+            std.debug.print("({d} {s}) ", .{titerator.idx - 1, @tagName(token.type)});
         }
         std.debug.print("\nExpressions: ", .{});
         var eiterator = self.expressions.iterator();
         i = 0;
-        while (eiterator.next()) |stmt| {
+        while (eiterator.next()) |expr| {
             defer i += 1;
             if (i >= 16) {
                 break;
             }
-            std.debug.print("{d} ", .{stmt.value});
+            std.debug.print("({s} {d}) ", .{@tagName(expr.type), expr.value});
         }
         std.debug.print("\nStatements:  ", .{});
         var siterator = self.statements.iterator();
@@ -125,17 +126,17 @@ pub const AST = struct {
             if (i >= 16) {
                 break;
             }
-            std.debug.print("{d} ", .{stmt.value});
+            std.debug.print("({s} {d}) ", .{@tagName(stmt.type), stmt.value});
         }
         std.debug.print("\nSignatures:  ", .{});
         var viterator = self.signatures.iterator();
         i = 0;
-        while (viterator.next()) |stmt| {
+        while (viterator.next()) |sign| {
             defer i += 1;
             if (i >= 16) {
                 break;
             }
-            std.debug.print("{d} ", .{stmt.name});
+            std.debug.print("({s}{s} {d}) ", .{if (sign.public) "pub " else "", tokens.get(sign.name).lexeme(context, file), sign.type});
         }
         std.debug.print("\nMask:        ", .{});
         for (self.statementMask[0..@min(16, self.statementMask.len)]) |stmt| {

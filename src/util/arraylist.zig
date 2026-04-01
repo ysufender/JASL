@@ -64,6 +64,17 @@ pub fn MultiArrayList(comptime T: type) type {
             pub fn reset(self: *Iterator) void {
                 self.idx = 0;
             }
+
+            pub fn exhaust(self: *Iterator, allocator: Allocator) CompilerError![]T {
+                var mem = allocator.alloc(T, self.ctx.len) catch return error.AllocatorFailure;
+                var i: u32 = 0;
+
+                while (self.next()) |item| : (i += 1) {
+                    mem[i] = item;
+                }
+
+                return mem;
+            }
         };
 
         /// Readonly slice

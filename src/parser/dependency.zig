@@ -30,32 +30,91 @@ pub const Graph = struct {
     };
 
     pub const Iterator = struct {
-        nodes: []const Node,
-        index: u32,
-        dep: u32,
-        visited: std.DynamicBitSetUnmanaged,
-        history: collections.StaticStack(collections.Pair(u32)),
+        const Frame = struct {
+            idx: u32,
+            depIndex: u32,
+        };
 
-        pub fn init(nodes: []const Node, allocator: std.mem.Allocator) Iterator {
+        const NodeState = enum(u8) {
+            unvisited,
+            visiting,
+            visited,
+        };
+
+        nodes: []const Node,
+        stack: []Frame,
+        states: []NodeState,
+        
+        sp: usize,
+        nextRoot: u32,
+
+        pub fn init(nodes: []const Node, allocator: std.mem.Allocator) !Iterator {
+            const stack = try allocator.alloc(Frame, nodes.len);
+            errdefer allocator.free(stack);
+
+            const states = try allocator.alloc(NodeState, nodes.len);
+            @memset(states, .unvisited);
+
             return .{
                 .nodes = nodes,
-                .visited = std.DynamicBitSetUnmanaged.initFull(allocator, nodes.len),
-                .idx = 0,
-                .dep = 0,
-                .history = try collections.StaticStack(collections.Pair(u32)).init(nodes.len, allocator),
+                .stack = stack,
+                .states = states,
+                .sp = 0,
+                .nextRoot = 0,
             };
         }
 
         pub fn next(self: *Iterator) ?Node {
-            // TODO: Continue
-            if (self.dep < self.nodes[self.index].depends.len) {
-                const depIdx = self.nodes[self.index].depends[self.dep];
-                self.history.push(.init(self.index, self.dep)) catch {};
-                self.visited.set(depIdx);
+            while (true) {
+                if (self.sp == 0) {
+                    while (self.nextRoot < self.nodes.len and self.states[self.nextRoot] != .unvisited) {
+                        self.nextRoot += 1;
+                    }
 
-                self.index = depIdx;
-                self.dep = 0;
+                    if (self.nextRoot >= self.nodes.len) {
+                        return null;
+                    }
+
+                    self.stack[self.sp] = .{ .idx = self.nextRoot, .depIndex = 0 };
+                    self.states[self.nextRoot] = .visiting;
+                    self.sp += 1;
+                    self.nextRoot += 1;
+                    continue;
+                }
+
+                var top = &self.stack[self.sp - 1];
+                const node = self.nodes[top.idx];
+
+                if (top.depIndex < node.depends.len) {
+                    const dep = node.depends[top.depIndex];
+                    top.depIndex += 1;
+
+                    if (self.states[dep] == .unvisited) {
+                        self.stack[self.sp] = .{ .idx = dep, .depIndex = 0 };
+                        self.states[dep] = .visiting;
+                        self.sp += 1;
+                    }
+                    
+                    continue;
+                }
+
+                self.states[top.idx] = .visited;
+                self.sp -= 1;
+
+                return node;
             }
+        }
+
+        pub fn exhaust(self: *Iterator, allocator: std.mem.Allocator) Error![]Node {
+            var items = allocator.alloc(Node, self.nodes.len) catch return error.AllocatorFailure;
+            var count: usize = 0;
+
+            while (self.next()) |item| {
+                items[count] = item;
+                count += 1;
+            }
+
+            return items;
         }
     };
 
@@ -67,7 +126,8 @@ pub const Graph = struct {
         };
     }
 
-    pub fn iterator(self: *Self) collections.Iterator(Iterator, Node) {
+    pub fn iterator(self: *const Self, allocator: std.mem.Allocator) Error!collections.Iterator(Iterator, Node) {
+        return .init(self.nodes, allocator);
     }
 };
 

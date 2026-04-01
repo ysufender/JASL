@@ -299,162 +299,166 @@ pub fn Collect(comptime I: type, comptime P: type, iterator: I, allocator: std.m
 //
 // Tests
 //
-const deepCopyArr = [_]u32{5, 4, 3, 4, 3};
+pub const Tests = struct {
+    const deepCopyArr = [_]u32{5, 4, 3, 4, 3};
 
-test "Pointer Deep Copy" {
-    const ptr = try std.testing.allocator.create(u32);
-    ptr.* = 5;
+    pub fn init() !void { }
 
-    const ptr2 = try deepCopy(ptr, std.testing.allocator);
+    test "Pointer Deep Copy" {
+        const ptr = try std.testing.allocator.create(u32);
+        ptr.* = 5;
 
-    defer std.testing.allocator.destroy(ptr);
-    defer std.testing.allocator.destroy(ptr2);
+        const ptr2 = try deepCopy(ptr, std.testing.allocator);
 
-    try std.testing.expectEqualDeep(ptr, ptr2);
-    try std.testing.expect(ptr != ptr2);
-}
+        defer std.testing.allocator.destroy(ptr);
+        defer std.testing.allocator.destroy(ptr2);
 
-test "Slice Deep Copy" {
-    const ptr: []const u32 = &deepCopyArr;
-
-    const ptr2 = try deepCopy(ptr, std.testing.allocator);
-
-    defer std.testing.allocator.free(ptr2);
-
-    try std.testing.expectEqualDeep(ptr, ptr2);
-    try std.testing.expect(ptr.ptr != ptr2.ptr);
-}
-
-test "Many Pointer Shallow Copy" {
-    const ptr: [*]const u32 = &deepCopyArr;
-
-    const ptr2 = try deepCopy(ptr, std.testing.allocator);
-
-    try std.testing.expect(ptr == ptr2);
-}
-
-test "C Pointer Shallow Copy" {
-    const ptr: [*c]const u32 = &deepCopyArr;
-
-    const ptr2 = try deepCopy(ptr, std.testing.allocator);
-
-    try std.testing.expect(ptr == ptr2);
-}
-
-test "Optional Defined Pointer Copy" {
-    const ptr: ?*u32 = try std.testing.allocator.create(u32);
-    ptr.?.* = 5;
-
-    const ptr2 = try deepCopy(ptr, std.testing.allocator);
-    defer std.testing.allocator.destroy(ptr.?);
-    defer std.testing.allocator.destroy(ptr2.?);
-
-    try std.testing.expectEqualDeep(ptr, ptr2);
-}
-
-test "Optional Null Pointer Copy" {
-    const ptr: ?*u32 = null;
-    const ptr2 = try deepCopy(ptr, std.testing.allocator);
-
-    try std.testing.expectEqualDeep(ptr, ptr2);
-    try std.testing.expectEqualDeep(null, ptr);
-}
-
-test "Optional Defined Slice Copy" {
-    const ptr: ?[] const u32 = &deepCopyArr;
-
-    const ptr2 = try deepCopy(ptr, std.testing.allocator);
-    defer std.testing.allocator.free(ptr2.?);
- 
-    try std.testing.expectEqualDeep(ptr, ptr2);
-}
-
-test "Optional Null Slice Copy" {
-    const ptr: ?[]const u32 = null;
-    const ptr2 = try deepCopy(ptr, std.testing.allocator);
-
-    try std.testing.expectEqualDeep(ptr, ptr2);
-    try std.testing.expectEqualDeep(null, ptr);
-}
-
-test "Optional Defined Array Copy" {
-    const arr: ?[5]u32 = deepCopyArr;
-    const arr2 = try deepCopy(arr, std.testing.allocator);
-
-    try std.testing.expectEqualDeep(arr, arr2);
-}
-
-test "Optional Null Array Copy" {
-    const arr: ?[5]u32 = null;
-    const arr2 = try deepCopy(arr, std.testing.allocator);
-
-    try std.testing.expectEqualDeep(arr, arr2);
-    try std.testing.expectEqualDeep(arr2, null);
-}
-
-test "Array Copy" {
-    const arr = try deepCopy(deepCopyArr, std.testing.allocator);
-
-    try std.testing.expectEqualDeep(deepCopyArr, arr);
-}
-
-test "One Big Test" {
-    const DeepNested = struct {
-        const Self = @This();
-
-        id: u32,
-        data: ?[]const u8,
-        children: ?[]Self,
-
-        pub fn clone(self: Self, allocator: Allocator) !Self {
-            var new_data: ?[]const u8 = null;
-            if (self.data) |d| {
-                new_data = try allocator.dupe(u8, d);
-            }
-
-            var new_children: ?[]Self = null;
-            if (self.children) |children| {
-                new_children = try allocator.alloc(Self, children.len);
-                for (children, 0..) |child, i| {
-                    new_children.?[i] = try child.clone(allocator);
-                }
-            }
-
-            return .{
-                .id = self.id,
-                .data = new_data,
-                .children = new_children,
-            };
-        }
-    };
-
-    const alloc = std.testing.allocator;
-
-    var original = DeepNested{
-        .id = 1,
-        .data = try alloc.dupe(u8, "parent"),
-        .children = try alloc.alloc(DeepNested, 1),
-    };
-    original.children.?[0] = .{
-        .id = 2,
-        .data = try alloc.dupe(u8, "child"),
-        .children = null,
-    };
-
-    const copy = try deepCopy(original, alloc);
-
-    defer {
-        alloc.free(original.data.?);
-        alloc.free(original.children.?[0].data.?);
-        alloc.free(original.children.?);
-        alloc.free(copy.data.?);
-        alloc.free(copy.children.?[0].data.?);
-        alloc.free(copy.children.?);
+        try std.testing.expectEqualDeep(ptr, ptr2);
+        try std.testing.expect(ptr != ptr2);
     }
 
-    try std.testing.expectEqual(@as(u32, 1), copy.id);
-    try std.testing.expect(std.mem.eql(u8, "parent", copy.data.?));
-    try std.testing.expect(std.mem.eql(u8, "child", copy.children.?[0].data.?));
-    
-    try std.testing.expect(original.data.?.ptr != copy.data.?.ptr);
-}
+    test "Slice Deep Copy" {
+        const ptr: []const u32 = &deepCopyArr;
+
+        const ptr2 = try deepCopy(ptr, std.testing.allocator);
+
+        defer std.testing.allocator.free(ptr2);
+
+        try std.testing.expectEqualDeep(ptr, ptr2);
+        try std.testing.expect(ptr.ptr != ptr2.ptr);
+    }
+
+    test "Many Pointer Shallow Copy" {
+        const ptr: [*]const u32 = &deepCopyArr;
+
+        const ptr2 = try deepCopy(ptr, std.testing.allocator);
+
+        try std.testing.expect(ptr == ptr2);
+    }
+
+    test "C Pointer Shallow Copy" {
+        const ptr: [*c]const u32 = &deepCopyArr;
+
+        const ptr2 = try deepCopy(ptr, std.testing.allocator);
+
+        try std.testing.expect(ptr == ptr2);
+    }
+
+    test "Optional Defined Pointer Copy" {
+        const ptr: ?*u32 = try std.testing.allocator.create(u32);
+        ptr.?.* = 5;
+
+        const ptr2 = try deepCopy(ptr, std.testing.allocator);
+        defer std.testing.allocator.destroy(ptr.?);
+        defer std.testing.allocator.destroy(ptr2.?);
+
+        try std.testing.expectEqualDeep(ptr, ptr2);
+    }
+
+    test "Optional Null Pointer Copy" {
+        const ptr: ?*u32 = null;
+        const ptr2 = try deepCopy(ptr, std.testing.allocator);
+
+        try std.testing.expectEqualDeep(ptr, ptr2);
+        try std.testing.expectEqualDeep(null, ptr);
+    }
+
+    test "Optional Defined Slice Copy" {
+        const ptr: ?[] const u32 = &deepCopyArr;
+
+        const ptr2 = try deepCopy(ptr, std.testing.allocator);
+        defer std.testing.allocator.free(ptr2.?);
+     
+        try std.testing.expectEqualDeep(ptr, ptr2);
+    }
+
+    test "Optional Null Slice Copy" {
+        const ptr: ?[]const u32 = null;
+        const ptr2 = try deepCopy(ptr, std.testing.allocator);
+
+        try std.testing.expectEqualDeep(ptr, ptr2);
+        try std.testing.expectEqualDeep(null, ptr);
+    }
+
+    test "Optional Defined Array Copy" {
+        const arr: ?[5]u32 = deepCopyArr;
+        const arr2 = try deepCopy(arr, std.testing.allocator);
+
+        try std.testing.expectEqualDeep(arr, arr2);
+    }
+
+    test "Optional Null Array Copy" {
+        const arr: ?[5]u32 = null;
+        const arr2 = try deepCopy(arr, std.testing.allocator);
+
+        try std.testing.expectEqualDeep(arr, arr2);
+        try std.testing.expectEqualDeep(arr2, null);
+    }
+
+    test "Array Copy" {
+        const arr = try deepCopy(deepCopyArr, std.testing.allocator);
+
+        try std.testing.expectEqualDeep(deepCopyArr, arr);
+    }
+
+    test "One Big Test" {
+        const DeepNested = struct {
+            const Self = @This();
+
+            id: u32,
+            data: ?[]const u8,
+            children: ?[]Self,
+
+            pub fn clone(self: Self, allocator: Allocator) !Self {
+                var new_data: ?[]const u8 = null;
+                if (self.data) |d| {
+                    new_data = try allocator.dupe(u8, d);
+                }
+
+                var new_children: ?[]Self = null;
+                if (self.children) |children| {
+                    new_children = try allocator.alloc(Self, children.len);
+                    for (children, 0..) |child, i| {
+                        new_children.?[i] = try child.clone(allocator);
+                    }
+                }
+
+                return .{
+                    .id = self.id,
+                    .data = new_data,
+                    .children = new_children,
+                };
+            }
+        };
+
+        const alloc = std.testing.allocator;
+
+        var original = DeepNested{
+            .id = 1,
+            .data = try alloc.dupe(u8, "parent"),
+            .children = try alloc.alloc(DeepNested, 1),
+        };
+        original.children.?[0] = .{
+            .id = 2,
+            .data = try alloc.dupe(u8, "child"),
+            .children = null,
+        };
+
+        const copy = try deepCopy(original, alloc);
+
+        defer {
+            alloc.free(original.data.?);
+            alloc.free(original.children.?[0].data.?);
+            alloc.free(original.children.?);
+            alloc.free(copy.data.?);
+            alloc.free(copy.children.?[0].data.?);
+            alloc.free(copy.children.?);
+        }
+
+        try std.testing.expectEqual(@as(u32, 1), copy.id);
+        try std.testing.expect(std.mem.eql(u8, "parent", copy.data.?));
+        try std.testing.expect(std.mem.eql(u8, "child", copy.children.?[0].data.?));
+        
+        try std.testing.expect(original.data.?.ptr != copy.data.?.ptr);
+    }
+};

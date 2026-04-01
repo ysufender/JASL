@@ -8,7 +8,7 @@ pub let Option = fn (T: type) -> type {
         None: void,
 
         pub let some = fn (self: *Self) -> bool {
-            return builtin::tag(self, Self::Tag::Some);
+            return builtin::tag(self, @Some);
         };
 
         pub let none = fn (self: *Self) -> bool {

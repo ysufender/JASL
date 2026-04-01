@@ -27,7 +27,7 @@ pub const TokenType = enum(u8) {
     Pub, Mut,
     And, Or,
     Identifier,
-    String, Integer, Float, False, True,
+    String, Integer, Float, False, True, EnumLiteral,
     Discard,
     EOF,
 };
@@ -196,7 +196,33 @@ pub const Scanner = struct {
     fn scanToken(self: *Self) common.CompilerError!void {
         self.start = self.current;
 
-        return switch (self.advance()) {
+        const scanIdentifier = struct {
+            fn scanIdentifier(this: *Self) common.CompilerError![]const u8 {
+                const ch = this.previous();
+                if (std.ascii.isAlphabetic(ch) or ch == '_'){
+                    const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+                    const num = comptime "0123456789";
+                    const alphanum = alpha ++ num;
+
+                    const index =
+                        if (std.mem.indexOfNonePos(u8, this.source, this.current, alphanum))
+                            |idx| idx 
+                        else
+                            this.end;
+
+                    this.current = @intCast(index);
+
+                    const str = this.source[this.start..this.current];
+                    return str;
+                }
+                else {
+                    this.report("Unexpected character {c}", .{ch});
+                    return error.UnexpectedCharacter;
+                }
+            }
+        }.scanIdentifier;
+
+        return blk: switch (self.advance()) {
             '(' => self.addToken(.LParen),
             ')' => self.addToken(.RParen),
             '{' => self.addToken(.LBrace),
@@ -209,7 +235,7 @@ pub const Scanner = struct {
             '.' => 
                 if (std.ascii.isDigit(self.peek())) {
                     self.report("Dot (.) prefixed numeric literals are not allowed.", .{});
-                    return error.DotPrefixedNumericLiteral;
+                    break :blk error.DotPrefixedNumericLiteral;
                 }
                 else self.addToken(.Dot),
             ':' =>
@@ -246,7 +272,7 @@ pub const Scanner = struct {
 
                     if (self.isAtEnd()) {
                         self.report("Unterminated multiline comment", .{});
-                        return error.UnterminatedComment;
+                        break :blk error.UnterminatedComment;
                     }
                 }
                 else self.addToken(.Slash),
@@ -272,7 +298,7 @@ pub const Scanner = struct {
 
                 if (ch == '\'') {
                     self.report("Empty character literals are not allowed.", .{});
-                    return error.EmptyCharLiteral;
+                    break :blk error.EmptyCharLiteral;
                 }
 
                 _ = try self.consume('\'', "Expected closing single quote (')");
@@ -290,13 +316,16 @@ pub const Scanner = struct {
 
                 if (self.isAtEnd()) {
                     self.report("Unterminated string literal", .{});
-                    return error.UnterminatedStringLiteral;
+                    break :blk error.UnterminatedStringLiteral;
                 }
 
                 self.start += 1;
                 try self.addToken(.String);
             },
-            // TODO: character literals
+            '@' => {
+                _ = try scanIdentifier(self);
+                break :blk self.addToken(.EnumLiteral);
+            },
             else => |ch| {
                 if (std.ascii.isDigit(ch)) {
                     while (std.ascii.isDigit(self.peek())) {
@@ -310,35 +339,19 @@ pub const Scanner = struct {
                             _ = self.advance();
                         }
 
-                        return self.addToken(.Float);
+                        break :blk self.addToken(.Float);
                     }
                     else if (self.check('.')) {
                         _ = self.advance();
                         self.report("Trailing dots (.) after numeric literals are not allowed.", .{});
-                        return error.DotPostfixedNumericLiteral;
+                        break :blk error.DotPostfixedNumericLiteral;
                     }
 
-                    return self.addToken(.Integer);
-                }
-                else if (std.ascii.isAlphabetic(ch) or ch == '_'){
-                    const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
-                    const num = comptime "0123456789";
-                    const alphanum = alpha ++ num;
-
-                    const index =
-                        if (std.mem.indexOfNonePos(u8, self.source, self.current, alphanum))
-                            |idx| idx 
-                        else
-                            self.end;
-
-                    self.current = @intCast(index);
-
-                    const str = self.source[self.start..self.current];
-                    return self.addToken(getType(str));
+                    break :blk self.addToken(.Integer);
                 }
                 else {
-                    self.report("Unexpected character {c}", .{ch});
-                    return error.UnexpectedCharacter;
+                    const str = try scanIdentifier(self);
+                    break :blk self.addToken(getType(str));
                 }
             }
         };
@@ -371,9 +384,10 @@ pub const Scanner = struct {
 //        }
     }
 
-    fn check(self: *Self, expected: u8) bool {
-        if (self.isAtEnd()) return false;
-        return self.source[self.current] == expected;
+    fn check(self: *const Self, expected: u8) bool {
+        return
+            if (self.isAtEnd()) false
+            else self.source[self.current] == expected;
     }
 
     fn match(self: *Self, expected: u8) bool {
@@ -384,14 +398,22 @@ pub const Scanner = struct {
         return true;
     }
 
-    fn peek(self: *Self) u8 {
-        if (self.isAtEnd()) return 0;
-        return self.source[self.current];
+    fn previous(self: *const Self) u8 {
+        return
+            if (self.current <= 0) 0
+            else self.source[self.current];
     }
 
-    fn peekn(self: *Self, n: u32) u8 {
-        if (self.current + n >= self.source.len) return 0;
-        return self.source[self.current + n];
+    fn peek(self: *const Self) u8 {
+        return
+            if (self.isAtEnd()) 0
+            else self.source[self.current];
+    }
+
+    fn peekn(self: *const Self, n: u32) u8 {
+        return
+            if (self.current + n >= self.source.len) 0
+            else self.source[self.current + n];
     }
 
     fn advance(self: *Self) u8 {
@@ -417,7 +439,7 @@ pub const Scanner = struct {
             _ = self.advance();
     }
 
-    fn isAtEnd(self: *Self) bool {
+    fn isAtEnd(self: *const Self) bool {
         return self.current >= self.end;
     }
 
@@ -445,4 +467,20 @@ pub const Scanner = struct {
 // Tests
 //
 pub const Tests = struct {
+    const allocator = std.testing.allocator;
+
+    test "Enum Litaral" {
+        var context = try common.CompilerContext.init(allocator);
+        try context.resolved.putNoClobber(allocator, "test_file", @intCast(context.filenameMap.items.len));
+        try context.filenameMap.append(allocator, "test_file");
+        try context.filenameMap.append(allocator,
+            \\ @Literal
+        );
+
+        var scanner = try Scanner.init(allocator, &context, "test_file");
+        const _tokens = try scanner.scanAll();
+        const tokens = context.getTokens(_tokens);
+
+        try std.testing.expectEqual(.EnumLiteral, tokens.items(.type)[0]);
+    }
 };
