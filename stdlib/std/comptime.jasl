@@ -1,7 +1,11 @@
+import std::collections;
+
+let findFirst = std::collections::findFirst;
+
 pub let ensure = fn (T: type, Value: T) -> void { };
 
 pub let call = fn (T: type, Fn: T, args: builtin::argTypes(T, builtin::typeInfo(T).Pointer.Child.Fn.name))
-    -> builtin::returnTypes(T, builtin::typeInfo(T).Pointer.Child.Fn.name) {
+    -> builtin::returnType(T, builtin::typeInfo(builtin::typeInfo(T).Pointer.Child).Fn.name) {
 
     return builtin::call(Fn, args);
 };

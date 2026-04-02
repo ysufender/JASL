@@ -1,9 +1,15 @@
+import builtin::types;
+
 pub let this = fn () -> type { };
-pub let unreachable = fn () -> noreturn { };
-pub let tag = fn (unionValue: any, tagValue: any) -> bool { };
 
 pub let allocator = fn (T: type) -> type {
     return struct {
         pub let alloc = fn (size: u32) -> []T { };
     };
 };
+
+pub let typeInfo = fn (T: type) -> builtin::type::TypeInfo { };
+
+pub let compileError = fn (fmt: []u8, args: any) -> noreturn { };
+
+pub let setBit = fn (value: any, bit: u32, value: u32) -> void { };

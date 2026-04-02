@@ -196,32 +196,6 @@ pub const Scanner = struct {
     fn scanToken(self: *Self) common.CompilerError!void {
         self.start = self.current;
 
-        const scanIdentifier = struct {
-            fn scanIdentifier(this: *Self) common.CompilerError![]const u8 {
-                const ch = this.previous();
-                if (std.ascii.isAlphabetic(ch) or ch == '_'){
-                    const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
-                    const num = comptime "0123456789";
-                    const alphanum = alpha ++ num;
-
-                    const index =
-                        if (std.mem.indexOfNonePos(u8, this.source, this.current, alphanum))
-                            |idx| idx 
-                        else
-                            this.end;
-
-                    this.current = @intCast(index);
-
-                    const str = this.source[this.start..this.current];
-                    return str;
-                }
-                else {
-                    this.report("Unexpected character {c}", .{ch});
-                    return error.UnexpectedCharacter;
-                }
-            }
-        }.scanIdentifier;
-
         return blk: switch (self.advance()) {
             '(' => self.addToken(.LParen),
             ')' => self.addToken(.RParen),
@@ -323,8 +297,26 @@ pub const Scanner = struct {
                 try self.addToken(.String);
             },
             '@' => {
-                _ = try scanIdentifier(self);
-                break :blk self.addToken(.EnumLiteral);
+                const ch = self.advance();
+                if (std.ascii.isAlphabetic(ch) or ch == '_'){
+                    const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+                    const num = comptime "0123456789";
+                    const alphanum = alpha ++ num;
+
+                    const index =
+                        if (std.mem.indexOfNonePos(u8, self.source, self.current, alphanum))
+                            |idx| idx 
+                        else
+                            self.end;
+
+                    self.current = @intCast(index);
+
+                    break :blk self.addToken(.EnumLiteral);
+                }
+                else {
+                    self.report("Unexpected character {c}", .{ch});
+                    break :blk error.UnexpectedCharacter;
+                }
             },
             else => |ch| {
                 if (std.ascii.isDigit(ch)) {
@@ -349,9 +341,25 @@ pub const Scanner = struct {
 
                     break :blk self.addToken(.Integer);
                 }
-                else {
-                    const str = try scanIdentifier(self);
+                else if (std.ascii.isAlphabetic(ch) or ch == '_'){
+                    const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
+                    const num = comptime "0123456789";
+                    const alphanum = alpha ++ num;
+
+                    const index =
+                        if (std.mem.indexOfNonePos(u8, self.source, self.current, alphanum))
+                            |idx| idx 
+                        else
+                            self.end;
+
+                    self.current = @intCast(index);
+
+                    const str = self.source[self.start..self.current];
                     break :blk self.addToken(getType(str));
+                }
+                else {
+                    self.report("Unexpected character {c}", .{ch});
+                    return error.UnexpectedCharacter;
                 }
             }
         };
@@ -467,20 +475,15 @@ pub const Scanner = struct {
 // Tests
 //
 pub const Tests = struct {
-    const allocator = std.testing.allocator;
+    var gpa = std.heap.DebugAllocator(.{}){};
+    const allocator = gpa.allocator();
 
     test "Enum Litaral" {
         var context = try common.CompilerContext.init(allocator);
-        try context.resolved.putNoClobber(allocator, "test_file", @intCast(context.filenameMap.items.len));
-        try context.filenameMap.append(allocator, "test_file");
-        try context.filenameMap.append(allocator,
-            \\ @Literal
-        );
-
-        var scanner = try Scanner.init(allocator, &context, "test_file");
+        var scanner = try Scanner.init(allocator, &context, "test/enum_literal.jasl");
         const _tokens = try scanner.scanAll();
         const tokens = context.getTokens(_tokens);
 
-        try std.testing.expectEqual(.EnumLiteral, tokens.items(.type)[0]);
+        try std.testing.expectEqual(.EnumLiteral, tokens.items(.type)[1]);
     }
 };

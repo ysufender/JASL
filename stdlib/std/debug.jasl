@@ -1,8 +1,9 @@
 import builtin;
 import std::comptime;
 
-pub let assert = fn (cnd: bool) -> void {
+pub let assert = fn (cnd: bool, msg: []u8) -> void {
     if !cnd {
+        // TODO: Message error when IO is implemented
         builtin::unreachable();
     }
 };

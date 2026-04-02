@@ -177,15 +177,15 @@ pub const Prepass = struct {
 
             switch (statement.type) {
                 .Import => {
-                    const path = getModulePathWithExtension(allocator, statement.value, ast, self.context) catch {
-                        self.report("Couldn't get module path.", .{}, file.dataIndex, null);
+                    const module = getModuleName(statement.value, ast, self.context);
+                    file.dependencies.append(allocator, module) catch {
+                        self.report("Couldn't add dependency {s} to {s}.", .{module, file.name}, file.dataIndex, null);
                         fail = true;
                         continue;
                     };
 
-                    const module = getModuleName(statement.value, ast, self.context);
-                    file.dependencies.append(allocator, module) catch {
-                        self.report("Couldn't add dependency {s} to {s}.", .{module, file.name}, file.dataIndex, null);
+                    const path = getModulePathWithExtension(allocator, statement.value, ast, self.context) catch |err| {
+                        self.report("Couldn't get module path for {s}: {s}.", .{module, @errorName(err)}, file.dataIndex, null);
                         fail = true;
                         continue;
                     };
@@ -227,9 +227,6 @@ pub const Prepass = struct {
 
                     for (sigsStart..sigsEnd) |ptr| {
                         const sig = ast.signatures.get(ast.extra[@intCast(ptr)]);
-                        //if (file.symbols.len <= 16) {
-                            //std.debug.print("Sig Start: {d}\n", .{sig.name});
-                        //}
                         const sigName = tokens.get(sig.name).lexeme(self.context, file.dataIndex);
 
                         const idx = file.symbols.addOne(allocator) catch {
@@ -307,8 +304,7 @@ pub const Prepass = struct {
 
     /// Returned path is owned by the allocator.
     fn getModulePath(allocator: std.mem.Allocator, id: defines.ExpressionPtr, ast: parser.AST, context: *Context) Error![]const u8 {
-        const tokens = context.getTokens(ast.tokens);
-        const file = tokens.items(.start)[0];
+        const file = context.getTokens(ast.tokens).items(.start)[0];
 
         var parts = collections.ReverseStackArray([]const u8, std.fs.max_path_bytes).init();
         var current = id;
@@ -317,7 +313,7 @@ pub const Prepass = struct {
             const expr = ast.expressions.get(current);
             switch (expr.type) {
                 .Identifier => {
-                    const lexeme = tokens.get(expr.value).lexeme(context, file);
+                    const lexeme = context.getTokens(ast.tokens).get(expr.value).lexeme(context, file);
                     parts.append(lexeme) catch return error.PathNameTooLong;
                     break;
                 },
@@ -325,7 +321,7 @@ pub const Prepass = struct {
                     const lhsExpr = ast.extra[expr.value];
                     const rhsExpr = ast.extra[expr.value + 1];
 
-                    const rhsStr = tokens.get(rhsExpr).lexeme(context, file);
+                    const rhsStr = context.getTokens(ast.tokens).get(rhsExpr).lexeme(context, file);
                     parts.append(rhsStr) catch return error.PathNameTooLong;
 
                     current = lhsExpr;
@@ -338,13 +334,12 @@ pub const Prepass = struct {
     }
 
     fn getModuleName(id: defines.ExpressionPtr, ast: parser.AST, context: *Context) []const u8 {
-        const tokens = context.getTokens(ast.tokens);
-        const file = tokens.items(.start)[0];
+        const file = context.getTokens(ast.tokens).items(.start)[0];
         const expr = ast.expressions.get(id);
 
         const end = switch (expr.type) {
-            .Identifier => tokens.items(.end)[expr.value],
-            .Scoping => tokens.items(.end)[ast.extra[expr.value + 1]],
+            .Identifier => context.getTokens(ast.tokens).items(.end)[expr.value],
+            .Scoping => context.getTokens(ast.tokens).items(.end)[ast.extra[expr.value + 1]],
             else => unreachable,
         };
         const start = getModuleNameStartIndex(id, ast, context);
@@ -353,15 +348,14 @@ pub const Prepass = struct {
     }
 
     fn getModuleNameStartIndex(id: defines.ExpressionPtr, ast: parser.AST, context: *Context) u32 {
-        const tokens = context.getTokens(ast.tokens);
         var current = id;
-        var start = tokens.len;
+        var start = context.getTokens(ast.tokens).len;
 
         while (true) {
             const expr = ast.expressions.get(current);
             switch (expr.type) {
                 .Identifier => {
-                    start = tokens.items(.start)[expr.value];
+                    start = context.getTokens(ast.tokens).items(.start)[expr.value];
                     break;
                 },
                 .Scoping => {
@@ -379,13 +373,10 @@ pub const Prepass = struct {
         defer self.lock.unlockShared();
 
         common.log.err(fmt, args);
-        const ast = self.context.getAST(file);
-        const tokens = self.context.getTokens(ast.tokens);
-        
-        if (tokens.len > 0) {
+        if (self.context.getTokens(self.context.getAST(file).tokens).len > 0) {
             const t_idx = token orelse 0;
-            if (t_idx < tokens.len) {
-                const position = tokens.get(t_idx).position(self.context, file);
+            if (t_idx < self.context.getTokens(self.context.getAST(file).tokens).len) {
+                const position = self.context.getTokens(self.context.getAST(file).tokens).get(t_idx).position(self.context, file);
                 common.log.err("\t{s} {d}:{d}\n", .{self.context.getFileName(file), position.line, position.column});
                 return;
             }

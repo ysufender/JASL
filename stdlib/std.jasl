@@ -1,4 +1,5 @@
 import builtin;
+import std::math;
 
 pub let Option = fn (T: type) -> type {
     return union(enum) {
@@ -8,22 +9,26 @@ pub let Option = fn (T: type) -> type {
         None: void,
 
         pub let some = fn (self: *Self) -> bool {
-            return builtin::tag(self, @Some);
+            return self.tag == @Some;
         };
 
         pub let none = fn (self: *Self) -> bool {
             return !self.some();
         };
 
+        pub let unwrap = fn (self: *Self) -> T {
+            return self.Some;
+        };
+
         pub let orelse = fn (self: *Self, val: T) -> T {
             return
-                if self.some() self.Some
+                if (self.some()) self.Some
                 else val;
         };
 
         pub let orelseWith = fn (self: *Self, val: *fn () -> T) -> T {
             return
-                if self.some() self.Some
+                if (self.some()) self.Some
                 else val();
         };
     };
@@ -37,22 +42,26 @@ pub let Result = fn (T: type, E: type) -> type {
         Err: E,
 
         pub let ok = fn (self: *Self) -> bool {
-            return builtin::tag(self, Self::Tag::Ok);
+            return self.tag == @Ok;
         };
 
         pub let err = fn (self: *Self) -> bool {
             return !self.ok();
         };
 
+        pub let unwrap = fn (self: *Self) -> T {
+            return self.Ok;
+        };
+
         pub let orelse = fn (self: *Self, val: T) -> T {
             return
-                if self.ok() self.Ok
+                if (self.ok()) self.Ok
                 else val;
         };
 
         pub let orelseWith = fn (self: *Self, val: *fn () -> T) -> T {
             return
-                if self.ok() self.Ok
+                if (self.ok()) self.Ok
                 else val();
         };
     };
@@ -60,7 +69,26 @@ pub let Result = fn (T: type, E: type) -> type {
 
 pub let Pair = fn (T: type, P: type) -> type {
     return struct {
+        let Self = builtin::this();
+
         pub first: T,
         pub second: P,
+
+        pub let swap = fn (self: *mut Self) -> void {
+            self.* = Self(self.second, self.first);
+        };
     };
+};
+
+pub let ErrorCode = enum {
+    Ok,
+    Err,
+};
+
+pub let DefaultValue = fn (T: type) -> T {
+    // TODO: Default traits
+    return
+        if (std::math::Integer(T)) 0
+        else if (T == float) 0.0
+        else undefined;
 };

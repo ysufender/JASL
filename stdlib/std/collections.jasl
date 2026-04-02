@@ -1,0 +1,46 @@
+pub let Position = union(enum) {
+    NotFound: void,
+    Index: u32,
+
+    pub let found = fn (self: Self) -> bool {
+        return self.tag == @Index;
+    };
+
+    pub let notFound = fn (self: Self) -> bool {
+        return self.tag == @NotFound;
+    };
+};
+
+pub let findFirst = fn (T: type) -> *fn (T, []T) -> Position {
+    return fn (item: T, slice: []T) -> Position {
+        let index: mut u32 = 0;
+        while index < slice.len {
+            if slice[index] == item {
+                return Position::Index(index);
+            }
+
+            index = index + 1;
+        }
+
+        return Position::NotFound();
+    };
+};
+
+pub let eql = fn (T: type) -> *fn ([]T, []T) -> bool {
+    return fn (this: []T, that: []T) -> bool {
+        if this.len != that.len {
+            return false;
+        }
+
+        while this.len > 0 {
+            if this[0] != other[0] {
+                return false;
+            }
+
+            this = this.subslice(0, this.len);
+            other = other.subslice(0, other.len);
+        }
+
+        return true;
+    };
+};

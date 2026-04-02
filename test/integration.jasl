@@ -1,0 +1,41 @@
+import std::iterator;
+import std::math;
+
+let Err = std::ErrorCode;
+let Main = std::Result(void, Err);
+
+let main = fn () -> Main {
+    let from = 0.0;
+    let to = 4.0;
+
+    _ = integrate(
+        fn (x: float) -> float {
+            return x * x;
+        },
+        from,
+        to
+    );
+};
+
+let integrate = fn (
+    func: *fn (float) -> float,
+    from: float,
+    to: float,
+) -> float {
+    let dx = 0.0001;
+
+    let Map = std::iterator::Map;
+    let Range = std::iterator::Range;
+    let FMap = Map(float, float);
+    let FSum = Sum(float);
+
+    let I = Range(float);
+    let G = FMap(I);
+    let D = FMap(G);
+    let S = FSum(D);
+
+    let x = I.init(from, to, dx);
+    let y = G(x, func); 
+    let a = M(y, fn (y: float) -> float { return y * dx; });
+    return S(a);
+};

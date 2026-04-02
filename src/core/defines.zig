@@ -4,9 +4,12 @@ const builtin = @import("builtin");
 
 const Settings = common.CompilerSettings;
 
+// TODO: There is a multithreading bug, fix it sometime.
+pub const threading = false and !builtin.is_test;
+
 //pub const Lock = std.Thread.Mutex;
 pub const Lock =
-    if (!builtin.is_test) std.Thread.RwLock
+    if (threading) std.Thread.RwLock
     else struct {
         pub fn lock(_: *Lock) void {}
         pub fn unlock(_: *Lock) void {}
@@ -16,7 +19,7 @@ pub const Lock =
     };
 
 pub const ThreadPool =
-    if (!builtin.is_test) std.Thread.Pool
+    if (threading) std.Thread.Pool
     else struct {
         pub fn init(_: *ThreadPool, _: anytype) common.CompilerError!void { }
         pub fn spawnWg(_: *ThreadPool, _: *WaitGroup, function: anytype, args: anytype) void {
@@ -25,7 +28,7 @@ pub const ThreadPool =
     };
 
 pub const WaitGroup =
-    if (!builtin.is_test) std.Thread.WaitGroup
+    if (threading) std.Thread.WaitGroup
     else struct {
         pub fn wait(_: *WaitGroup) void {}
     };

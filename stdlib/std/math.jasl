@@ -1,0 +1,50 @@
+import builtin;
+import std::debug;
+import std::collections;
+
+let findFirst = std::collections::findFirst;
+
+pub let Integer = fn (T: type) -> bool {
+    return findFirst(type)(T, (u32, i32, i8, u8)).found();
+};
+
+pub let Numeric = fn (T: type) -> bool {
+    return Integer(T) or T == float;
+};
+
+pub let Signed = fn (T: type) -> bool {
+    return
+        if (!Numeric(T))
+            builtin::compileError("Expected a numeric type.", ())
+        else if (findFirst(type)(T, (i32, i8, float)).found()) true
+        else false;
+};
+
+pub let Unsigned = fn (T: type) -> bool {
+    return !Signed(T);
+};
+
+pub let Epsilon = 0.000000119209;
+
+pub let isApprox = fn (lhs: float, rhs: float) -> bool {
+    return abs(float)(lhs - rhs) <= Epsilon;
+};
+
+pub let abs = fn (T: type) -> *fn (T) -> T {
+    if !Numeric(T) {
+        builtin::compileError("Expected a numeric type.", ());
+    }
+
+    if !Signed(T) {
+        builtin::compileError(
+            "Pointless call to abs on unsigned type '{s}'.",
+            (builtin::typeInfo(T).name)
+        );
+    }
+
+    let bitSize = builtin::bitSizeOf(T);
+
+    return fn (number: T) -> T {
+        return builtin::bitSet(number, bitSize, 0);
+    };
+};

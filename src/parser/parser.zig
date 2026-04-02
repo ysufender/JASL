@@ -279,9 +279,12 @@ pub const Parser = struct {
     fn deferStatement(self: *Self) StatementResult {
         const call = try self.expression();
 
-        if (self.expressionMap.items(.type)[call] != .Call) {
-            self.report("Only function calls are allowed in defer statements.", .{});
-            return error.IllegalSyntax;
+        switch (self.expressionMap.items(.type)[call]) {
+            .Call, .Assignment => { },
+            else => {
+                self.report("Only function calls and variable assignments are allowed in defer statements.", .{});
+                return error.IllegalSyntax;
+            }
         }
 
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
@@ -387,7 +390,7 @@ pub const Parser = struct {
                 },
             }
 
-            otherwise.? = try self.statement();
+            otherwise = try self.statement();
         }
 
         const start: defines.OpaquePtr = @intCast(self.extra.items.len);
@@ -546,7 +549,9 @@ pub const Parser = struct {
             return self.logicalOr();
         }
 
+        _ = try self.consume(.LParen, error.MissingBrace, "Expected a left brace to denote if expression condition.");
         const condition = try self.ifExpression();
+        _ = try self.consume(.RParen, error.MissingBrace, "Expected an enclosing brace.");
         const then = try self.expression();
 
         _ = try self.consume(.Else, error.MissingBranch, "Expected an 'else' branch in conditional expression.");
@@ -757,7 +762,7 @@ pub const Parser = struct {
 
     fn primary(self: *Self) ExpressionResult {
         switch (self.tokens.items(.type)[self.peek()]) {
-            .False, .True, .Integer, .Float, .String => {
+            .False, .True, .Integer, .Float, .String, .EnumLiteral => {
                 const expr = try self.alloc(Expression);
                 self.expressionMap.set(expr, .{
                     .type = .Literal,
@@ -1250,7 +1255,10 @@ pub const Parser = struct {
     fn variableSignature(self: *Self, public: bool, enforceType: bool) common.CompilerError!defines.SignaturePtr {
         const name = 
             if (self.match(&.{.Identifier})) self.previous()
-            else return error.MissingIdentifier;
+            else {
+                self.report("Expected an identifier in variable signature.", .{});
+                return error.MissingIdentifier;
+            };
 
         var typename: defines.ExpressionPtr = undefined;
 
