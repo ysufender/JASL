@@ -1,0 +1,53 @@
+pub let TypeInfo = union(enum) {
+    Struct: Struct,
+    Union: Union,
+    Enum: Enum,
+
+    Integer: Integer,
+    Float: void,
+    Void: void,
+
+    Pointer: Pointer,
+    Function: Function,
+    Noreturn: void,
+    Any: void,
+    Type: void,
+};
+
+pub let Struct = struct {
+    pub mutable: bool,
+    pub name: []u8,
+    pub fields: []type,
+    pub definitions: []type,
+};
+
+pub let Union = Struct;
+
+pub let Enum = struct {
+    pub mutable: bool,
+    pub name: []u8,
+    pub fields: [][]u8,
+    pub definitions: []type,
+};
+
+pub let Pointer = struct {
+    pub mutable: bool,
+    pub child: type,
+    pub pointerType: enum {
+        Slice,
+        Single,
+    },
+};
+
+pub let Function = struct {
+    pub mutable: bool,
+    pub name: []u8,
+    pub argTypes: []type,
+    pub returnTypes: []type,
+};
+
+pub let Integer = struct {
+    pub mutable: bool,
+    pub size: u8,
+    pub signed: bool,
+};

@@ -46,4 +46,5 @@ pub const CompilerError = error {
     EmptyCharLiteral,
     FileNotFound,
     IndexOutOfBounds,
+    MissingPipe,
 };

@@ -1,33 +1,33 @@
-import builtin;
-import std::math;
+import builtin : B;
+import std::math : M;
 
 pub let Integer = fn (T: type) -> type {
-    if !std::math::Integer(T) {
-        builtin::compileError("Given type does not satisfy the Integer traits.", ());
+    if !M::Integer(T) {
+        B::compileError("Given type does not satisfy the Integer traits.", ());
     }
 
     return T;
 };
 
 pub let Numeric = fn (T: type) -> type {
-    if !std::math::Numeric(T) {
-        builtin::compileError("Given type does not satisfy the Numeric traits.", ());
+    if !M::Numeric(T) {
+        B::compileError("Given type does not satisfy the Numeric traits.", ());
     }
 
     return T;
 };
 
 pub let Signed = fn (T: type) -> type {
-    if !std::math::Signed(T) {
-        builtin::compileError("Given type does not satisfy the Signed traits.", ());
+    if !M::Signed(T) {
+        B::compileError("Given type does not satisfy the Signed traits.", ());
     }
 
     return T;
 };
 
 pub let Unsigned = fn (T: type) -> type {
-    if !std::math::Unsigned(T) {
-        builtin::compileError("Given type does not satisfy the Unsigned traits.", ());
+    if !M::Unsigned(T) {
+        B::compileError("Given type does not satisfy the Unsigned traits.", ());
     }
 
     return T;

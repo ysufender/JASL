@@ -19,6 +19,7 @@ pub const StatementMap = collections.MultiArrayList(Statement);
 // Because manually tagged unions are more
 // performant with collections.MultiArrayList(T)
 pub const Expression = struct {
+    // TODO: Switch expressions
     pub const Type = enum {
         Assignment,
         Binary, // ok
@@ -32,6 +33,7 @@ pub const Expression = struct {
         FunctionDefinition, // ok
         Call, // ok
         Conditional, // ok
+        Switch,
         MutableType, // ok
         PointerType, // ok
         SliceType, // ok
@@ -55,6 +57,7 @@ pub const Statement = struct {
         InlineAssembly, // ok
         Return, // ok
         Conditional, // ok
+        Switch,
         While, // ok
         Break, // ok
         Continue, // ok
@@ -250,6 +253,7 @@ pub const Parser = struct {
         return switch (self.tokens.items(.type)[self.advance()]) {
             .LBrace => self.block(),
             .Asm => self.inlineAssembly(),
+            .Switch => self.switchStatement(),
             .If => self.conditional(),
             .While => self.whileStatement(),
             .Return => self.returnStatement(),
@@ -370,6 +374,54 @@ pub const Parser = struct {
         return result;
     }
 
+    fn switchStatement(self: *Self) StatementResult {
+        const item = try self.expression();
+
+        _ = try self.consume(.LBrace, error.MissingBrace, "Expected a block after switch statement.");
+
+        const scratchStart = self.scratch.items.len;
+        while (!self.check(.RBrace)) {
+            if (self.match(&.{.Else})) {
+                self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
+            }
+            else {
+                self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
+            }
+
+            _ = try self.consume(.Arrow, error.MissingArrow, "Expected '->' after switch case.");
+
+            if (self.match(&.{.Pipe})) {
+                if (!self.match(&.{.Identifier, .Discard})) {
+                    self.report("Expected a capture name.", .{});
+                    return error.MissingIdentifier;
+                }
+
+                self.scratch.append(self.allocator(), self.previous()) catch return error.AllocatorFailure;
+                _ = try self.consume(.Pipe, error.MissingPipe, "Expected an enclosing pipe '|' at case capture.");
+            }
+            else {
+                self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
+            }
+            self.scratch.append(self.allocator(), try self.statement()) catch return error.AllocatorFailure;
+        }
+
+        _ = try self.consume(.RBrace, error.MissingBrace, "Missing enclosing brace '}' after switch statement.");
+        const cases = try self.commitScratch(scratchStart);
+
+        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), item) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), cases.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), cases.end) catch return error.AllocatorFailure;
+
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{
+            .type = .Switch,
+            .value = start,
+        });
+
+        return result;
+    }
+
     fn conditional(self: *Self) StatementResult {
         const condition = try self.expression();
 
@@ -460,7 +512,7 @@ pub const Parser = struct {
             if (!self.match(&.{.Comma})) break;
         }
 
-        if (sigsStart == self.scratch.items.len){
+        if (sigsStart == self.scratch.items.len) {
             self.report("Expected variable signature(s) after 'let'.", .{});
             return error.MissingIdentifier;
         }
@@ -501,14 +553,26 @@ pub const Parser = struct {
     }
 
     fn import(self: *Self) StatementResult {
-        // const file = try self.consume(.String, error.InvalidToken, "Expected file path in import statement.");
         const module = try self.scoping();
+        const maybeAlias =
+            if (self.match(&.{.Colon})) self.advance()
+            else null;
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
+
+        const start: u32 = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), module) catch return error.AllocatorFailure;
+        if (maybeAlias) |alias| {
+            self.extra.append(self.allocator(), 1) catch return error.AllocatorFailure;
+            self.extra.append(self.allocator(), alias) catch return error.AllocatorFailure;
+        }
+        else {
+            self.extra.append(self.allocator(), 0) catch return error.AllocatorFailure;
+        }
 
         const result = try self.alloc(Statement);
         self.statementMap.set(result, .{
             .type = .Import,
-            .value = module,
+            .value = start,
         });
 
         return result;
@@ -546,12 +610,12 @@ pub const Parser = struct {
 
     fn ifExpression(self: *Self) ExpressionResult {
         if (!self.match(&.{.If})) {
-            return self.logicalOr();
+            return self.switchExpression();
         }
 
-        _ = try self.consume(.LParen, error.MissingBrace, "Expected a left brace to denote if expression condition.");
+        _ = try self.consume(.LParen, error.MissingBrace, "Expected a left parenthesis to denote if expression condition.");
         const condition = try self.ifExpression();
-        _ = try self.consume(.RParen, error.MissingBrace, "Expected an enclosing brace.");
+        _ = try self.consume(.RParen, error.MissingBrace, "Expected an enclosing parenthesis.");
         const then = try self.expression();
 
         _ = try self.consume(.Else, error.MissingBranch, "Expected an 'else' branch in conditional expression.");
@@ -569,6 +633,60 @@ pub const Parser = struct {
         });
 
         return expr;
+    }
+
+    fn switchExpression(self: *Self) ExpressionResult {
+        if (!self.match(&.{.Switch})) {
+            return self.logicalOr();
+        }
+
+        const item = try self.ifExpression();
+
+        _ = try self.consume(.LBrace, error.MissingBrace, "Expected a block after switch expression.");
+
+        const scratchStart = self.scratch.items.len;
+        while (!self.check(.RBrace)) {
+            if (self.match(&.{.Else})) {
+                self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
+            }
+            else {
+                self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
+            }
+
+            _ = try self.consume(.Arrow, error.MissingArrow, "Expected '->' after switch case.");
+
+            if (self.match(&.{.Pipe})) {
+                if (!self.match(&.{.Identifier, .Discard})) {
+                    self.report("Expected a capture name.", .{});
+                    return error.MissingIdentifier;
+                }
+
+                self.scratch.append(self.allocator(), self.previous()) catch return error.AllocatorFailure;
+                _ = try self.consume(.Pipe, error.MissingPipe, "Expected an enclosing pipe '|' at case capture.");
+            }
+            else {
+                self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
+            }
+            self.scratch.append(self.allocator(), try self.expression()) catch return error.AllocatorFailure;
+
+            if (!self.match(&.{.Comma})) break;
+        }
+
+        _ = try self.consume(.RBrace, error.MissingBrace, "Missing enclosing brace '}' after switch statement.");
+        const cases = try self.commitScratch(scratchStart);
+
+        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), item) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), cases.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), cases.end) catch return error.AllocatorFailure;
+
+        const result = try self.alloc(Expression);
+        self.expressionMap.set(result, .{
+            .type = .Switch,
+            .value = start,
+        });
+
+        return result;
     }
 
     fn logicalOr(self: *Self) ExpressionResult {
@@ -1333,4 +1451,16 @@ pub const Parser = struct {
 // Tests
 //
 
-pub const Tests = struct {};
+pub const Tests = struct {
+    const Scanner = @import("../lexer/lexer.zig").Scanner;
+
+    var gpa = std.heap.DebugAllocator(.{}){};
+    const allocator = gpa.allocator();
+
+    test "Switch" {
+        var context = try common.CompilerContext.init(allocator);
+        var scanner = try Scanner.init(allocator, &context, "test/switch.jasl");
+        var parser = try Parser.init(allocator, &context, try scanner.scanAll());
+        _ = context.getAST(try parser.parse());
+    }
+};

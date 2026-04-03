@@ -307,7 +307,7 @@ pub const Prepass = struct {
         const file = context.getTokens(ast.tokens).items(.start)[0];
 
         var parts = collections.ReverseStackArray([]const u8, std.fs.max_path_bytes).init();
-        var current = id;
+        var current = ast.extra[id];
 
         while (true) {
             const expr = ast.expressions.get(current);
@@ -335,14 +335,14 @@ pub const Prepass = struct {
 
     fn getModuleName(id: defines.ExpressionPtr, ast: parser.AST, context: *Context) []const u8 {
         const file = context.getTokens(ast.tokens).items(.start)[0];
-        const expr = ast.expressions.get(id);
+        const expr = ast.expressions.get(ast.extra[id]);
 
         const end = switch (expr.type) {
             .Identifier => context.getTokens(ast.tokens).items(.end)[expr.value],
             .Scoping => context.getTokens(ast.tokens).items(.end)[ast.extra[expr.value + 1]],
             else => unreachable,
         };
-        const start = getModuleNameStartIndex(id, ast, context);
+        const start = getModuleNameStartIndex(ast.extra[id], ast, context);
 
         return context.getFile(file)[start..end];
     }

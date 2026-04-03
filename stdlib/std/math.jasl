@@ -1,11 +1,8 @@
-import builtin;
-import std::debug;
-import std::collections;
-
-let findFirst = std::collections::findFirst;
+import builtin : B;
+import std::collections : C;
 
 pub let Integer = fn (T: type) -> bool {
-    return findFirst(type)(T, (u32, i32, i8, u8)).found();
+    return C::contains(type)(T, (u32, i32, i8, u8));
 };
 
 pub let Numeric = fn (T: type) -> bool {
@@ -14,10 +11,8 @@ pub let Numeric = fn (T: type) -> bool {
 
 pub let Signed = fn (T: type) -> bool {
     return
-        if (!Numeric(T))
-            builtin::compileError("Expected a numeric type.", ())
-        else if (findFirst(type)(T, (i32, i8, float)).found()) true
-        else false;
+        if (!Numeric(T)) B::compileError("Expected a numeric type.", ())
+        else C::contains(type)(T, (i32, i8, float));
 };
 
 pub let Unsigned = fn (T: type) -> bool {
@@ -32,19 +27,19 @@ pub let isApprox = fn (lhs: float, rhs: float) -> bool {
 
 pub let abs = fn (T: type) -> *fn (T) -> T {
     if !Numeric(T) {
-        builtin::compileError("Expected a numeric type.", ());
+        B::compileError("Expected a numeric type.", ());
     }
 
     if !Signed(T) {
-        builtin::compileError(
+        B::compileError(
             "Pointless call to abs on unsigned type '{s}'.",
-            (builtin::typeInfo(T).name)
+            (B::typeInfo(T).name)
         );
     }
 
-    let bitSize = builtin::bitSizeOf(T);
+    let bitSize = B::bitSizeOf(T);
 
     return fn (number: T) -> T {
-        return builtin::bitSet(number, bitSize, 0);
+        return B::bitSet(number, bitSize, 0);
     };
 };

@@ -20,6 +20,7 @@ pub const TokenType = enum(u8) {
     Pipe, Ampersand,
     Import,
     If, Else, While,
+    Switch,
     Return, Defer, Extern,
     Break, Continue,
     Fn, Struct, Let, Enum, Union,
@@ -106,6 +107,7 @@ pub const Scanner = struct {
         .{ "asm", .Asm },
         .{ "break", .Break },
         .{ "continue", .Continue },
+        .{ "switch", .Switch },
         .{ "_", .Discard },
     });
 

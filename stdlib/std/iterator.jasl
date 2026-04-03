@@ -22,12 +22,13 @@
         Map and Filter using the said trait.
 */
 
-import builtin;
-import std::collections;
+import builtin : B;
 import std;
-import std::debug;
-import std::math;
-import std::numeric;
+import std::collections : C;
+import std::debug : D;
+import std::math : M;
+import std::numeric : N;
+import builtin::type : R;
 
 /*
     Expected from Iterator:
@@ -35,7 +36,7 @@ import std::numeric;
         has not met an end, and std::Option(Of)(@None, ()) if it has reached the end
         of stream.
 
-        "eos" yields true if and only if "next" would return std::Option(Of)::None.
+        "eos" yields true if and only if "next" would return std::Option(Of)(@None).
 
         "peek" never alters the sequence and returns what a call to "next" would return.
         
@@ -74,30 +75,29 @@ pub let Iterator = fn (Iter: type, Of: type) -> type {
         FunctionSignature("next", (*mut Iter), (Next)),
         FunctionSignature("peek", (*mut Iter), (Next)),
         FunctionSignature("eos", (*mut Iter), (bool)),
-        FunctionSignature("iterator", (*mut Iter), (IITerator(Of))),
+        FunctionSignature("iterator", (*mut Iter), (IIterator(Of))),
     );
 
-    if builtin::typeInfo(Iter).tag != @Struct {
-        builtin::compileError("Iterator trait can only be implemented to structs.", ());
-    }
-
-    let typeInfo = builtin::typeInfo(Iter).Struct;
+    let typeInfo = switch B::typeInfo(Iter) {
+        @Struct -> |strct| strct,
+        else -> B::compileError("Iterator trait can only be implemented to structs.", ())
+    };
 
     let i: mut u32 = 0;
     while i < constraints.len {
         let func = constraints[i];
 
-        if !builtin::hasFn(Iter, func.name) {
-            builtin::compileError("Expected '{s}' to implement Iterator trait function '{s}'", (
+        if !B::hasFn(Iter, func.name) {
+            B::compileError("Expected '{s}' to implement Iterator trait function '{s}'", (
                 typeInfo.name,
                 func.name,
             ));
         }
 
-        let funcInfo = builtin::typeInfo(builtin::field(Iter, func.name)).Function; 
+        let funcInfo = B::typeInfo(B::typeOf(B::field(Iter, func.name))).Function; 
 
-        if !std::collections::eql(type)(funcInfo.argTypes, func.params) {
-            builtin::compileError("Mismatching argument types in function signature '{s}::{s}'.
+        if !C::eql(type)(funcInfo.argTypes, func.params) {
+            B::compileError("Mismatching argument types in function signature '{s}::{s}'.
     Expected: {any}
     Received: {any}
                 ",(
@@ -108,20 +108,59 @@ pub let Iterator = fn (Iter: type, Of: type) -> type {
             ));
         }
 
-        if func.ret != funcInfo.returnType {
-            builtin::compileError("Mismatching return type in function signature '{s}::{s}'.
-    Expected: {s}
-    Received: {s}
+        if func.ret != funcInfo.returnTypes {
+            B::compileError("Mismatching return type in function signature '{s}::{s}'.
+    Expected: {any}
+    Received: {any}
                 ",(
                 typeInfo.name,
                 func.name,
-                builtin::typeInfo(func.ret).name,
-                builtin::typeInfo(funcInfo.returnType).name,
+                B::typeInfo(func.ret),
+                B::typeInfo(funcInfo.returnTypes),
             ));
         } 
     }
 
     return Iter;
+};
+
+/*
+    HigherOrderIterator extends the Iterator trait by allowing an iterator
+    to encapsulate another iterator, and use it as a source of data.
+*/
+pub let HigherOrderIterator = fn (Iter: type, Of: type) -> *fn (type, type) -> type {
+    _ = Iterator(Iter, Of);
+
+    return fn (Over: type, OverOf: type) -> type {
+        _ = Iterator(Over, OverOf);
+
+        let typeInfo = B::typeInfo(Iter).Struct;
+
+        if
+            !B::hasField(Iter, "iterator")
+            or B::fieldType(Iter, "iterator") != Over {
+            B::compileError("Expected '{s}' to implement HigherOrderIterator trait field 'iterator' with type '{s}'.", (
+                typeInfo.name,
+                B::typeInfo(Over).name,
+            ));
+        }
+
+        return Iter;
+    };
+};
+
+/*
+    ExtendedIterator extends the Iterator trait by allowing an Iterator
+    to modify its internal state by applying another iterator over itself.
+    The operation can be comptime if necessary conditions are met.
+*/
+pub let ExtendedIterator = fn (Iter: type, Of: type) -> *fn (type, type) -> type {
+    _ = Iterator(Iter, Of);
+
+    return fn (Over: type, OverOf: type) -> type {
+        _ = Iterator(Over, OverOf);
+        _ = HigherOrderIterator(Iter, Of)(Over, OverOf);
+    };
 };
 
 /*
@@ -140,7 +179,7 @@ pub let IIterator = fn (Of: type) -> type {
             eos: *fn (*mut void) -> bool,
         };
 
-        let Self = builtin::this();
+        let Self = B::this();
 
         ctx: *mut void,
         vtable: VTable,
@@ -158,7 +197,7 @@ pub let IIterator = fn (Of: type) -> type {
         };
 
         pub let iterator = fn (self: *mut Self) -> Self {
-            builtin::compileError("IIterator.iterator() is pointless, and unsafe to use.", ());
+            B::compileError("IIterator.iterator() is pointless, and unsafe to use.", ());
         };
     };
 };
@@ -178,26 +217,24 @@ pub let len = fn (P: type, I: type) -> *fn (Iterator(I, P)) -> u32 {
 pub let Map = fn (From: type, To: type) -> *fn (type) -> type {
     return fn (Over: type) -> type  {
         return Iterator(struct {
-            let Self = builtin::this();
+            let Self = B::this();
             let Next = std::Option(To);
 
             iterator: mut Iterator(Over, From),
             func: *fn (From) -> To,
 
             pub let next = fn (self: *mut Self) -> Next {
-                if self.eos() {
-                    return Next(@None, ());
-                }
-
-                return Next(@Some, self.func(self.iterator.next().Some));
+                return switch self.eos() {
+                    true -> Next(@None, ()),
+                    false -> Next(@Some, self.func(self.iterator.next().Some))
+                };
             };
 
             pub let peek = fn (self: *mut Self) -> Next {
-                let maybeNext = self.iterator.peek();
-
-                return
-                    if (maybeNext.some()) Next(@Some, self.func(maybeNext.Some))
-                    else Next(@None, ());
+                return switch self.iterator.peek() {
+                    @Some -> Next(@Some, self.func(maybeNext.Some)),
+                    @None -> Next(@None, ()),
+                };
             };
 
             pub let eos = fn (self: *mut Self) -> bool {
@@ -206,11 +243,11 @@ pub let Map = fn (From: type, To: type) -> *fn (type) -> type {
 
             pub let iterator = fn (self: *mut Self) -> IIterator(To) {
                 return IIterator(To)(
-                    builtin::ptrCast(self, void),
+                    B::ptrCast(self, void),
                     IIterator::VTable(
-                        builtin::ptrCast(self.next, *fn (*mut void) -> Next),
-                        builtin::ptrCast(self.peek, *fn (*mut void) -> Next),
-                        builtin::ptrCast(self.eos, *fn (*mut void) -> bool),
+                        B::ptrCast(self.next, *fn (*mut void) -> Next),
+                        B::ptrCast(self.peek, *fn (*mut void) -> Next),
+                        B::ptrCast(self.eos, *fn (*mut void) -> bool),
                     ),
                 );
             };
@@ -221,7 +258,7 @@ pub let Map = fn (From: type, To: type) -> *fn (type) -> type {
 pub let Filter = fn (Of: type) -> *fn (type) -> type {
     return fn (Over: type) -> type {
         return Iterator(struct {
-            let Self = builtin::this();
+            let Self = B::this();
             let Next = std::Option(Of);
 
             iterator: mut Iterator(Over, Of),
@@ -261,11 +298,11 @@ pub let Filter = fn (Of: type) -> *fn (type) -> type {
 
             pub let iterator = fn (self: *mut Self) -> IIterator(Of) {
                 return IIterator(Of)(
-                    builtin::ptrCast(self, void),
+                    B::ptrCast(self, void),
                     IIterator::VTable(
-                        builtin::ptrCast(self.next, *fn (*mut void) -> Next),
-                        builtin::ptrCast(self.peek, *fn (*mut void) -> Next),
-                        builtin::ptrCast(self.eos, *fn (*mut void) -> bool),
+                        B::ptrCast(self.next, *fn (*mut void) -> Next),
+                        B::ptrCast(self.peek, *fn (*mut void) -> Next),
+                        B::ptrCast(self.eos, *fn (*mut void) -> bool),
                     ),
                 );
             };
@@ -283,22 +320,24 @@ pub let Zip = fn (OfThis: type, OfThat: type) -> *fn (type, type) -> type {
         let Pair = std::Pair(OfThis, OfThat);
 
         return Iterator(struct {
-            let Self = builtin::this();
+            let Self = B::this();
             let Next = std::Option(Pair);
 
             leftIterator: mut Iterator(OverThis, OfThis),
             rightIterator: mut Iterator(OverThat, OfThat),
 
             pub let next = fn (self: *mut Self) -> Next {
-                return
-                    if (self.eos()) Next(@None, ())
-                    else Next(@Some, Pair(self.leftIterator.next().Some, self.rightIterator.next().Some));
+                return switch self.eos() {
+                    true -> Next(@None, ()),
+                    false -> Next(@Some, Pair(self.leftIterator.next().Some, self.rightIterator.next().Some)),
+                };
             };
 
             pub let peek = fn (self: *mut Self) -> Next {
-                return
-                    if (self.eos()) Next(@None, ())
-                    else Next(@Some, Pair(self.leftIterator.peek().Some, self.rightIterator.peek().Some));
+                return switch self.eos() {
+                    true -> Next(@None, ()),
+                    false -> Next(@Some, Pair(self.leftIterator.peek().Some, self.rightIterator.peek().Some)),
+                };
             };
 
             pub let eos = fn (self: *mut Self) -> bool {
@@ -307,11 +346,11 @@ pub let Zip = fn (OfThis: type, OfThat: type) -> *fn (type, type) -> type {
 
             pub let iterator = fn (self: *mut Self) -> IIterator(Pair) {
                 return IIterator(Pair)(
-                    builtin::ptrCast(self, void),
+                    B::ptrCast(self, void),
                     IIterator::VTable(
-                        builtin::ptrCast(self.next, *fn (*mut void) -> Next),
-                        builtin::ptrCast(self.peek, *fn (*mut void) -> Next),
-                        builtin::ptrCast(self.eos, *fn (*mut void) -> bool),
+                        B::ptrCast(self.next, *fn (*mut void) -> Next),
+                        B::ptrCast(self.peek, *fn (*mut void) -> Next),
+                        B::ptrCast(self.eos, *fn (*mut void) -> bool),
                     ),
                 );
             };
@@ -322,7 +361,7 @@ pub let Zip = fn (OfThis: type, OfThat: type) -> *fn (type, type) -> type {
 pub let Sum = fn (Of: type) -> *fn (type) -> type {
     return fn (Over: type) -> type {
         return fn (iterator: Iterator(Over, Of)) -> Of {
-            let result: mut Of = std::DefaultValue(Of);
+            let result: mut Of = std::Default(Of);
 
             while !iterator.eos() {
                 result = result + iterator.next().unwrap();
@@ -334,18 +373,18 @@ pub let Sum = fn (Of: type) -> *fn (type) -> type {
 };
 
 pub let Range = fn (T: type) -> type {
-    if !std::numeric::Numeric(T) {
-        builtin::compileError("Range(T) expects T to be a numeric type.", ());
+    if !N::Numeric(T) {
+        B::compileError("Range(T) expects T to be a numeric type.", ());
     }
 
     return Iterator(struct {
-        let Self = builtin::this();
+        let Self = B::this();
         let Next = std::Option(T);
 
         start: mut T,
         end: T,
         by: T,
-        sign: if (std::math::Unsigned(T)) void else T,
+        sign: if (M::Unsigned(T)) void else T,
 
         pub let init = fn (start: T, end: T, by: T) -> Self {
             let self = Self(
@@ -355,8 +394,8 @@ pub let Range = fn (T: type) -> type {
                 if (end < start) -1 else 1
             );
 
-            if std::math::Unsigned(T) and end < start {
-                std::debug::assert(false, "Impossible backward iteration with unsigned values in Range iterator.");
+            if M::Unsigned(T) and end < start {
+                D::assert(false, "Impossible backward iteration with unsigned values in Range iterator.");
             }
 
             if
@@ -364,7 +403,7 @@ pub let Range = fn (T: type) -> type {
                 or
                 (self.sign > 0 and by <= 0)
             {
-                std::debug::assert(false, "Non-terminating Range iterator detected.");
+                D::assert(false, "Non-terminating Range iterator detected.");
             }
 
             return self;
@@ -380,24 +419,26 @@ pub let Range = fn (T: type) -> type {
         };
 
         pub let peek = fn (self: *mut Self) -> Next {
-            return
-                if (self.eos()) Next(@None, ())
-                else Next(@Some, self.start);
+            return switch self.eos() {
+                true -> Next(@None, ()),
+                false -> Next(@Some, self.start),
+            };
         };
 
         pub let eos = fn (self: *mut Self) -> bool {
-            return
-                if (std::math::Unsigned(T) or self.sign > 0) self.start >= self.end
-                else self.start <= self.end;
+            return switch M::Unsigned(T) or self.sign > 0 {
+                true -> self.start >= self.end,
+                false -> self.start <= self.end,
+            };
         };
 
         pub let iterator = fn (self: *mut Self) -> IIterator(T) {
             return IIterator(T)(
-                builtin::ptrCast(self, void),
+                B::ptrCast(self, void),
                 IIterator::VTable(
-                    builtin::ptrCast(self.next, *fn (*mut void) -> Next),
-                    builtin::ptrCast(self.peek, *fn (*mut void) -> Next),
-                    builtin::ptrCast(self.eos, *fn (*mut void) -> bool),
+                    B::ptrCast(self.next, *fn (*mut void) -> Next),
+                    B::ptrCast(self.peek, *fn (*mut void) -> Next),
+                    B::ptrCast(self.eos, *fn (*mut void) -> bool),
                 ),
             );
         };
@@ -406,7 +447,7 @@ pub let Range = fn (T: type) -> type {
 
 pub let Slice = fn (P: type, Type: enum { Forward, Backward }) -> type {
     return Iterator(struct {
-        let Self = builtin::this();
+        let Self = B::this();
         let Next = std::Option(P);
 
         items: mut []P,
@@ -444,11 +485,11 @@ pub let Slice = fn (P: type, Type: enum { Forward, Backward }) -> type {
 
         pub let iterator = fn (self: *mut Self) -> IIterator(P) {
             return IIterator(P)(
-                builtin::ptrCast(self, void),
+                B::ptrCast(self, void),
                 IIterator::VTable(
-                    builtin::ptrCast(self.next, *fn (*mut void) -> Next),
-                    builtin::ptrCast(self.peek, *fn (*mut void) -> Next),
-                    builtin::ptrCast(self.eos, *fn (*mut void) -> bool),
+                    B::ptrCast(self.next, *fn (*mut void) -> Next),
+                    B::ptrCast(self.peek, *fn (*mut void) -> Next),
+                    B::ptrCast(self.eos, *fn (*mut void) -> bool),
                 ),
             );
         };

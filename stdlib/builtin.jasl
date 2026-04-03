@@ -1,4 +1,4 @@
-import builtin::types;
+import builtin::type : Type;
 
 pub let this = fn () -> type { };
 
@@ -8,7 +8,7 @@ pub let allocator = fn (T: type) -> type {
     };
 };
 
-pub let typeInfo = fn (T: type) -> builtin::type::TypeInfo { };
+pub let typeInfo = fn (T: type) -> Type::TypeInfo { };
 
 pub let compileError = fn (fmt: []u8, args: any) -> noreturn { };
 

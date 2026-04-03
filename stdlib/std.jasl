@@ -1,15 +1,20 @@
-import builtin;
-import std::math;
+import builtin : B;
+import builtin::type : R;
+import std::math : M;
+import std::collections : C;
 
 pub let Option = fn (T: type) -> type {
     return union(enum) {
-        let Self = builtin::this();
+        let Self = B::this();
 
         Some: T,
         None: void,
 
         pub let some = fn (self: *Self) -> bool {
-            return self.tag == @Some;
+            return switch self {
+                @Some -> true,
+                @None -> false,
+            };
         };
 
         pub let none = fn (self: *Self) -> bool {
@@ -21,28 +26,33 @@ pub let Option = fn (T: type) -> type {
         };
 
         pub let orelse = fn (self: *Self, val: T) -> T {
-            return
-                if (self.some()) self.Some
-                else val;
+            return switch self {
+                @Some -> self.Some,
+                @None -> val,
+            };
         };
 
         pub let orelseWith = fn (self: *Self, val: *fn () -> T) -> T {
-            return
-                if (self.some()) self.Some
-                else val();
+            return switch self {
+                @Some -> self.Some,
+                @None -> val(),
+            };
         };
     };
 };
 
 pub let Result = fn (T: type, E: type) -> type {
     return union(enum) {
-        let Self = builtin::this();
+        let Self = B::this();
 
         Ok: T,
         Err: E,
 
         pub let ok = fn (self: *Self) -> bool {
-            return self.tag == @Ok;
+            return switch self {
+                @Ok -> true,
+                @Err -> false,
+            };
         };
 
         pub let err = fn (self: *Self) -> bool {
@@ -54,22 +64,24 @@ pub let Result = fn (T: type, E: type) -> type {
         };
 
         pub let orelse = fn (self: *Self, val: T) -> T {
-            return
-                if (self.ok()) self.Ok
-                else val;
+            return switch self {
+                @Ok -> self.Ok,
+                @Err -> val,
+            };
         };
 
         pub let orelseWith = fn (self: *Self, val: *fn () -> T) -> T {
-            return
-                if (self.ok()) self.Ok
-                else val();
+            return switch self {
+                @Ok -> self.Ok,
+                @Err -> val(),
+            };
         };
     };
 };
 
 pub let Pair = fn (T: type, P: type) -> type {
     return struct {
-        let Self = builtin::this();
+        let Self = B::this();
 
         pub first: T,
         pub second: P,
@@ -85,10 +97,27 @@ pub let ErrorCode = enum {
     Err,
 };
 
-pub let DefaultValue = fn (T: type) -> T {
-    // TODO: Default traits
-    return
-        if (std::math::Integer(T)) 0
-        else if (T == float) 0.0
-        else undefined;
+pub let DefaultConstructible = fn (T: type) -> type {
+    let baseTypeInfo = B::typeInfo(T);
+    let tag = baseTypeInfo.tag;
+
+    if C::contains(R::TypeInfo::Tag)(tag, (@Integer, @Void, @Float)) {
+        return T;
+    }
+
+    if C::contains(R::TypeInfo::Tag)(tag, (@Pointer, @Function, @Noreturn, @Type, @Any, @Union, @Enum)) {
+        B::compileError("Type '{any}' is not default constructible.", (T));
+    }
+
+    let typeInfo = baseTypeInfo.Struct;
+
+    let i: u32 = 0;
+    while i < typeInfo.fields.len {
+        _ = DefaultConstructible(typeInfo.fields[i]);
+    }
+
+    return T;
+};
+
+pub let Default = fn (T: type) -> DefaultConstructible(T) {
 };

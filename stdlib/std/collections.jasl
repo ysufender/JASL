@@ -3,11 +3,14 @@ pub let Position = union(enum) {
     Index: u32,
 
     pub let found = fn (self: Self) -> bool {
-        return self.tag == @Index;
+        return switch self {
+            @Index -> true,
+            else -> false,
+        };
     };
 
     pub let notFound = fn (self: Self) -> bool {
-        return self.tag == @NotFound;
+        return !self.found();
     };
 };
 
@@ -23,6 +26,12 @@ pub let findFirst = fn (T: type) -> *fn (T, []T) -> Position {
         }
 
         return Position::NotFound();
+    };
+};
+
+pub let contains = fn (T: type) -> *fn (T, []T) -> Position {
+    return fn (item: T, slice: []T) -> Position {
+        return findFirst(T)(item, slice).found();
     };
 };
 
