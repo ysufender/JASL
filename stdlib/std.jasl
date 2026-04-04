@@ -120,7 +120,26 @@ pub let DefaultConstructible = fn (T: type) -> type {
 };
 
 pub let Default = fn (T: type) -> DefaultConstructible(T) {
-    // TODO:
+    let typeInfo = B::typeInfo(T);
+
+    let constructStruct = fn (typeInfo: R::Struct) -> T {
+        let ret: mut T = undefined;
+
+        let i: mut u32 = 0;
+        while i < typeInfo.fields.len {
+            let field = typeInfo.fields[i];
+            B::field(ret, field.name) = Default(field.valueType);
+        }
+
+        return ret;
+    };
+
+    return switch typeInfo {
+        @Struct -> |strct| constructStruct(strct),
+        @Int -> 0,
+        @Void -> (),
+        @Float -> 0.0,
+    };
 };
 
 pub let GenericEqual = fn (T: type) -> *fn (T, T) -> bool {
@@ -128,7 +147,7 @@ pub let GenericEqual = fn (T: type) -> *fn (T, T) -> bool {
     let tag = baseTypeInfo.tag;
 
     if C::contains(R::TypeInfo::Tag)(tag, (@Integer, @Void, @Float, @Type, @Enum)) {
-        return fn (lhs: T, rhs: T) -> bool {
+        return fn mark(@inline) (lhs: T, rhs: T) -> bool {
             return lhs == rhs;
         };
     }
@@ -149,11 +168,12 @@ pub let GenericEqual = fn (T: type) -> *fn (T, T) -> bool {
 
     let i: u32 = 0;
 
-    return fn (lhs: T, rhs: T) -> bool {
+    return fn mark(@hot) (lhs: T, rhs: T) -> bool {
         while mark(@inline) (i < typeInfo.fields.len) {
+            let field = typeInfo.fields[i];
             defer i = i + 1;
 
-            if (B::field(lhs, typeInfo.fields[i]) != B::field(rhs, typeInfo.fields[i])) {
+            if !GenericEqual(field.valueType)(B::field(lhs, field.name), B::field(rhs, field.name)) {
                 return false;
             }
         }

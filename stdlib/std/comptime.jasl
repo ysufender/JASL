@@ -1,7 +1,7 @@
-import builtin::type as t;
 import builtin as b;
-import std::functional as f;
+import builtin::type as t;
 import std::iterator as i;
+import std::functional as f;
 import std::collections as c;
 
 pub let MemberInfo = union(enum) {
@@ -17,57 +17,30 @@ pub let TraitInfo = struct {
 pub let VerifyTrait = fn (Trait: TraitInfo, On: type) -> type {
     let typeInfo = switch b::typeInfo(On) {
         @Struct -> |s| s,
-        @Union -> |u| u,
-        else -> b::compileError("{s} trait can only be implemented on structs and unions.", (Name)),
+        else -> b::compileError("{s} trait can only be implemented on structs.", (Name)),
     };
 
     let MemberIterator = i::Slice(MemberInfo, @Forward);
 
-    _ = f::for(On, void, MemberIterator)(MemberIterator(Trait.members), fn (member: On) -> f::LoopResult(void) {
+    _ = f::for(void, MemberIterator)(MemberIterator(Trait.members), fn (member: On) -> f::LoopResult(void) {
         switch member {
             @Field -> |field| {
-                if !b::hasField(On, field.name) {
-                    b::compileError("Expected '{s}' to have {s} trait field '{s}'.",
-                        (typeInfo.name, Trait.name, field.name),
+                if 
+                    !b::hasField(On, field.name)
+                    or !std::GenericEqual(t::FieldInfo)(field, typeInfo.fields[b::fieldIndex(On, field.name)]) {
+                    b::compileError("Couldn't find '{s}' trait field '{b} {s}: {any}' in '{s}'",
+                        (Trait.name, field.public, field.name, field.valueType, typeInfo.name)
                     );
-                }
-
-                let fieldInfo = typeInfo.fields[b::fieldIndex(On, field.name)];
-
-                if  fieldInfo.valueType != field.valueType {
-                    b::compileError("Type mismatch with {s} trait field '{s}::{s}'.
-    Expected: {s}
-    Received: {s}", (
-                        Trait.name,
-                        typeInfo.name,
-                        field.name,
-                        b::typeInfo(field.valueType).name,
-                        b::typeInfo(fieldInfo.valueType).name,
-                    ));
                 }
             }
 
             @Definition -> |def| {
-                if !b::hasDef(On, def.name) {
-                    b::compileError("Expected '{s}' to implement {s} trait definition '{s}'", (
-                        typeInfo.name,
-                        Trait.name,
-                        def.name,
-                    ));
-                }
-
-                let defInfo = typeInfo.definitions[b::defIndex(On, def.name)];
-
-                if defInfo.valueType != def.valueType {
-                    b::compileError("Type mismatch with {s} trait definition '{s}::{s}'.
-    Expected: {s}
-    Received: {s}", (
-                        Trait.name,
-                        typeInfo.name,
-                        def.name,
-                        b::typeInfo(def.valueType).name,
-                        b::typeInfo(defInfo.valueType).name,
-                    ));
+                if 
+                    !b::hasDef(On, def.name)
+                    or !std::GenericRqual(t::FieldInfo)(field, typeInfo.fields[b::fieldIndex(On, field.name)]) {
+                    b::compileError("Couldn't find '{s}' trait definition '{b} {s}: {any}' in '{s}'",
+                        (Trait.name, def.public, def.name, def.valueType, typeInfo.fields[b::fieldIndex(On, field.name)].name)
+                    );
                 }
             }
         }

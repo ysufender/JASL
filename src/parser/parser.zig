@@ -981,7 +981,7 @@ pub const Parser = struct {
                 const expr = try self.alloc(Expression);
                 self.expressionMap.set(expr, .{
                     .type = .Identifier,
-                    .value = try self.consume(.Identifier, error.MissingIdentifier, "Expected identifier in scoping expression"),
+                    .value = try self.consume(.Identifier, error.MissingIdentifier, "Expected an identifier."),
                 });
                 return expr;
             },
@@ -994,6 +994,9 @@ pub const Parser = struct {
 
     fn function(self: *Self) ExpressionResult {
         _ = self.advance();
+
+        const hints = try self.compilerHint();
+
         _ = try self.consume(.LParen, error.MissingParenthesis, "Expected a parameter list in function definition.");
         
         const paramsStart = self.scratch.items.len;
@@ -1014,6 +1017,8 @@ pub const Parser = struct {
         const body = try self.statement();
 
         const start: defines.OpaquePtr = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), hints.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), hints.end) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;
@@ -1280,24 +1285,25 @@ pub const Parser = struct {
                 };
             },
             .Fn => {
-                _ = try self.consume(.LParen, error.MissingParenthesis, "Expected a type list in function pointer type expression.");
-
-                const paramsStart = self.scratch.items.len;
-                while (!self.check(.RParen)) {
-                    self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
-                    if (!self.match(&.{.Comma})) {
-                        break;
-                    }
-                }
-                _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' after parameter list.");
-                const params = try self.commitScratch(paramsStart);
+                const args = try self.ifExpression();
+                //_ = try self.consume(.LParen, error.MissingParenthesis, "Expected a type list in function pointer type expression.");
+                //const paramsStart = self.scratch.items.len;
+                //while (!self.check(.RParen)) {
+                    //self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
+                    //if (!self.match(&.{.Comma})) {
+                        //break;
+                    //}
+                //}
+                //_ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' after parameter list.");
+                //const params = try self.commitScratch(paramsStart);
 
                 _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
                 const returns = try self.ifExpression();
 
                 const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-                self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
-                self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
+                //self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
+                //self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), args) catch return error.AllocatorFailure;
                 self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;
 
                 const expr = try self.alloc(Expression);

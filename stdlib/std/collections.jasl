@@ -61,3 +61,45 @@ pub let concat = fn (T: type) -> *fn ([]T, []T) -> []T {
 pub let removeFirst = fn (T: type) -> *fn ([]T, T) -> []T {
     // TODO: Implement after Allocators.
 };
+
+pub let concatComptime = fn (T: type, items: []T, app: []T) -> []T {
+    let ret: [items.len + app.len]mut T = undefined;
+
+    let i: mut u32 = 0;
+    while i < items.len {
+        ret[i] = items[i];
+    }
+
+    i = 0;
+    while i < app.len {
+        ret[i + items.len] = app[i];
+    }
+
+    return ret;
+};
+
+pub let filterComptime = fn (T: type, items: []T, pred: *fn T -> bool) -> []T {
+    let ret: [items.len]mut T = undefined;
+
+    let i: mut u32 = 0;
+    let pass: mut u32 = 0;
+    while i < items.len {
+        if pred(items[i]) {
+            defer pass = pass + 1;
+            ret[pass] = items[i];
+        }
+    };
+
+    return ret.subslice(0, pass);
+};
+
+pub let mapComptime = fn (T: type, R: type, items: []T, mapfn: *fn T -> R) -> []R {
+    let ret: [items.len]mut T = undefined;
+
+    let i: mut u32 = 0;
+    while i < items.len {
+        ret[i] = mapFn(items[i]);
+    }
+
+    return ret;
+};

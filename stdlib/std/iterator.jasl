@@ -22,15 +22,15 @@
         Map and Filter using the said trait.
 */
 
-import builtin as B;
 import std;
-import std::collections as C;
-import std::debug as D;
+import builtin as B;
 import std::math as M;
+import std::debug as D;
 import std::numeric as N;
 import builtin::type as R;
 import std::comptime as CT;
 import std::functional as F;
+import std::collections as C;
 
 /*
     Expected from Iterator:
@@ -70,14 +70,17 @@ pub let Iterator = fn (T: type) -> type {
         pub let Of = T;
         let Next = std::Option(Of);
 
+        let Self = B::this();
+
         pub let Trait = fn (Iter: type) -> type {
+            _ = ExtractIteratorType(Iter);
+
             let trait = CT::TraitInfo(
-                "std::iterator::Iterator", (
-                    CT::MemberInfo(@Field, ("Of", type)),
-                    CT::MemberInfo(@Definition, ("next", *fn (*mut Iter) -> Next)),
-                    CT::MemberInfo(@Definition, ("peek", *fn (*mut Iter) -> Next)),
-                    CT::MemberInfo(@Definition, ("eos", *fn (*mut Iter) -> bool)),
-                    CT::MemberInfo(@Definition, ("iterator", *fn (*mut Iter) -> Interface(Of))),
+                B::typeInfo(Self).Struct.name, (
+                    CT::MemberInfo(@Definition, (true, "next", *fn (*mut Iter) -> Next)),
+                    CT::MemberInfo(@Definition, (true, "peek", *fn (*mut Iter) -> Next)),
+                    CT::MemberInfo(@Definition, (true, "eos", *fn (*mut Iter) -> bool)),
+                    CT::MemberInfo(@Definition, (true, "iterator", *fn (*mut Iter) -> Interface(Of))),
                 )
             );
 
@@ -97,53 +100,41 @@ pub let Iterator = fn (T: type) -> type {
         */
         pub let Interface = struct {
             let VTable = struct {
-                next: *fn (*mut void) -> std::Option(Of),
-                peek: *fn (*mut void) -> std::Option(Of),
+                next: *fn (*mut void) -> Next,
+                peek: *fn (*mut void) -> Next,
                 eos: *fn (*mut void) -> bool,
             };
 
-            pub let Implement = fn (Self: type, Of: type) -> *fn (*mut Self) -> Interface(Of) {
-                return fn (self: *mut Self) -> Interface(Of) {
-                    return Interface(Of)(
+            let Self = B::this();
+            pub let Of = Of;
+
+            pub let Implement = fn (For: type) -> *fn (*mut Trait(For)) -> Self {
+                return fn (self: *mut For) -> Self {
+                    return Self(
                         self as *mut void,
-                        Interface::VTable(
+                        VTable(
                             self.next as *fn (*mut void) -> Next,
                             self.peek as *fn (*mut void) -> Next,
-                            self.eos as *fn (*mut void) -> Next,
+                            self.eos as *fn (*mut void) -> bool,
                         ),
                     );
                 };
             };
 
-            pub let NotImplemented = fn (Self: type, Of: type) -> *fn (*mut Self) -> Interface(Of) {
-                return fn (self: *mut Self) -> Interface(Of) {
-                    return Interface(Of)(
-                        self as *mut void,
-                        Interface::VTable(
-                            fn (this: *mut void) -> Next {
-                                B::unreachable();
-                            },
-                            fn (this: *mut void) -> Next {
-                                B::unreachable();
-                            },
-                            fn (this: *mut void) -> bool {
-                                B::unreachable();
-                            },
-                        ),
-                    );
+            pub let NotImplemented = fn (For: type) -> *fn (*mut Trait(For)) -> Self {
+                return fn (self: *mut For) -> Self {
+                    return B::unreachable();
                 };
             };
-
-            let Self = B::this();
 
             ctx: *mut void,
             vtable: VTable,
 
-            pub let next =  fn (self: *mut Self) -> std::Option(Of) {
+            pub let next =  fn (self: *mut Self) -> Next {
                 return self.vtable.next(self.ctx);
             };
 
-            pub let peek =  fn (self: *mut Self) -> std::Option(Of) {
+            pub let peek =  fn (self: *mut Self) -> Next {
                 return self.vtable.peek(self.ctx);
             };
 
@@ -155,20 +146,20 @@ pub let Iterator = fn (T: type) -> type {
                 B::compileError("Interface.iterator() is pointless, and unsafe to use.", ());
             };
 
-            pub let pipe = F::GeneratePipe(Self);
+            pub let pipe = Pipeline::Implement(Self);
         };
 
-        pub let Default = fn (Self: type) -> (
-            *fn (*mut Self) -> std::Option(Of),
-            *fn (*mut Self) -> std::Option(Of),
-            *fn (*mut Self) -> bool,
-            *fn (*mut Self) -> Interface(Of),
+        pub let ImplementEmpty = fn (For: type) -> (
+            *fn (*mut For) -> Next,
+            *fn (*mut For) -> Next,
+            *fn (*mut For) -> bool,
+            *fn (*mut For) -> Self,
         ) {
             return (
-                fn (self: *mut Self) -> std::Option(Of) { return Next(@None, ()); },
-                fn (self: *mut Self) -> std::Option(Of) { return Next(@None, ()); },
-                fn (self: *mut Self) -> bool { return true; },
-                Interface::Implement(Self, Of),
+                fn (__: *mut For) -> Next { return Next(@None); },
+                fn (__: *mut For) -> Next { return Next(@None); },
+                fn (__: *mut For) -> bool { return true; },
+                Implement(For),
             );
         };
 
@@ -180,81 +171,45 @@ pub let Iterator = fn (T: type) -> type {
                 To have a method "wrap" that will return a partially initialized HigherOrderIterator,
                 with its "iterator" field set to the given iterator.
 
-                To habe a method "initp", namely "init pipeline", that will initialize the remaining
+                To have a method "initp", namely "init pipeline", that will initialize the remaining
                 fields from "wrap", and return a "*mut HigherOrderIterator" for the pipeline.
         */
         pub let HigherOrder = struct {
+            let Self = B::this();
+
             pub let Trait = fn (Iter: type) -> *fn (type, type) -> type {
-                _ = Iterator::Trait(Iter, Of);
+                _ = Iterator(Of)::Trait(Iter);
 
-                return fn (Over: type, OverOf: type) -> type {
-                    _ = Iterator::Trait(Over, OverOf);
-
-                    let fields: [1]FieldSignature = (
-                        FieldSignature("Of", type),
-                    );
-
-                    let i: mut u32 = 0;
-                    while i < fields.len {
-                        let field = fields[i];
-
-                        if 
-                            !B::hasFn(Iter, field.name)
-                            or B::field(Iter, field.name) != field.valueType {
-                            B::compileError("Expected '{s}' to implement Iterator trait field '{s}' with type '{s}'.", (
-                                typeInfo.name,
-                                field.name,
-                                B::typeInfo(field).name,
-                            ));
-                        }
-                    }
-
-                    let funcs: [2]FunctionSignature = (
-                        FunctionSignature("wrap", (Over), (Iter)),
-                        FunctionSignature("initp", C::concat(type)((*mut Iter), C::removeFirst(type)(typeInfo.fields, *mut Iter)), (*mut Iter)),
-                    );
+                return fn (Over: type) -> type {
+                    let OverOf = ExtractIteratorType(Over);
+                    _ = Iterator(OverOf)::Trait(Over);
 
                     let typeInfo = B::typeInfo(Iter).Struct;
 
-                    let i: mut u32 = 0;
-                    while i < funcs.len {
-                        let func = funcs[i];
+                    let initpParams = C::concatComptime(
+                        type,
+                        (*mut Iter),
+                        C::mapComptime(
+                            R::FieldInfo,
+                            type,
+                            C::filterComptime(R::FieldInfo, typeInfo.fields, fn (field: R::FieldInfo) -> bool {
+                                return field.valueType != *mut Iter;
+                            }),
+                            fn (field: R::FieldInfo) -> type {
+                                return field.valueType;
+                            },
+                        ),
+                    );
 
-                        if !B::hasFn(Iter, func.name) {
-                            B::compileError("Expected '{s}' to implement HigherOrderIterator trait function '{s}'", (
-                                typeInfo.name,
-                                func.name,
-                            ));
-                        }
+                    let trait = CT::TraitInfo(
+                        B::typeInfo(Self).Struct.name, (
+                            CT::MemberInfo(@Field, (true, "Over", type)),
+                            CT::MemberInfo(@Definition, (true, "wrap", *fn Over -> Iter)),
+                            CT::MemberInfo(@Definition, (true, "initp", *fn initpParams -> *mut Iter))
+                        ),
+                    );
 
-                        let funcInfo = B::typeInfo(B::typeOf(B::field(Iter, func.name))).Function; 
-
-                        if !C::eql(type)(funcInfo.argTypes, func.params) {
-                            B::compileError("Mismatching argument types in function signature '{s}::{s}'.
-                    Expected: {any}
-                    Received: {any}
-                                ",(
-                                typeInfo.name,
-                                func.name,
-                                func.params,
-                                funcInfo.argTypes,
-                            ));
-                        }
-
-                        if func.ret != funcInfo.returnTypes {
-                            B::compileError("Mismatching return type in function signature '{s}::{s}'.
-                    Expected: {any}
-                    Received: {any}
-                                ",(
-                                typeInfo.name,
-                                func.name,
-                                B::typeInfo(func.ret),
-                                B::typeInfo(funcInfo.returnTypes),
-                            ));
-                        } 
-                    }
-
-                    return Iter;
+                    return CT::VerifyTrait(trait, Iter);
                 };
             };
         };
@@ -266,63 +221,29 @@ pub let Iterator = fn (T: type) -> type {
                 for it to wrap around PipelineIterator to allow pipeline work.
         */
         pub let Pipeline = struct {
+            let Self = B::this();
+
             pub let Trait = fn (Iter: type) -> type {
-                _ = Iterator(Iter, Of);
-
-                let funcs: [1]FunctionSignature = (
-                    FunctionSignature("pipe", (type, type), ()),
-                );
-
-                let typeInfo = B::typeInfo(Iter).Struct;
-
-                let i: mut u32 = 0;
-                while i < funcs.len {
-                    let func = funcs[i];
-
-                    if !B::hasFn(Iter, func.name) {
-                        B::compileError("Expected '{s}' to implement PipelineIterator trait function '{s}'", (
-                            typeInfo.name,
-                            func.name,
-                        ));
-                    }
-
-                    let funcInfo = B::typeInfo(B::typeOf(B::field(Iter, func.name))).Function; 
-
-                    if !C::eql(type)(funcInfo.argTypes, func.params) {
-                        B::compileError("Mismatching argument types in function signature '{s}::{s}'.
-                Expected: {any}
-                Received: {any}
-                            ",(
-                            typeInfo.name,
-                            func.name,
-                            func.params,
-                            funcInfo.argTypes,
-                        ));
-                    }
-
-                    if func.name == "pipe" {
-                        continue;
-                    }
-
-                    if func.ret != funcInfo.returnTypes {
-                        B::compileError("Mismatching return type in function signature '{s}::{s}'.
-                Expected: {any}
-                Received: {any}
-                            ",(
-                            typeInfo.name,
-                            func.name,
-                            B::typeInfo(func.ret),
-                            B::typeInfo(funcInfo.returnTypes),
-                        ));
-                    } 
-                }
+                // TODO: do it properly
             };
+
+            pub let Implement = undefined/*TODO: do it properly*/;
         };
     };
 };
 
-pub let len = fn (P: type, I: type) -> *fn (Iterator::Trait(I, P)) -> u32 {
-    return fn (iterator: I) -> u32 {
+pub let ExtractIteratorType = fn (Iter: type) -> type {
+    if !B::hasField(Iter, "Of") {
+        B::compileError("'{s}' does not have the Iterator field 'Of'.", (
+            B::typeInfo(Iter).name,
+        ));
+    }
+
+    return Iter.Of;
+};
+
+pub let len = fn (Iter: type) -> *fn (Iterator(ExtractIteratorType(Iter))::Trait(I)) -> u32 {
+    return fn (iterator: Iter) -> u32 {
         let length: mut u32 = 0;
         while !iterator.eos() {
             length = length + 1;
@@ -333,15 +254,20 @@ pub let len = fn (P: type, I: type) -> *fn (Iterator::Trait(I, P)) -> u32 {
     };
 };
 
-pub let Map = fn (From: type, To: type) -> *fn (type) -> type {
+pub let Map = fn (To: type) -> *fn (type) -> type {
     return fn (Over: type) -> type  {
-        return Iterator::Trait(struct {
+        return struct {
+            pub let Of = To;
+            pub let Over = Over;
+            pub let From = ExtractIteratorType(Over);
+
             let Self = B::this();
+            let Iter = Iterator(To);
             let Next = std::Option(To);
 
+            iterator: mut Iterator(From)::Trait(Over),
             func: mut *fn (From) -> To,
 
-            // Iterator
             pub let next = fn (self: *mut Self) -> Next {
                 return switch self.eos() {
                     true -> Next(@None, ()),
@@ -360,15 +286,11 @@ pub let Map = fn (From: type, To: type) -> *fn (type) -> type {
                 return self.iterator.eos();
             };
 
-            pub let iterator = Interface::Implement(Self);
+            pub let iterator = Iter::Interface::Implement(Self);
 
-            // PipelineIterator
-            pub let pipe = F::GeneratePipe(Self);
+            pub let pipe = Iter::Pipeline::Implement(Self);
 
-            // HigherOrderIterator
-            iterator: mut Iterator::Trait(Over, From),
-
-            pub let wrap = fn (iterator: mut Iterator::Trait(Over, From)) -> Self {
+            pub let wrap = fn (iterator: mut Iterator(From)::Trait(Over)) -> Self {
                 return Self(
                     iterator,
                     undefined,
@@ -379,67 +301,68 @@ pub let Map = fn (From: type, To: type) -> *fn (type) -> type {
                 self.func = func;
                 return self;
             };
-        }, To);
+        };
     };
 };
 
-pub let Filter = fn (Of: type) -> *fn (type) -> type {
-    return fn (Over: type) -> type {
-        return Iterator::Trait(struct {
-            let Self = B::this();
-            let Next = std::Option(Of);
+pub let Filter = fn (Over: type) -> type {
+    return struct {
+        pub let Over = Over;
+        pub let Of = ExtractIteratorType(Over);
 
-            iterator: mut Iterator::Trait(Over, Of),
-            func: *fn (Of) -> bool,
+        let Self = B::this();
+        let Next = std::Option(Of);
 
-            pub let next = fn (self: *mut Self) -> Next {
-                while !self.eos() {
-                    let n = self.iterator.next();
+        iterator: mut Iterator(Of)::Trait(Over),
+        func: *fn (Of) -> bool,
 
-                    if self.func(n.Some) {
-                        return n;
-                    }
+        pub let next = fn (self: *mut Self) -> Next {
+            while !self.eos() {
+                let n = self.iterator.next();
+
+                if self.func(n.Some) {
+                    return n;
+                }
+            }
+
+            return Next(@None, ());
+        };
+
+        pub let peek = fn (self: *mut Self) -> Next {
+            while !self.iterator.eos() {
+                let maybeNext = self.iterator.peek();
+
+                if
+                    maybeNext.some()
+                    and self.func(maybeNext.Some) {
+                    return maybeNext;
                 }
 
-                return Next(@None, ());
-            };
+                _ = self.iterator.next();
+            }
 
-            pub let peek = fn (self: *mut Self) -> Next {
-                while !self.iterator.eos() {
-                    let maybeNext = self.iterator.peek();
+            return Next(@None, ());
+        };
+ 
+        pub let eos = fn (self: *mut Self) -> bool {
+            return self.peek().none();
+        };
 
-                    if
-                        maybeNext.some()
-                        and self.func(maybeNext.Some) {
-                        return maybeNext;
-                    }
+        pub let iterator = Iterator(Of)::Interface::Implement(Self);
 
-                    _ = self.iterator.next();
-                }
+        pub let pipe = Iterator(Of)::Pipeline::Implement(Self);
 
-                return Next(@None, ());
-            };
-     
-            pub let eos = fn (self: *mut Self) -> bool {
-                return self.peek().none();
-            };
+        pub let wrap = fn (iterator: mut Iterator(Of)::Trait(Over)) -> Self {
+            return Self(
+                iterator,
+                undefined,
+            );
+        };
 
-            pub let iterator = Interface::Implement(Self);
-
-            pub let pipe = F::GeneratePipe(Self);
-
-            pub let wrap = fn (iterator: mut Iterator::Trait(Over, Of)) -> Self {
-                return Self(
-                    iterator,
-                    undefined,
-                );
-            };
-
-            pub let initp = fn (self: *mut Self, func: *fn (Of) -> bool) -> *mut Self {
-                self.func = func;
-                return self;
-            };
-        }, Of);
+        pub let initp = fn (self: *mut Self, func: *fn (Of) -> bool) -> *mut Self {
+            self.func = func;
+            return self;
+        };
     };
 };
 
@@ -448,51 +371,53 @@ pub let Filter = fn (Of: type) -> *fn (type) -> type {
     reaching eos as soon as one of the iterators reach eos.
     Zip does not assert that len(leftIterator) == len(rightIterator).
 */
-pub let Zip = fn (OfThis: type, OfThat: type) -> *fn (type, type) -> type {
-    return fn (OverThis: type, OverThat: type) -> type {
+pub let Zip = fn (OverThis: type, OverThat: type) -> type {
+    return struct {
+        let OfThis = ExtractIteratorType(OverThis);
+        let OfThat = ExtractIteratorType(OverThat);
         let Pair = std::Pair(OfThis, OfThat);
 
-        return Iterator::Trait(struct {
-            let Self = B::this();
-            let Next = std::Option(Pair);
+        pub let Of = Pair;
 
-            leftIterator: mut Iterator::Trait(OverThis, OfThis),
-            rightIterator: mut Iterator::Trait(OverThat, OfThat),
+        let Self = B::this();
+        let Next = std::Option(Pair);
 
-            pub let next = fn (self: *mut Self) -> Next {
-                return switch self.eos() {
-                    true -> Next(@None, ()),
-                    false -> Next(@Some, Pair(self.leftIterator.next().Some, self.rightIterator.next().Some)),
-                };
+        leftIterator: mut Iterator(OfThis)::Trait(OverThis),
+        rightIterator: mut Iterator(OfThat)::Trait(OverThat),
+
+        pub let next = fn (self: *mut Self) -> Next {
+            return switch self.eos() {
+                true -> Next(@None, ()),
+                false -> Next(@Some, Pair(self.leftIterator.next().Some, self.rightIterator.next().Some)),
             };
+        };
 
-            pub let peek = fn (self: *mut Self) -> Next {
-                return switch self.eos() {
-                    true -> Next(@None, ()),
-                    false -> Next(@Some, Pair(self.leftIterator.peek().Some, self.rightIterator.peek().Some)),
-                };
+        pub let peek = fn (self: *mut Self) -> Next {
+            return switch self.eos() {
+                true -> Next(@None, ()),
+                false -> Next(@Some, Pair(self.leftIterator.peek().Some, self.rightIterator.peek().Some)),
             };
+        };
 
-            pub let eos = fn (self: *mut Self) -> bool {
-                return self.leftIterator.eos() or self.rightIterator.eos();
-            };
+        pub let eos = fn (self: *mut Self) -> bool {
+            return self.leftIterator.eos() or self.rightIterator.eos();
+        };
 
-            pub let iterator = Interface::Implement(Self);
+        pub let iterator = Iterator(Of)::Interface::Implement(Self);
 
-            pub let pipe = F::GeneratePipe(Self);
-        }, Pair);
+        pub let pipe = Iterator(Of)::Pipeline::Implement(Self);
     };
 };
 
-pub let Sum = fn (Of: type) -> *fn (type) -> type {
-    return fn (Over: type) -> type {
-        _ = Iterator::Trait(Over, N::Numeric(Of));
+pub let Sum = fn (Over: type) -> type {
+    return struct {
+        pub let Of = ExtractIteratorType(Over);
 
-        return struct {
-            let Self = B::this();
+        let Self = B::this();
 
-            pub let next, peek, eos, interface = Iterator::Default(Self, Of);
-        };
+        pub let next, peek, eos, interface = Iterator(Of)::ImplementEmpty(Self);
+
+        // TODO: implement
     };
 };
 
@@ -501,7 +426,9 @@ pub let Range = fn (T: type) -> type {
         B::compileError("Range(T) expects T to be a numeric type.", ());
     }
 
-    return Iterator::Trait(struct {
+    return struct {
+        pub let Of = T;
+
         let Self = B::this();
         let Next = std::Option(T);
 
@@ -556,14 +483,16 @@ pub let Range = fn (T: type) -> type {
             };
         };
 
-        pub let iterator = Interface::Implement(Self);
+        pub let iterator = Iterator(Of)::Interface::Implement(Self);
 
-        pub let pipe = F::GeneratePipe(Self);
-    }, T);
+        pub let pipe = Iterator(Of)::Pipeline::Implement(Self);
+    };
 };
 
 pub let Slice = fn (P: type, Type: enum { Forward, Backward }) -> type {
-    return Iterator::Trait(struct {
+    return struct {
+        pub let Of = P;
+
         let Self = B::this();
         let Next = std::Option(P);
 
@@ -600,12 +529,20 @@ pub let Slice = fn (P: type, Type: enum { Forward, Backward }) -> type {
             return self.items.len == 0;
         };
 
-        pub let iterator = Interface::Implement(Self);
+        pub let iterator = Iterator(Of)::Interface::Implement(Self);
 
-        pub let pipe = F::GeneratePipe(Self);
-    }, P);
+        pub let pipe = Iterator(Of)::Pipeline::Implement(Self);
+    };
 };
 
-pub let Collect = fn (I: type, P: type) -> *fn (Iterator::Trait(I, P)) -> []P {
-    // TODO: Complete after writing allocators
+pub let Collect = fn (From: type) -> type {
+    return struct {
+        pub let Of = ExtractIteratorType(From);
+
+        let Self = B::this();
+
+        pub let next, peek, eos, interface = Iterator(Of)::ImplementEmpty(Self);
+
+        // TODO: Complete after writing allocators
+    };
 };
