@@ -14,11 +14,17 @@ pub let TypeInfo = union(enum) {
     Type: void,
 };
 
+pub let FieldInfo = struct {
+    pub public: bool,
+    pub name: []u8,
+    pub valueType: type,
+};
+
 pub let Struct = struct {
     pub mutable: bool,
     pub name: []u8,
-    pub fields: []type,
-    pub definitions: []type,
+    pub fields: []FieldInfo,
+    pub definitions: []FieldInfo,
 };
 
 pub let Union = Struct;
@@ -27,7 +33,7 @@ pub let Enum = struct {
     pub mutable: bool,
     pub name: []u8,
     pub fields: [][]u8,
-    pub definitions: []type,
+    pub definitions: []FieldInfo,
 };
 
 pub let Pointer = struct {

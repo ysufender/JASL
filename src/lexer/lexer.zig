@@ -26,10 +26,11 @@ pub const TokenType = enum(u8) {
     Fn, Struct, Let, Enum, Union,
     Asm,
     Pub, Mut,
-    And, Or,
+    And, Or, Mark,
     Identifier,
     String, Integer, Float, False, True, EnumLiteral,
     Discard,
+    Cast,
     EOF,
 };
 
@@ -108,6 +109,8 @@ pub const Scanner = struct {
         .{ "break", .Break },
         .{ "continue", .Continue },
         .{ "switch", .Switch },
+        .{ "as", .Cast },
+        .{ "mark", .Mark },
         .{ "_", .Discard },
     });
 

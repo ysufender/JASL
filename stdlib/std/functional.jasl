@@ -1,0 +1,47 @@
+import std::iterator as iterator;
+import builtin as B;
+
+let Iterator = iterator::Iterator;
+
+pub let GeneratePipe = fn (Self: type)
+    -> *fn (*fn (type) -> type, type)
+        -> *fn (*mut Self)
+            -> Generator(Self) {
+
+    return fn (Generator: *fn (type) -> type, Of: type)
+        -> *fn (*mut Self)
+            -> Generator(Self) {
+
+        return fn (self: *Self)
+            -> HigherOrder::Trait(Generator(Pipeline::Trait(Self, Of)), HigherOf)(Self, Of) {
+
+            return B::field(Generator(Self), "wrap")(self.*);
+        };
+    };
+};
+
+pub let LoopResult = fn (T: type) -> type {
+    return union(enum) {
+        Break: void,
+        Continue: void,
+        Return: T,
+    };
+};
+
+pub let for = fn (Over: type, With: type, Iter: type)
+    -> *fn (Iterator(Over)::Trait(Iter), *fn (Over) -> LoopResult(With))
+        -> LoopResult(With) {
+    
+    return fn (it: Iter, loop: *fn (Over) -> LoopResult(With)) -> LoopResult(With) {
+        while true {
+            let item = iter.next();
+            switch item {
+                @Break -> break;
+                @Continue -> continue;
+                @Return -> return item;
+            }
+        }
+
+        return LoopResult(With)(@Break, ());
+    };
+};

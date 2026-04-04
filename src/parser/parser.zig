@@ -19,21 +19,21 @@ pub const StatementMap = collections.MultiArrayList(Statement);
 // Because manually tagged unions are more
 // performant with collections.MultiArrayList(T)
 pub const Expression = struct {
-    // TODO: Switch expressions
     pub const Type = enum {
-        Assignment,
+        Assignment, // ok
         Binary, // ok
         Literal, // ok
         Indexing, // ok
         Identifier, // ok
         Unary, // ok
         StructDefinition, // ok
-        EnumDefinition,
-        UnionDefinition,
+        EnumDefinition, // ok
+        UnionDefinition, // ok
         FunctionDefinition, // ok
         Call, // ok
         Conditional, // ok
-        Switch,
+        Switch, // ok
+        Cast, // ok
         MutableType, // ok
         PointerType, // ok
         SliceType, // ok
@@ -41,7 +41,7 @@ pub const Expression = struct {
         FunctionType, // ok
         ValueType, // ok
         Scoping, // ok
-        ExpressionList,
+        ExpressionList, // ok
         Dot, // ok
     };
 
@@ -65,7 +65,8 @@ pub const Statement = struct {
         Discard, // ok
         Import, // ok
         Expression, // ok
-        Defer,
+        Defer, // ok
+        Extern, // ok
     };
 
     type: Type,
@@ -261,6 +262,7 @@ pub const Parser = struct {
             .Continue => self.continueStatement(),
             .Pub => switch (self.tokens.items(.type)[self.advance()]) {
                 .Let => self.variable(true),
+                .Extern => self.externStatement(true),
                 else => {
                     self.report("Expected a variable definition after 'pub' specifier.", .{});
                     return error.InvalidToken;
@@ -271,15 +273,39 @@ pub const Parser = struct {
             .Import => self.import(),
             .Semicolon => self.statement(),
             .Defer => self.deferStatement(),
-            .Extern => {
-                self.report("Extern symbols are not yet implemented.", .{});
-                return error.Unimplemented;
-            },
+            .Extern => self.externStatement(false),
             else => self.expressionStmt(),
         };
     }
 
-    /// Defer only allows function calls, for now.
+    fn externStatement(self: *Self, public: bool) StatementResult {
+        const specs = try self.compilerHint();
+
+        const specCount = specs.end - specs.start;
+        if (2 < specCount or specCount < 2) {
+            self.report("Expected an extern symbol specification, received {d}", .{specCount});
+            return error.MissingSpecs;
+        }
+
+        const sign = try self.variableSignature(public, true);
+
+        _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
+
+        const start: u32 = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), specs.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), specs.end) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), sign) catch return error.AllocatorFailure;
+
+        const result = try self.alloc(Statement);
+        self.statementMap.set(result, .{
+            .type = .Extern,
+            .value = start,
+        });
+
+        return result;
+    }
+
+    /// Defer only allows function calls and assignments, for now.
     fn deferStatement(self: *Self) StatementResult {
         const call = try self.expression();
 
@@ -463,6 +489,7 @@ pub const Parser = struct {
     }
 
     fn whileStatement(self: *Self) StatementResult {
+        const hints = try self.compilerHint();
         const condition = try self.expression();
 
         if (!self.check(.LBrace)) {
@@ -473,6 +500,8 @@ pub const Parser = struct {
         const body = try self.statement();
 
         const start: defines.OpaquePtr = @intCast(self.extra.items.len);
+        self.extra.append(self.allocator(), hints.start) catch return error.AllocatorFailure;
+        self.extra.append(self.allocator(), hints.end) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), condition) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), body) catch return error.AllocatorFailure;
         
@@ -553,9 +582,9 @@ pub const Parser = struct {
     }
 
     fn import(self: *Self) StatementResult {
-        const module = try self.scoping();
+        const module = try self.postfix();
         const maybeAlias =
-            if (self.match(&.{.Colon})) self.advance()
+            if (self.match(&.{.Cast})) self.advance()
             else null;
         _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
@@ -808,14 +837,46 @@ pub const Parser = struct {
             return expr;
         }
 
-        return self.postfix();
+        return self.cast();
+    }
+
+    fn cast(self: *Self) ExpressionResult {
+        var expr = try self.postfix();
+
+        while (self.match(&.{.Cast})) {
+            const typeExpr = try self.ifExpression();
+
+            const newExpr = try self.alloc(Expression);
+            self.expressionMap.set(newExpr, .{
+                .type = .Cast,
+                .value = typeExpr,
+            });
+
+            expr = newExpr;
+        }
+
+        return expr;
     }
 
     fn postfix(self: *Self) ExpressionResult {
         var expr = try self.primary();
 
         while (true) {
-            if (self.match(&.{.LParen})) {
+            if (self.match(&.{.DoubleColon})) {
+                const member = try self.consume(.Identifier, error.MissingIdentifier, "Expected member name in scope resolution.");
+                
+                const start: defines.OpaquePtr = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), member) catch return error.AllocatorFailure;
+
+                const newExpr = try self.alloc(Expression);
+                self.expressionMap.set(newExpr, .{
+                    .type = .Scoping,
+                    .value = start,
+                });
+                expr = newExpr;
+            }
+            else if (self.match(&.{.LParen})) {
                 const argsStart = self.scratch.items.len;
                 while (!self.check(.RParen)) {
                     self.scratch.append(self.allocator(), try self.expression()) catch return error.AllocatorFailure;
@@ -916,41 +977,19 @@ pub const Parser = struct {
                 });
                 return expr;
             },
-            .Identifier => return self.scoping(),
+            .Identifier => {
+                const expr = try self.alloc(Expression);
+                self.expressionMap.set(expr, .{
+                    .type = .Identifier,
+                    .value = try self.consume(.Identifier, error.MissingIdentifier, "Expected identifier in scoping expression"),
+                });
+                return expr;
+            },
             else => {
                 self.report("Expected a primary expression, got '{s}' instead.", .{self.tokens.get(self.advance()).lexeme(self.context, self.file)});
                 return error.InvalidToken;
             },
         }
-    }
-
-    fn scoping(self: *Self) ExpressionResult {
-        var expr = try self.alloc(Expression);
-        self.expressionMap.set(expr, .{
-            .type = .Identifier,
-            .value = try self.consume(.Identifier, error.MissingIdentifier, "Expected identifier in scoping expression"),
-        });
-
-        while (self.match(&.{.DoubleColon})) {
-            const member = try self.consume(.Identifier, error.MissingIdentifier, "Expected member name in scope resolution.");
-            
-            const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-            self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
-            self.extra.append(self.allocator(), member) catch return error.AllocatorFailure;
-
-            const newExpr = try self.alloc(Expression);
-            // std.debug.print("Scoping Def {d}\n", .{newExpr});
-            // std.debug.print("Scoping Def Start {d}\n", .{start});
-            // std.debug.print("Scoping Def LHS {d} {d}\n", .{self.extra.items[start], expr});
-            // std.debug.print("Scoping Def Member {d} {d}\n", .{self.extra.items[start + 1], member});
-            self.expressionMap.set(newExpr, .{
-                .type = .Scoping,
-                .value = start,
-            });
-            expr = newExpr;
-        }
-
-        return expr;
     }
 
     fn function(self: *Self) ExpressionResult {
@@ -1283,7 +1322,7 @@ pub const Parser = struct {
             .Union => return self.unionDefinition(),
             .Identifier => {
                 self.current -= 1;
-                return self.scoping();
+                return self.primary();
             },
 
             else => {
@@ -1301,6 +1340,27 @@ pub const Parser = struct {
 
     fn allocator(self: *Self) Allocator {
         return self.arena.allocator();
+    }
+
+    fn compilerHint(self: *Self) common.CompilerError!defines.Range {
+        return if (self.match(&.{.Mark})) blk: {
+            _ = try self.consume(.LParen, error.MissingParenthesis, "Expected '(' in compiler hint.");
+
+            const scratchStart = self.scratch.items.len;
+            while (!self.check(.RParen)) loop: {
+                self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
+                if (!self.match(&.{.Comma})) break :loop;
+            }
+
+            _ = try self.consume(.RParen, error.MissingParenthesis, "Expected ')' in compiler hint.");
+
+            const range = try self.commitScratch(scratchStart);
+            break :blk range;
+        }
+        else .{
+            .start = 0,
+            .end = 0,
+        };
     }
 
     fn commonBinary(self: *Self, expr: defines.ExpressionPtr, comptime next: anytype) ExpressionResult {

@@ -1,14 +1,16 @@
-import std::iterator : iterator;
-import builtin : b;
+import std::iterator as iterator;
 import std;
 
-let Main = std::Error(void, std::ErrorCode);
+let Main = std::Result(void, std::ErrorCode);
 
-let Range = iterator::Range(u32);
-let Filter = iterator::Filter(u32);
+let Range = iterator::Range;
+let Filter = iterator::Filter;
 
 let main = fn () -> Main {
-    let result: u32 = Range(u32)
-        .init(0, 120, 1)
-        .apply(Filter(u32));
+    let result = Range(u32)
+        .init(0, 150, 1)
+        .pipe(Filter(u32), u32).initp(fn (elem: u32) -> bool { return elem <= 10; })
+        .pipe();
+
+    return Main(@Ok, ());
 };

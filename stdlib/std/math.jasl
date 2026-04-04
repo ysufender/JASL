@@ -1,5 +1,5 @@
-import builtin : B;
-import std::collections : C;
+import builtin as B;
+import std::collections as C;
 
 pub let Integer = fn (T: type) -> bool {
     return C::contains(type)(T, (u32, i32, i8, u8));

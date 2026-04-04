@@ -47,4 +47,5 @@ pub const CompilerError = error {
     FileNotFound,
     IndexOutOfBounds,
     MissingPipe,
+    MissingSpecs,
 };

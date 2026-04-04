@@ -1,7 +1,7 @@
-import builtin : B;
-import builtin::type : R;
-import std::math : M;
-import std::collections : C;
+import builtin as B;
+import builtin::type as R;
+import std::math as M;
+import std::collections as C;
 
 pub let Option = fn (T: type) -> type {
     return union(enum) {
@@ -120,4 +120,44 @@ pub let DefaultConstructible = fn (T: type) -> type {
 };
 
 pub let Default = fn (T: type) -> DefaultConstructible(T) {
+    // TODO:
+};
+
+pub let GenericEqual = fn (T: type) -> *fn (T, T) -> bool {
+    let baseTypeInfo = B::typeInfo(T);
+    let tag = baseTypeInfo.tag;
+
+    if C::contains(R::TypeInfo::Tag)(tag, (@Integer, @Void, @Float, @Type, @Enum)) {
+        return fn (lhs: T, rhs: T) -> bool {
+            return lhs == rhs;
+        };
+    }
+
+    if tag == @Pointer {
+        B::compileError("Type '{s}' is not default comparable because it can either be a shallow comparison or a deep one.", (T));
+    }
+
+    if C::contains(R::TypeInfo::Tag)(tag, (@Function, @Noreturn, @Any)) {
+        B::compileError("Type '{s}' is not default comparable because it is not comparable at all.", (T));
+    }
+
+    let typeInfo = switch baseTypeInfo {
+        @Struct -> |s| s,
+        @Union -> |u| u,
+        else -> B::unreachable(),
+    };
+
+    let i: u32 = 0;
+
+    return fn (lhs: T, rhs: T) -> bool {
+        while mark(@inline) (i < typeInfo.fields.len) {
+            defer i = i + 1;
+
+            if (B::field(lhs, typeInfo.fields[i]) != B::field(rhs, typeInfo.fields[i])) {
+                return false;
+            }
+        }
+
+        return true;
+    };
 };

@@ -1,11 +1,77 @@
-import std::collections;
+import builtin::type as t;
+import builtin as b;
+import std::functional as f;
+import std::iterator as i;
+import std::collections as c;
 
-let findFirst = std::collections::findFirst;
+pub let MemberInfo = union(enum) {
+    Field: t::FieldInfo,
+    Definition: t::FieldInfo,
+};
 
-pub let ensure = fn (T: type, Value: T) -> void { };
+pub let TraitInfo = struct {
+    name: []u8,
+    members: []MemberInfo,
+};
 
-pub let call = fn (T: type, Fn: T, args: builtin::argTypes(T, builtin::typeInfo(T).Pointer.Child.Fn.name))
-    -> builtin::returnType(T, builtin::typeInfo(builtin::typeInfo(T).Pointer.Child).Fn.name) {
+pub let VerifyTrait = fn (Trait: TraitInfo, On: type) -> type {
+    let typeInfo = switch b::typeInfo(On) {
+        @Struct -> |s| s,
+        @Union -> |u| u,
+        else -> b::compileError("{s} trait can only be implemented on structs and unions.", (Name)),
+    };
 
-    return builtin::call(Fn, args);
+    let MemberIterator = i::Slice(MemberInfo, @Forward);
+
+    _ = f::for(On, void, MemberIterator)(MemberIterator(Trait.members), fn (member: On) -> f::LoopResult(void) {
+        switch member {
+            @Field -> |field| {
+                if !b::hasField(On, field.name) {
+                    b::compileError("Expected '{s}' to have {s} trait field '{s}'.",
+                        (typeInfo.name, Trait.name, field.name),
+                    );
+                }
+
+                let fieldInfo = typeInfo.fields[b::fieldIndex(On, field.name)];
+
+                if  fieldInfo.valueType != field.valueType {
+                    b::compileError("Type mismatch with {s} trait field '{s}::{s}'.
+    Expected: {s}
+    Received: {s}", (
+                        Trait.name,
+                        typeInfo.name,
+                        field.name,
+                        b::typeInfo(field.valueType).name,
+                        b::typeInfo(fieldInfo.valueType).name,
+                    ));
+                }
+            }
+
+            @Definition -> |def| {
+                if !b::hasDef(On, def.name) {
+                    b::compileError("Expected '{s}' to implement {s} trait definition '{s}'", (
+                        typeInfo.name,
+                        Trait.name,
+                        def.name,
+                    ));
+                }
+
+                let defInfo = typeInfo.definitions[b::defIndex(On, def.name)];
+
+                if defInfo.valueType != def.valueType {
+                    b::compileError("Type mismatch with {s} trait definition '{s}::{s}'.
+    Expected: {s}
+    Received: {s}", (
+                        Trait.name,
+                        typeInfo.name,
+                        def.name,
+                        b::typeInfo(def.valueType).name,
+                        b::typeInfo(defInfo.valueType).name,
+                    ));
+                }
+            }
+        }
+    });
+
+    return On;
 };

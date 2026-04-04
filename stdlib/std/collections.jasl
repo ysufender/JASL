@@ -53,3 +53,11 @@ pub let eql = fn (T: type) -> *fn ([]T, []T) -> bool {
         return true;
     };
 };
+
+pub let concat = fn (T: type) -> *fn ([]T, []T) -> []T {
+    // TODO: Implement after Allocators.
+};
+
+pub let removeFirst = fn (T: type) -> *fn ([]T, T) -> []T {
+    // TODO: Implement after Allocators.
+};

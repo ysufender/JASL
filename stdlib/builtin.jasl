@@ -1,4 +1,4 @@
-import builtin::type : Type;
+import builtin::type as Type;
 
 pub let this = fn () -> type { };
 

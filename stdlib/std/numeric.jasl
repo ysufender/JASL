@@ -1,5 +1,5 @@
-import builtin : B;
-import std::math : M;
+import builtin as B;
+import std::math as M;
 
 pub let Integer = fn (T: type) -> type {
     if !M::Integer(T) {

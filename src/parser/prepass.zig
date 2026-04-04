@@ -258,6 +258,38 @@ pub const Prepass = struct {
                         });
                     }
                 },
+                .Extern => {
+                    const sign = ast.signatures.items(.name)[ast.extra[statement.value + 2]];
+                    const signame = tokens.get(sign).lexeme(self.context, file.dataIndex);
+
+                    const idx = file.symbols.addOne(allocator) catch {
+                        self.report(
+                            "Couldn't add symbol {s} to module map. System is out of memory.",
+                            .{signame},
+                            file.dataIndex,
+                            sign,
+                        );
+                        fail = true;
+                        continue :statementLoop;
+                    };
+
+                    file.symbolPtrs.put(allocator, signame, idx) catch {
+                        self.report(
+                            "Couldn't add symbol {s} to module map. System is out of memory.",
+                            .{signame},
+                            file.dataIndex,
+                            sign,
+                        );
+                        fail = true;
+                        continue :statementLoop;
+                    };
+
+                    file.symbols.set(idx, .{
+                        .public = ast.signatures.items(.public)[ast.extra[statement.value + 2]],
+                        .name = sign,
+                        .value = 0,
+                    });
+                },
                 else => {
                     self.report(
                         "Only definitions are allowed at top-level.",

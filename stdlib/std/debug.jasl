@@ -8,10 +8,9 @@ pub let assert = fn (cnd: bool, msg: []u8) -> void {
     }
 };
 
+// TODO: function tags for force comptime
 pub let staticAssert = fn (cnd: bool) -> void {
-    std::Comptime(bool, cnd);
-
-    if !cdn {
+    if !cnd {
         builtin::compileError("Assertion failed.", ());
     }
 };
