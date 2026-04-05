@@ -30,6 +30,7 @@ pub const Expression = struct {
         EnumDefinition, // ok
         UnionDefinition, // ok
         FunctionDefinition, // ok
+        Lambda, // ok
         Call, // ok
         Conditional, // ok
         Switch, // ok
@@ -271,7 +272,10 @@ pub const Parser = struct {
             .Let => self.variable(false),
             .Discard => self.discard(),
             .Import => self.import(),
-            .Semicolon => self.statement(),
+            .Semicolon => {
+                self.report("Trailing semicolons are not permitted.", .{});
+                return error.InvalidToken;
+            },
             .Defer => self.deferStatement(),
             .Extern => self.externStatement(false),
             else => self.expressionStmt(),
@@ -995,42 +999,69 @@ pub const Parser = struct {
     fn function(self: *Self) ExpressionResult {
         _ = self.advance();
 
-        const hints = try self.compilerHint();
+        switch (self.tokens.items(.type)[self.advance()]) {
+            .LParen => {
+                const hints = try self.compilerHint();
+                const paramsStart = self.scratch.items.len;
+                while (!self.check(.RParen)) {
+                    self.scratch.append(self.allocator(), try self.variableSignature(false, true)) catch return error.AllocatorFailure;
+                    if (!self.match(&.{.Comma})) break;
+                }
+                _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' after parameter list.");
+                const params = try self.commitScratch(paramsStart);
 
-        _ = try self.consume(.LParen, error.MissingParenthesis, "Expected a parameter list in function definition.");
-        
-        const paramsStart = self.scratch.items.len;
-        while (!self.check(.RParen)) {
-            self.scratch.append(self.allocator(), try self.variableSignature(false, true)) catch return error.AllocatorFailure;
-            if (!self.match(&.{.Comma})) {
-                break;
+                _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
+                const returns = try self.ifExpression();
+
+                _ = try self.consume(.LBrace, error.MissingBrace, "Expected function body.");
+                self.current -= 1;
+                const body = try self.statement();
+
+                const start: defines.OpaquePtr = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), hints.start) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), hints.end) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), body) catch return error.AllocatorFailure;
+
+                const expr = try self.alloc(Expression);
+                self.expressionMap.set(expr, .{
+                    .type = .FunctionDefinition,
+                    .value = start,
+                });
+
+                return expr;
+            },
+            .Pipe => {
+                const paramsStart = self.scratch.items.len;
+                while (!self.check(.Pipe)) {
+                    self.scratch.append(self.allocator(), try self.variableSignature(false, false)) catch return error.AllocatorFailure;
+                    if (!self.match(&.{.Comma})) break;
+                }
+                _ = try self.consume(.Pipe, error.MissingParenthesis, "Expected closing pipe '|' after capture list.");
+                const params = try self.commitScratch(paramsStart);
+
+                const body = try self.expression();
+
+                const start: defines.OpaquePtr = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), body) catch return error.AllocatorFailure;
+
+                const expr = try self.alloc(Expression);
+                self.expressionMap.set(expr, .{
+                    .type = .Lambda,
+                    .value = start,
+                });
+
+                return expr;
+            },
+            else => {
+                self.report("Expected a parameter list or lambda capture.", .{});
+                return error.MissingParenthesis;
             }
         }
-        _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' after parameter list.");
-        const params = try self.commitScratch(paramsStart);
-
-        _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
-        const returns = try self.ifExpression();
-
-        _ = try self.consume(.LBrace, error.MissingBrace, "Expected function body.");
-        self.current -= 1;
-        const body = try self.statement();
-
-        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-        self.extra.append(self.allocator(), hints.start) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), hints.end) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), body) catch return error.AllocatorFailure;
-
-        const expr = try self.alloc(Expression);
-        self.expressionMap.set(expr, .{
-            .type = .FunctionDefinition,
-            .value = start,
-        });
-
-        return expr;
     }
 
     fn structDefinition(self: *Self) ExpressionResult {
@@ -1438,7 +1469,7 @@ pub const Parser = struct {
 
     fn variableSignature(self: *Self, public: bool, enforceType: bool) common.CompilerError!defines.SignaturePtr {
         const name = 
-            if (self.match(&.{.Identifier})) self.previous()
+            if (self.match(&.{.Identifier, .Discard})) self.previous()
             else {
                 self.report("Expected an identifier in variable signature.", .{});
                 return error.MissingIdentifier;

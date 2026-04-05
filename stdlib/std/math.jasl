@@ -25,21 +25,17 @@ pub let isApprox = fn (lhs: float, rhs: float) -> bool {
     return abs(float)(lhs - rhs) <= Epsilon;
 };
 
-pub let abs = fn (T: type) -> *fn (T) -> T {
+pub let abs = fn (T: type, number: T) -> T {
     if !Numeric(T) {
         B::compileError("Expected a numeric type.", ());
     }
 
     if !Signed(T) {
         B::compileError(
-            "Pointless call to abs on unsigned type '{s}'.",
-            (B::typeInfo(T).name)
+            "Pointless call to abs on unsigned type '{any}'.",
+            (T)
         );
     }
 
-    let bitSize = B::bitSizeOf(T);
-
-    return fn (number: T) -> T {
-        return B::bitSet(number, bitSize, 0);
-    };
+    return B::bitSet(number, B::bitSizeOf(T), 0);
 };

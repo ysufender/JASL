@@ -1,3 +1,25 @@
+/*
+    This file is a part of the JASL Standard Library,
+    and is licensed under MIT License.
+
+    Any user code that imports this module agrees that it
+    will satisfy the specifications stated further.
+
+    DISCLAIMER:
+        The traits and conventions mentioned in this document
+        are to be obeyed, otherwise neither JASL STDLib nor the
+        compiler can guarantee a well defined program.
+
+    Name:
+        std::functional
+    Public Symbols:
+        LoopResult,
+        for
+    Description:
+        Defines functional extensions for the missing utilities of the
+        base language.
+*/
+
 import std::iterator as iterator;
 import builtin as B;
 
@@ -9,13 +31,15 @@ pub let LoopResult = fn (T: type) -> type {
     };
 };
 
-pub let for = fn (With: type, Iter: type)
-    -> *fn (iterator::Iterator(iterator::ExtractIteratorType(Over))::Trait(Iter), *fn (Over) -> LoopResult(With))
+pub let for = fn (Iter: type, With: type)
+    -> *fn (iterator::Iterator(iterator::ExtractIteratorType(Iter))::Trait(Iter), *fn (iterator::ExtractIteratorType(Iter)) -> LoopResult(With))
         -> LoopResult(With) {
+
+    let Over = iterator::ExtractIteratorType(Iter);
     
     return fn (it: Iter, loop: *fn (Over) -> LoopResult(With)) -> LoopResult(With) {
-        while true {
-            let item = iter.next();
+        while !it.eos() {
+            let item = loop(it.next().Some);
             switch item {
                 @Break -> break;
                 @Continue -> continue;

@@ -405,7 +405,10 @@ pub const Prepass = struct {
         defer self.lock.unlockShared();
 
         common.log.err(fmt, args);
-        if (self.context.getTokens(self.context.getAST(file).tokens).len > 0) {
+        if (
+            self.context.astMap.items.len > file
+            and self.context.getTokens(self.context.getAST(file).tokens).len > 0
+        ) {
             const t_idx = token orelse 0;
             if (t_idx < self.context.getTokens(self.context.getAST(file).tokens).len) {
                 const position = self.context.getTokens(self.context.getAST(file).tokens).get(t_idx).position(self.context, file);

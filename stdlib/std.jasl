@@ -1,6 +1,33 @@
+/*
+    This file is a part of the JASL Standard Library,
+    and is licensed under MIT License.
+
+    Any user code that imports this module agrees that it
+    will satisfy the specifications stated further.
+
+    DISCLAIMER:
+        The traits and conventions mentioned in this document
+        are to be obeyed, otherwise neither JASL STDLib nor the
+        compiler can guarantee a well defined program.
+
+    Name:
+        std
+    Public Symbols:
+        Option,
+        Result,
+        Pair,
+        ErrorCode,
+        DefaultConstructible,
+        Default,
+        GenericEqual,
+    Description:
+        Defines core utilities for error handling, value generation etc.
+*/
+
 import builtin as B;
-import builtin::type as R;
 import std::math as M;
+import builtin::type as R;
+import std::comptime as CT;
 import std::collections as C;
 
 pub let Option = fn (T: type) -> type {
@@ -37,6 +64,10 @@ pub let Option = fn (T: type) -> type {
                 @Some -> self.Some,
                 @None -> val(),
             };
+        };
+
+        pub let default = fn () -> Self {
+            return Self(@None);
         };
     };
 };
@@ -97,59 +128,77 @@ pub let ErrorCode = enum {
     Err,
 };
 
-pub let DefaultConstructible = fn (T: type) -> type {
-    let baseTypeInfo = B::typeInfo(T);
-    let tag = baseTypeInfo.tag;
+pub let DefaultConstructible = struct {
+    let Self = B::this();
 
-    if C::contains(R::TypeInfo::Tag)(tag, (@Integer, @Void, @Float)) {
-        return T;
-    }
+    let trait = CT::TraitInfo(
+        B::typeInfo(Self).Struct.name, (
+            CT::MemberInfo(@Definition, (true, "default", *fn void -> T)),
+        )
+    );
 
-    if C::contains(R::TypeInfo::Tag)(tag, (@Pointer, @Function, @Noreturn, @Type, @Any, @Union, @Enum)) {
-        B::compileError("Type '{any}' is not default constructible.", (T));
-    }
+    pub let Trait = fn (T: type) -> type {
+        let baseTypeInfo = B::typeInfo(T);
+        let tag = baseTypeInfo.tag;
 
-    let typeInfo = baseTypeInfo.Struct;
-
-    let i: u32 = 0;
-    while i < typeInfo.fields.len {
-        _ = DefaultConstructible(typeInfo.fields[i]);
-    }
-
-    return T;
-};
-
-pub let Default = fn (T: type) -> DefaultConstructible(T) {
-    let typeInfo = B::typeInfo(T);
-
-    let constructStruct = fn (typeInfo: R::Struct) -> T {
-        let ret: mut T = undefined;
-
-        let i: mut u32 = 0;
-        while i < typeInfo.fields.len {
-            let field = typeInfo.fields[i];
-            B::field(ret, field.name) = Default(field.valueType);
+        if C::contains(R::TypeInfo::Tag)(tag, (@Integer, @Void, @Float)) {
+            return T;
         }
 
-        return ret;
+        if CT::CheckTrait(trait, T) {
+            return T;
+        }
+
+        if C::contains(R::TypeInfo::Tag)(tag, (@Pointer, @Function, @Noreturn, @Type, @Any, @Union, @Enum)) {
+            B::compileError("Type '{any}' is not default constructible.", (T));
+        }
+
+        let typeInfo = baseTypeInfo.Struct;
+
+        let i: u32 = 0;
+        while i < typeInfo.fields.len {
+            defer i = i + 1;
+            _ = DefaultConstructible(typeInfo.fields[i].valueType);
+        }
+
+        return T;
     };
 
-    return switch typeInfo {
-        @Struct -> |strct| constructStruct(strct),
-        @Int -> 0,
-        @Void -> (),
-        @Float -> 0.0,
+    pub let Default = fn (T: type) -> Trait(T) {
+        let typeInfo = B::typeInfo(T);
+
+        if CT::CheckTrait(trait, T) {
+            return T::default();
+        }
+
+        let constructStruct = fn (typeInfo: R::Struct) -> T {
+            let ret: mut T = undefined;
+
+            let i: mut u32 = 0;
+            while i < typeInfo.fields.len {
+                defer i = i + 1;
+                let field = typeInfo.fields[i];
+                B::field(ret, field.name) = Default(field.valueType);
+            }
+
+            return ret;
+        };
+
+        return switch typeInfo {
+            @Struct -> |strct| constructStruct(strct),
+            @Int -> 0,
+            @Void -> (),
+            @Float -> 0.0,
+        };
     };
 };
 
-pub let GenericEqual = fn (T: type) -> *fn (T, T) -> bool {
+pub let GenericEqual = fn (T: type, lhs: T, rhs: T) -> bool {
     let baseTypeInfo = B::typeInfo(T);
     let tag = baseTypeInfo.tag;
 
     if C::contains(R::TypeInfo::Tag)(tag, (@Integer, @Void, @Float, @Type, @Enum)) {
-        return fn mark(@inline) (lhs: T, rhs: T) -> bool {
-            return lhs == rhs;
-        };
+        return lhs == rhs;
     }
 
     if tag == @Pointer {
@@ -160,24 +209,27 @@ pub let GenericEqual = fn (T: type) -> *fn (T, T) -> bool {
         B::compileError("Type '{s}' is not default comparable because it is not comparable at all.", (T));
     }
 
-    let typeInfo = switch baseTypeInfo {
-        @Struct -> |s| s,
-        @Union -> |u| u,
-        else -> B::unreachable(),
-    };
+    switch baseTypeInfo {
+        @Struct -> |typeInfo| {
+            let i: u32 = 0;
+            while mark(@inline) (i < typeInfo.fields.len) {
+                defer i = i + 1;
+                let field = typeInfo.fields[i];
 
-    let i: u32 = 0;
-
-    return fn mark(@hot) (lhs: T, rhs: T) -> bool {
-        while mark(@inline) (i < typeInfo.fields.len) {
-            let field = typeInfo.fields[i];
-            defer i = i + 1;
-
-            if !GenericEqual(field.valueType)(B::field(lhs, field.name), B::field(rhs, field.name)) {
-                return false;
+                if !GenericEqual(field.valueType, B::field(lhs, field.name), B::field(rhs, field.name)) {
+                    return false;
+                }
             }
+
+            return true;
         }
 
-        return true;
-    };
+        @Union -> |typeInfo| {
+            return
+                if (lhs.tag != rhs.tag) false
+                else GenericEqual(B::typeOf(B::field(lhs, B::enumStr(lhs.tag))), B::field(lhs, B::enumStr(lhs.tag)), B::field(rhs, B::enumStr(rhs.tag)));
+        }
+
+        else -> B::unreachable();
+    }
 };
