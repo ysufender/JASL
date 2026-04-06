@@ -12,8 +12,8 @@ let main = fn () -> Main {
     let result = Range(u32)
         .init(0, 150, 1)
         .pipe(Filter).with(fn |elem| elem <= 10)
-        .pipe(Fold(u32)).with(fn |acc, elem| acc + elem, 0)
-        .fold();
+        .terminate(Fold(u32))
+        .with(fn |acc, elem| acc + elem, 0);
 
     return Main(@Ok);
 };

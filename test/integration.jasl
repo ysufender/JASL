@@ -18,11 +18,11 @@ let integrate = fn (
     let Interval = I::Range(float);
     let Graph = I::Map(float);
     let Integral = I::Map(float);
-    let Sum = I::Sum(float);
+    let Sum = I::Fold(float);
 
     return I::Range(float)
         .init(from, to, dx)
         .pipe(Graph).with(func)
         .pipe(Integral).with(fn |y| y * dx)
-        .pipe(Sum).sum();
+        .pipe(Sum).with(fn |acc, v| acc + v);
 };

@@ -14,8 +14,7 @@
         std::iterator
     Public Symbols:
         Iterator,
-        ExtractOver,
-        ExtractOf,
+        Extract,
         len,
         Map,
         Filter,
@@ -81,7 +80,7 @@ pub let Iterator = fn (T: type) -> type {
         let Self = B::this();
 
         pub let Trait = fn (Iter: type) -> type {
-            _ = ExtractOf(Iter);
+            _ = Extract(Iter, @Of);
 
             let trait = CT::TraitInfo(
                 B::typeInfo(Self).Struct.name, (
@@ -173,14 +172,14 @@ pub let Iterator = fn (T: type) -> type {
 
         /*
             Expected:
-                To have a field named "iterator", which is the iterator the HigherOrderIterator
+                To have a field named "iterator", which is the iterator the HigherOrder
                 will wrap over.
 
-                To have a method "wrap" that will return a partially initialized HigherOrderIterator,
+                To have a method "wrap" that will return a partially initialized HigherOrder,
                 with its "iterator" field set to the given iterator.
 
                 To have a method "with" if there remains uninitialized fields, namely "init pipeline",
-                that will initialize the remaining fields from "wrap", and return a "*mut HigherOrderIterator"
+                that will initialize the remaining fields from "wrap", and return a "*mut HigherOrder"
                 for the pipeline.
         */
         pub let HigherOrder = struct {
@@ -188,66 +187,61 @@ pub let Iterator = fn (T: type) -> type {
 
             pub let Trait = fn (Iter: type) -> *fn type -> type {
                 _ = Iterator(Of)::Trait(Iter);
-                let Over = ExtractOver(Iter);
+                let Over = Extract(Iter, @Over);
 
-                let OverOf = ExtractOf(Over);
+                let OverOf = Extract(Over, @Of);
                 _ = Iterator(OverOf)::Trait(Over);
+
+                let With = Extract(Iter, @With);
 
                 let typeInfo = B::typeInfo(Iter).Struct;
 
-                if !std::DefaultConstructible::Trait(Iter) {
-                    let initpParams = C::concatComptime(
-                        type,
-                        (*mut Iter),
-                        C::mapComptime(
-                            R::FieldInfo,
-                            type,
-                            C::filterComptime(R::FieldInfo, typeInfo.fields, fn (field: R::FieldInfo) -> bool {
-                                return field.valueType != *mut Iter;
-                            }),
-                            fn (field: R::FieldInfo) -> type {
-                                return field.valueType;
-                            },
-                        ),
-                    );
+                if With.len != 0 {
+                    let withParams: [With.len + 1]type = undefined;
+                    withParams[0] = *mut Iter;
+
+                    let i: mut u32, j: mut u32 = (1, 0);
+                    while i < withParams.len and j < typeInfo.fields.len {
+                        defer j = j + 1;
+                        let field = typeInfo.fields[j];
+
+                        // Fields are in declaration order, so using i is safe
+                        if field.name == With[i] {
+                            defer i = i + 1;
+                            withParams[i] = field.valueType;
+                        }
+                    }
 
                     let trait = CT::TraitInfo(
-                        B::typeInfo(Self).Struct.name,
+                        B::typeInfo(Self).Struct.name, (
                         CT::MemberInfo(@Field, (false, "iterator", Over)),
-                        CT::MemberInfo(@Field, (true, "Over", type)),
                         CT::MemberInfo(@Definition, (true, "wrap", *fn Over -> Iter)),
-                        CT::MemberInfo(@Definition, (true, "with", *fn initpParams -> *mut Iter))
-                    );
+                        CT::MemberInfo(@Definition, (true, "with", *fn withParams -> *mut Iter))
+                    ));
 
                     return CT::VerifyTrait(trait, Iter);
                 }
 
                 let trait = CT::TraitInfo(
-                    B::typeInfo(Self).Struct.name,
+                    B::typeInfo(Self).Struct.name, (
                     CT::MemberInfo(@Field, (false, "iterator", Over)),
-                    CT::MemberInfo(@Field, (true, "Over", type)),
                     CT::MemberInfo(@Definition, (true, "wrap", *fn Over -> Iter)),
-                );
+                ));
 
                 return CT::VerifyTrait(trait, Iter);
             };
 
             /*
-                Provides default implementation for "wrap" method
+                Provides default implementation for "wrap" method. Does not initialize
+                any fields. Should be used with "with".
             */
-            pub let Implement = fn (For: type) -> *fn ExtractOver(For) -> std::DefaultConstructible::Trait(For) {
-                let Over = ExtractOver(For);
+            pub let Implement = fn (For: type) -> *fn Extract(For, @Over) -> std::DefaultConstructible::Trait(For) {
+                let Over = Extract(For, @Over);
                 _ = Trait(For)(Over);
 
                 return fn (iterator: Over) -> For {
                     let self: Over = undefined;
-                    
-                    let fields = Slice(R::FieldInfo)(B::typeInfo(Over).Struct.fields);
-                    while mark(@inline) !fields.eos() {
-                        let field = fields.next().unwrap();
-                        B::field(self, field.name) = std::DefaultConstructible::Construct(field.valueType);
-                    }
-
+                    self.iterator = iterator;
                     return self;
                 };
             };
@@ -272,20 +266,52 @@ pub let Iterator = fn (T: type) -> type {
                 return CT::VerifyTrait(trait);
             };
 
+            /*
+                A Terminal shouldn't also be a HigherOrder.
+
+                If a Terminal is a late initialized one, 
+            */
             pub let Terminal = struct {
                 let Self = B::this();
 
                 pub let Trait = fn (Iter: type) -> type {
-                    _ = Iterator(Of)::Trait(Iter);
-                    let Over = ExtractOver(Iter);
+                    let Over = Extract(Iter, @Over);
+                    let With = Extract(Iter, @Terminal);
+
+                    _ = Iterator(Extract(Over, @Of))::Trait(Over);
+
+                    let typeInfo = B::typeInfo(Iter).Struct;
+
+                    if With.len != 0 {
+                        let trait = CT::TraitInfo(
+                            B::typeInfo(Self).Struct.name, (
+                            CT::MemberInfo(@Definition, (true, "terminate", *fn Over -> Iter)),
+                            CT::MemberInfo(@Definition, (true, "with", *fn With -> Of)),
+                        ));
+
+                        return CT::VerifyTrait(trait, Iter);
+                    }
 
                     let trait = CT::TraitInfo(
-                        B::typeInfo(Self).Struct.name,
-                        CT::MemberInfo(@Field, (false, "iterator", Over)),
-                        CT::MemberInfo(@Definition, (true, "terminate", *fn Iter -> Of)),
-                    );
+                        B::typeInfo(Self).Struct.name, (
+                        CT::MemberInfo(@Definition, (true, "terminate", *fn Over -> Of)),
+                    ));
 
                     return CT::VerifyTrait(trait, Iter);
+                };
+
+                pub let Implement = fn (For: type) -> *fn (Extract(For, @Over)) -> For {
+                    let With = Extract(For, @Terminal);
+
+                    if With.len == 0 {
+                        B::compileError("'{any}'::terminate can't be default implemented, because it is a direct terminal.", (For));
+                    }
+
+                    return fn (iterator: Over) -> For {
+                        let self: For = undefined;
+                        self.iterator = iterator;
+                        return self;
+                    };
                 };
             };
 
@@ -295,43 +321,60 @@ pub let Iterator = fn (T: type) -> type {
             ) {
                 return (
                     fn (self: *For, Generator: *fn type -> type)
-                        -> Iterator(ExtractOf(Generator(For)))::HigherOrder::Trait(Generator(For))(For) {
+                        -> Iterator(Extract(Generator(For), @Of))::HigherOrder::Trait(Generator(For)) {
 
                         return Generator(For).wrap(self.*);
                     },
 
-                    fn (self: *For, Generator: *fn type -> type)
-                        -> Iterator(ExtractOf(Generator(For)))
+                    fn (self: *For, Generator: *fn type -> type) ->
+                        if (Extract(Generator(For), @With).len == 0)
+                            Extract(Generator(For), @Of)
+                        else
+                            Generator(For)
+                    {
+                        return Generator(For).terminate(self);
+                    },
                 );
             };
         };
     };
 };
 
-pub let ExtractOver = fn (Iter: type) -> type {
-    let Of = ExtractOf(Iter);
-
-    if !B::hasField(Iter, "Over") {
-        B::compileError("'{any}' does not have the Iterator({any})::HigherOrder field 'Over'.", (
+pub let Extract = fn (Iter: type, What: enum { Of, Over, With, Terminal }) -> switch What {
+    @With -> [][]u8,
+    @Terminal -> []type,
+    else -> type,
+} {
+    if !B::hasField(Iter, B::enumStr(What)) {
+        B::compileError("'{any}' does not have the Iterator({any}){s} field '{s}'.", (
             Iter,
-            Of,
+            if (What == @Of) ""
+            else if (What == @Terminal) "::Pipeline::Terminal"
+            else "::HigherOrder",
+            B::enumStr(What),
         ));
     }
 
-    return Iter.Over;
-};
+    let field = B::field(Iter, B::enumStr(What));
 
-pub let ExtractOf = fn (Iter: type) -> type {
-    if !B::hasField(Iter, "Of") {
-        B::compileError("'{s}' does not have the Iterator field 'Of'.", (
-            B::typeInfo(Iter).name,
+    if B::typeOf(field) != switch What {
+        @With -> [][]u8,
+        @Terminal -> []type,
+        else -> type,
+    } {
+        B::compileError("The signature of field '{s}' of '{any}' does not match Iterator({any}){s}.", (
+            B::enumStr(What),
+            Iter,
+            if (What == @Of) ""
+            else if (What == @Terminal) "::Pipeline::Terminal"
+            else "::HigherOrder",
         ));
     }
 
-    return Iter.Of;
-};
+    return field;
+}
 
-pub let len = fn (Iter: type) -> *fn (Iterator(ExtractOf(Iter))::Trait(I)) -> u32 {
+pub let len = fn (Iter: type) -> *fn (Iterator(Extract(Iter, @Of))::Trait(I)) -> u32 {
     return fn (iterator: Iter) -> u32 {
         let length: mut u32 = 0;
         while !iterator.eos() {
@@ -348,7 +391,9 @@ pub let Map = fn (To: type) -> *fn (type) -> type {
         return struct {
             pub let Of = To;
             pub let Over = Over;
-            pub let From = ExtractOf(Over);
+            pub let With: [][]u8 = ("func");
+
+            let From = Extract(Over, @Of);
 
             let Self = B::this();
             let Iter = Iterator(To);
@@ -375,7 +420,7 @@ pub let Map = fn (To: type) -> *fn (type) -> type {
                 return self.iterator.eos();
             };
 
-            pub let iterator, pipe, wrap = (
+            pub let iterator, pipe, terminate, wrap = (
                 Iter::Interface::Implement(Self),
                 Iter::Pipeline::Implement(Self),
                 Iter::HigherOrder::Implement(Self),
@@ -392,7 +437,8 @@ pub let Map = fn (To: type) -> *fn (type) -> type {
 pub let Filter = fn (Over: type) -> type {
     return struct {
         pub let Over = Over;
-        pub let Of = ExtractOf(Over);
+        pub let Of = Extract(Over, @Of);
+        pub let With: [][]u8 = ("func");
 
         let Self = B::this();
         let Next = std::Option(Of);
@@ -432,7 +478,7 @@ pub let Filter = fn (Over: type) -> type {
             return self.peek().none();
         };
 
-        pub let iterator, pipe, wrap = (
+        pub let iterator, pipe, terminate, wrap = (
             Iterator(Of)::Interface::Implement(Self),
             Iterator(Of)::Pipeline::Implement(Self),
             Iterator(Of)::HigherOrder::Implement(Self),
@@ -453,8 +499,8 @@ pub let Filter = fn (Over: type) -> type {
 pub let Zip = fn (Of: type) -> *fn (type, type) -> type {
     return fn (OverThis: type, OverThat: type) -> type {
         return struct {
-            let OfThis = ExtractOf(OverThis);
-            let OfThat = ExtractOf(OverThat);
+            let OfThis = Extract(OverThis, @Of);
+            let OfThat = Extract(OverThat, @Of);
 
             pub let Of = Of;
 
@@ -483,10 +529,7 @@ pub let Zip = fn (Of: type) -> *fn (type, type) -> type {
                 return self.leftIterator.eos() or self.rightIterator.eos();
             };
 
-            pub let iterator, pipe = (
-                Iterator(Of)::Interface::Implement(Self),
-                Iterator(Of)::Pipeline::Implement(Self),
-            );
+            pub let iterator = Iterator(Of)::Interface::Implement(Self);
         };
     };
 };
@@ -498,49 +541,21 @@ pub let Fold = fn (Of: type) -> *fn (type) -> type {
         return struct {
             pub let Of = Of;
             pub let Over = Over;
-            pub let OverOf = ExtractOf(Over);
+            pub let OverOf = Extract(Over, @Of);
+            pub let Terminal: []type = (*fn (Of, OverOf) -> Of, mut Of);
 
             let Self = B::this();
-            let Next = std::Option(Of);
 
             iterator: mut Iterator(OverOf)::Trait(Over),
-            func: mut *fn (Of, OverOf) -> Of,
-            acc: mut Of,
 
-            pub let next = fn (self: *mut Self) -> Next {
-                return switch self.iterator.next() {
-                    @None -> Next(@None),
-                    @Some -> |n| Next(@Some, self.acc = self.func(self.acc, n)),
-                };
-            };
+            pub let terminate = Iterator(Of)::Pipeline::Implement(Self); 
 
-            pub let peek = fn (self: *mut Self) -> Next {
-                return switch self.iterator.peek() {
-                    @None -> Next(@None),
-                    @Some -> |n| Next(@Some, self.func(self.acc, n)),
-                };
-            };
+            pub let with = fn (self: *mut Self, func: *fn (Of, OverOf) -> Of, acc: mut Of) -> Of {
+                while !self.eos() {
+                    acc = func(acc, self.iterator.next().unwrap());
+                }
 
-            pub let eos = fn (self: *mut Self) -> bool {
-                return self.iterator.eos();
-            };
-
-            pub let interface = Iterator(Of)::Interface::Implement(Self);
-            pub let wrap = Iterator(Of)::HigherOrder::Implement(Self);
-
-            pub let with = fn (self: *mut Self, func: *fn (Of, OverOf) -> Of, acc: Of) -> *mut Self {
-                self.* = Self(
-                    self.iterator,
-                    func,
-                    acc,
-                );
-
-                return self;
-            };
-
-            pub let fold = fn (self: *mut Self) -> Of {
-                while self.next().some() { }
-                return self.acc;
+                return acc;
             };
         };
     };
@@ -548,91 +563,24 @@ pub let Fold = fn (Of: type) -> *fn (type) -> type {
 
 pub let Head = fn (From: type) -> type {
     return struct {
-        pub let Of = ExtractOf(From);
+        pub let Of = std::Option(Extract(From, @Of));
         pub let Over = From;
+        pub let Terminal: []type = ();
 
         let Self = B::this();
-        let Next = std::Option(Of);
 
         iterator: mut Over,
-        head: std::Option(Of),
 
-        pub let next = fn (self: *mut Self) -> Next {
-            return switch self.head {
-                @Some -> self.head,
-                @None -> self.peek(),
-            };
-        };
-
-        pub let peek = fn (self: *mut Self) -> Next {
-            return self.head = switch self.head {
-                @Some -> self.head,
-                @None -> self.iterator.peek(),
-            };
-        };
-
-        pub let eos = fn (_: *mut Self) -> bool {
-            return true;
-        };
-
-        pub let interface, wrap = (
-            Iterator(Of)::Interface::Implement(Self),
-            Iterator(Of)::HigherOrder::Implement(Self),
-        );
-
-        pub let head = fn (self: *Self) -> Of {
-            switch self.peek() {
-                @Some -> |s| return s;
-                @None -> D::assert("Underlying iterator does not contain any elements.", ());
-            }
+        pub let terminate = fn (iterator: Over) -> Of {
+            return iterator.peek();
         };
     };
 };
 
 pub let Tail = fn (From: type) -> type {
     return struct {
-        pub let Of = ExtractOf(From);
+        pub let Of = Extract(From, @Of);
         pub let Over = From;
-
-        let Self = B::this();
-        let Next = std::Option(Of);
-
-        iterator: mut Over,
-        skipped: bool,
-
-        pub let next = fn (self: *mut Self) -> Next {
-            switch self.peek() {
-                @Some -> |n| {
-                    _ = self.iterator.next();
-                    return Next(@Some, n);
-                }
-
-                @None -> return Next(@None);
-            }
-        };
-
-        pub let peek = fn (self: *mut Self) -> Next {
-            if self.eos() {
-                return Next(@None);
-            }
-
-            if self.skipped {
-                return self.iterator.peek();
-            }
-
-            _ = self.iterator.next();
-            self.skipped = true;
-            return self.iterator.peek();
-        };
-
-        pub let eos = fn (_: *mut Self) -> bool {
-            return self.iterator.eos();
-        };
-
-        pub let interface, wrap = (
-            Iterator(Of)::Interface::Implement(Self),
-            Iterator(Of)::HigherOrder::Implement(Self),
-        );
     };
 };
 
