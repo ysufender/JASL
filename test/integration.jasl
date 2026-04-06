@@ -1,41 +1,28 @@
-import std::iterator;
-import std::math;
+import std::iterator as I;
+import std::math as M;
 
-let Err = std::ErrorCode;
-let Main = std::Result(void, Err);
+let Main = std::Result(void, std::ErrorCode);
 
 let main = fn () -> Main {
-    let from = 0.0;
-    let to = 4.0;
+    _ = integrate(fn |x| x * x, 0.0, 4.0, M::Epsilon);
 
-    _ = integrate(
-        fn (x: float) -> float {
-            return x * x;
-        },
-        from,
-        to
-    );
+    return Main(@Ok);
 };
 
 let integrate = fn (
     func: *fn (float) -> float,
     from: float,
     to: float,
+    dx: float,
 ) -> float {
-    let dx = 0.0001;
+    let Interval = I::Range(float);
+    let Graph = I::Map(float);
+    let Integral = I::Map(float);
+    let Sum = I::Sum(float);
 
-    let Map = std::iterator::Map;
-    let Range = std::iterator::Range;
-    let FMap = Map(float, float);
-    let FSum = Sum(float);
-
-    let I = Range(float);
-    let G = FMap(I);
-    let D = FMap(G);
-    let S = FSum(D);
-
-    let x = I.init(from, to, dx);
-    let y = G(x, func); 
-    let a = M(y, fn (y: float) -> float { return y * dx; });
-    return S(a);
+    return I::Range(float)
+        .init(from, to, dx)
+        .pipe(Graph).with(func)
+        .pipe(Integral).with(fn |y| y * dx)
+        .pipe(Sum).sum();
 };

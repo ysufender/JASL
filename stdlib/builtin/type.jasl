@@ -4,7 +4,8 @@ pub let TypeInfo = union(enum) {
     Enum: Enum,
 
     Integer: Integer,
-    Float: void,
+    Bool: bool, // mutability bool
+    Float: bool, // mutability bool
     Void: void,
 
     Pointer: Pointer,

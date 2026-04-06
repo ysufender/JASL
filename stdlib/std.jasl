@@ -18,14 +18,14 @@
         Pair,
         ErrorCode,
         DefaultConstructible,
-        Default,
-        GenericEqual,
+        Equible,
     Description:
         Defines core utilities for error handling, value generation etc.
 */
 
 import builtin as B;
 import std::math as M;
+import std::iterator as I;
 import builtin::type as R;
 import std::comptime as CT;
 import std::collections as C;
@@ -37,37 +37,61 @@ pub let Option = fn (T: type) -> type {
         Some: T,
         None: void,
 
-        pub let some = fn (self: *Self) -> bool {
+        pub let some = fn mark(@inline) (self: *Self) -> bool {
             return switch self {
                 @Some -> true,
                 @None -> false,
             };
         };
 
-        pub let none = fn (self: *Self) -> bool {
+        pub let none = fn mark(@inline) (self: *Self) -> bool {
             return !self.some();
         };
 
-        pub let unwrap = fn (self: *Self) -> T {
-            return self.Some;
+        pub let unwrap = fn mark(@inline) (self: *Self) -> T {
+            return switch self {
+                @Some -> |s| s,
+                @None -> B::unreachable(),
+            };
         };
 
-        pub let orelse = fn (self: *Self, val: T) -> T {
+        pub let orelse = fn mark(@inline) (self: *Self, val: T) -> T {
             return switch self {
-                @Some -> self.Some,
+                @Some -> |s| s,
                 @None -> val,
             };
         };
 
-        pub let orelseWith = fn (self: *Self, val: *fn () -> T) -> T {
+        pub let orelseWith = fn mark(@inline) (self: *Self, val: *fn () -> T) -> T {
             return switch self {
-                @Some -> self.Some,
+                @Some -> |s| s,
                 @None -> val(),
             };
         };
 
-        pub let default = fn () -> Self {
+        pub let default = fn mark(@inline) () -> Self {
             return Self(@None);
+        };
+
+        pub let map = fn mark(@inline) (self: *Self, U: type, mapFn: *fn T -> U) -> Option(U) {
+            return switch self {
+                @Some -> |s| Option(U)(@Some, mapFn(s)),
+                @None -> Option(U)(@None),
+            };
+        };
+
+        pub let andThen = fn mark(@inline) (self: *Self, U: type, next: *fn T -> Option(U)) -> Option(U) {
+            return switch self {
+                @Some -> |s| next(s),
+                @None -> Option(U)(@None),
+            };
+        };
+
+        pub let orElseThen = fn mark(@inline) (self: *Self, next: *fn () -> Option(T)) -> Option(T) {
+            return switch self {
+                @Some -> |s| Option(T)(@Some, s),
+                @None -> next(),
+            };
         };
     };
 };
@@ -79,32 +103,63 @@ pub let Result = fn (T: type, E: type) -> type {
         Ok: T,
         Err: E,
 
-        pub let ok = fn (self: *Self) -> bool {
+        pub let ok = fn mark(@inline) (self: *Self) -> bool {
             return switch self {
                 @Ok -> true,
                 @Err -> false,
             };
         };
 
-        pub let err = fn (self: *Self) -> bool {
+        pub let err = fn mark(@inline) (self: *Self) -> bool {
             return !self.ok();
         };
 
-        pub let unwrap = fn (self: *Self) -> T {
-            return self.Ok;
+        pub let unwrap = fn mark(@inline) (self: *Self) -> T {
+            return switch self {
+                @Ok -> |o| o,
+                @Err -> B::unreachable(),
+            };
         };
 
-        pub let orelse = fn (self: *Self, val: T) -> T {
+        pub let orelse = fn mark(@inline) (self: *Self, val: T) -> T {
             return switch self {
-                @Ok -> self.Ok,
+                @Ok -> |o| o,
                 @Err -> val,
             };
         };
 
-        pub let orelseWith = fn (self: *Self, val: *fn () -> T) -> T {
+        pub let orelseWith = fn mark(@inline) (self: *Self, val: *fn () -> T) -> T {
             return switch self {
-                @Ok -> self.Ok,
+                @Ok -> |o| o,
                 @Err -> val(),
+            };
+        };
+
+        pub let map = fn mark(@inline) (self: *Self, U: type, mapFn: *fn T -> U) -> Result(U, E) {
+            return switch self {
+                @Ok -> |o| Result(U, E)(@Ok, mapFn(o)),
+                @Err -> |e| Result(U, E)(@Err, e),
+            };
+        };
+
+        pub let mapErr = fn mark(@inline) (self: *Self, U: type, mapFn: *fn E -> U) -> Result(T, U) {
+            return switch self {
+                @Ok -> |o| Result(T, U)(@Ok, o),
+                @Err -> |e| Result(T, U)(@Err, mapFn(e)),
+            };
+        };
+
+        pub let andThen = fn mark(@inline) (self: *Self, U: type, next: *fn T -> Result(U, E)) -> Result(U, E) {
+            return switch self {
+                @Ok -> |o| next(o),
+                @Err -> |e| Result(U, E)(@Err, e),
+            };
+        };
+
+        pub let orElseThen = fn mark(@inline) (self: *Self, U: type, next: *fn E -> Result(T, U)) -> Result(T, U) {
+            return switch self {
+                @Ok -> |o| Result(T, U)(@Ok, o),
+                @Err -> |e| next(e),
             };
         };
     };
@@ -117,7 +172,7 @@ pub let Pair = fn (T: type, P: type) -> type {
         pub first: T,
         pub second: P,
 
-        pub let swap = fn (self: *mut Self) -> void {
+        pub let swap = fn mark(@inline) (self: *mut Self) -> void {
             self.* = Self(self.second, self.first);
         };
     };
@@ -128,14 +183,23 @@ pub let ErrorCode = enum {
     Err,
 };
 
+/*
+    Expected from DefaultConstructible:
+        If "T" is a primitive and deterministic type, trait is fulfilled.
+
+        If not, the type must implement a "default" function, which will return
+        a default initialized instance.
+    
+    Following types are nondeterministic:
+        Pointer -> There is no "null pointer", hence all addresses must be valid.
+        Function -> Which is a form of pointer.
+        Noreturn -> It is a no-type type.
+        Type -> It is a comptime type.
+        Any -> It is an unknown type, so it can't be constructed.
+        Union and Enum -> Defaulting to any field may cause unexpected behaviour.
+*/
 pub let DefaultConstructible = struct {
     let Self = B::this();
-
-    let trait = CT::TraitInfo(
-        B::typeInfo(Self).Struct.name, (
-            CT::MemberInfo(@Definition, (true, "default", *fn void -> T)),
-        )
-    );
 
     pub let Trait = fn (T: type) -> type {
         let baseTypeInfo = B::typeInfo(T);
@@ -144,6 +208,12 @@ pub let DefaultConstructible = struct {
         if C::contains(R::TypeInfo::Tag)(tag, (@Integer, @Void, @Float)) {
             return T;
         }
+
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "default", *fn void -> T)),
+            )
+        );
 
         if CT::CheckTrait(trait, T) {
             return T;
@@ -158,14 +228,53 @@ pub let DefaultConstructible = struct {
         let i: u32 = 0;
         while i < typeInfo.fields.len {
             defer i = i + 1;
-            _ = DefaultConstructible(typeInfo.fields[i].valueType);
+            _ = Trait(typeInfo.fields[i].valueType);
         }
 
         return T;
     };
 
-    pub let Default = fn (T: type) -> Trait(T) {
+    pub let Check = fn (T: type) -> type {
+        let baseTypeInfo = B::typeInfo(T);
+        let tag = baseTypeInfo.tag;
+
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "default", *fn void -> T)),
+            )
+        );
+
+        if
+            C::contains(R::TypeInfo::Tag)(tag, (@Integer, @Void, @Float))
+            or CT::CheckTrait(trait, T) {
+            return true;
+        }
+
+        if C::contains(R::TypeInfo::Tag)(tag, (@Pointer, @Function, @Noreturn, @Type, @Any, @Union, @Enum)) {
+            return false;
+        }
+
+        let typeInfo = baseTypeInfo.Struct;
+
+        let i: u32 = 0;
+        while i < typeInfo.fields.len {
+            defer i = i + 1;
+            if !Check(typeInfo.fields[i].valueType) {
+                return false;
+            }
+        }
+
+        return true;
+    };
+
+    pub let Construct = fn (T: type) -> Trait(T) {
         let typeInfo = B::typeInfo(T);
+
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "default", *fn void -> T)),
+            )
+        );
 
         if CT::CheckTrait(trait, T) {
             return T::default();
@@ -178,7 +287,7 @@ pub let DefaultConstructible = struct {
             while i < typeInfo.fields.len {
                 defer i = i + 1;
                 let field = typeInfo.fields[i];
-                B::field(ret, field.name) = Default(field.valueType);
+                B::field(ret, field.name) = Construct(field.valueType);
             }
 
             return ret;
@@ -189,6 +298,35 @@ pub let DefaultConstructible = struct {
             @Int -> 0,
             @Void -> (),
             @Float -> 0.0,
+            @Bool -> false,
+            else -> B::unreachable(),
+        };
+    };
+};
+
+pub let Equible = struct {
+    let Self = B::this();
+
+    pub let Trait = fn (T: type) -> type {
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "equals", *fn (T, T) -> bool)),
+            ),
+        );
+
+        let typeInfo = B::typeInfo(T);
+
+        return switch B::typeInfo(T) {
+            @Integer -> T,
+            @Void -> T,
+            @Float -> T,
+            @Type -> T,
+            @Enum -> T,
+            @Pointer -> B::compileError("Type '{s}' is not default comparable because it can either be a shallow comparison or a deep one.", (T)),
+            @Struct ->
+                if (CT::CheckTrait(trait, T)) T
+                else I::Slice(R::FieldInfo, @Forward) (typeInfo.fields)
+                    .pipe(I::Fold(bool)).with(fn |acc, |)
         };
     };
 };

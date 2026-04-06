@@ -998,10 +998,10 @@ pub const Parser = struct {
 
     fn function(self: *Self) ExpressionResult {
         _ = self.advance();
+        const hints = try self.compilerHint();
 
         switch (self.tokens.items(.type)[self.advance()]) {
             .LParen => {
-                const hints = try self.compilerHint();
                 const paramsStart = self.scratch.items.len;
                 while (!self.check(.RParen)) {
                     self.scratch.append(self.allocator(), try self.variableSignature(false, true)) catch return error.AllocatorFailure;

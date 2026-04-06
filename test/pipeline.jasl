@@ -6,12 +6,14 @@ let Main = std::Result(void, std::ErrorCode);
 let Range = iterator::Range;
 let Filter = iterator::Filter;
 let Sum = iterator::Sum;
+let Fold = iterator::Fold;
 
 let main = fn () -> Main {
     let result = Range(u32)
         .init(0, 150, 1)
-        .pipe(Filter).initp(fn |elem| elem <= 10)
-        .pipe(Sum).sum();
+        .pipe(Filter).with(fn |elem| elem <= 10)
+        .pipe(Fold(u32)).with(fn |acc, elem| acc + elem, 0)
+        .fold();
 
     return Main(@Ok);
 };

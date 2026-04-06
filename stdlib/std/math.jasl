@@ -1,23 +1,30 @@
+/*
+    This file is a part of the JASL Standard Library,
+    and is licensed under MIT License.
+
+    Any user code that imports this module agrees that it
+    will satisfy the specifications stated further.
+
+    DISCLAIMER:
+        The traits and conventions mentioned in this document
+        are to be obeyed, otherwise neither JASL STDLib nor the
+        compiler can guarantee a well defined program.
+
+    Name:
+        std::math
+    Public Symbols:
+        Epsilon,
+        isApprox,
+        abs
+        pow
+    Description:
+        Contains definitions for mathematical operations. For more
+        "theoric" side of the numbers, see std::numeric.
+*/
+
 import builtin as B;
 import std::collections as C;
-
-pub let Integer = fn (T: type) -> bool {
-    return C::contains(type)(T, (u32, i32, i8, u8));
-};
-
-pub let Numeric = fn (T: type) -> bool {
-    return Integer(T) or T == float;
-};
-
-pub let Signed = fn (T: type) -> bool {
-    return
-        if (!Numeric(T)) B::compileError("Expected a numeric type.", ())
-        else C::contains(type)(T, (i32, i8, float));
-};
-
-pub let Unsigned = fn (T: type) -> bool {
-    return !Signed(T);
-};
+import std::numeric as N;
 
 pub let Epsilon = 0.000000119209;
 
@@ -25,17 +32,10 @@ pub let isApprox = fn (lhs: float, rhs: float) -> bool {
     return abs(float)(lhs - rhs) <= Epsilon;
 };
 
-pub let abs = fn (T: type, number: T) -> T {
-    if !Numeric(T) {
-        B::compileError("Expected a numeric type.", ());
-    }
-
-    if !Signed(T) {
-        B::compileError(
-            "Pointless call to abs on unsigned type '{any}'.",
-            (T)
-        );
-    }
-
+pub let abs = fn (T: type, number: N::Signed::Trait(T)) -> N::Numeric::Trait(T) {
     return B::bitSet(number, B::bitSizeOf(T), 0);
+};
+
+pub let pow = fn (base: float, power: float) -> float {
+    // TODO
 };

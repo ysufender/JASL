@@ -29,7 +29,7 @@ pub let findFirst = fn (T: type) -> *fn (T, []T) -> Position {
     };
 };
 
-pub let contains = fn (T: type) -> *fn (T, []T) -> Position {
+pub let contains = fn (T: type) -> *fn (T, []T) -> bool {
     return fn (item: T, slice: []T) -> Position {
         return findFirst(T)(item, slice).found();
     };
@@ -42,12 +42,12 @@ pub let eql = fn (T: type) -> *fn ([]T, []T) -> bool {
         }
 
         while this.len > 0 {
-            if this[0] != other[0] {
+            if this[0] != that[0] {
                 return false;
             }
 
-            this = this.subslice(0, this.len);
-            other = other.subslice(0, other.len);
+            this = this.subslice(1, this.len);
+            that = that.subslice(1, that.len);
         }
 
         return true;
@@ -67,11 +67,13 @@ pub let concatComptime = fn (T: type, items: []T, app: []T) -> []T {
 
     let i: mut u32 = 0;
     while i < items.len {
+        defer i = i + 1;
         ret[i] = items[i];
     }
 
     i = 0;
     while i < app.len {
+        defer i = i + 1;
         ret[i + items.len] = app[i];
     }
 
@@ -93,11 +95,12 @@ pub let filterComptime = fn (T: type, items: []T, pred: *fn T -> bool) -> []T {
     return ret.subslice(0, pass);
 };
 
-pub let mapComptime = fn (T: type, R: type, items: []T, mapfn: *fn T -> R) -> []R {
-    let ret: [items.len]mut T = undefined;
+pub let mapComptime = fn (T: type, R: type, items: []T, mapFn: *fn T -> R) -> []R {
+    let ret: [items.len]mut R = undefined;
 
     let i: mut u32 = 0;
     while i < items.len {
+        defer i = i + 1;
         ret[i] = mapFn(items[i]);
     }
 

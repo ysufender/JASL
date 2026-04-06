@@ -1,36 +1,213 @@
+/*
+    This file is a part of the JASL Standard Library,
+    and is licensed under MIT License.
+
+    Any user code that imports this module agrees that it
+    will satisfy the specifications stated further.
+
+    DISCLAIMER:
+        The traits and conventions mentioned in this document
+        are to be obeyed, otherwise neither JASL STDLib nor the
+        compiler can guarantee a well defined program.
+
+    Name:
+        std::numeric
+    Public Symbols:
+        Integer,
+        Numeric,
+        Signed,
+        Unsigned,
+        Epsilon,
+    Description:
+        Contains definitions for mathematical operations. For more
+        "theoric" side of the numbers, see std::numeric.
+*/
 import builtin as B;
 import std::math as M;
+import std::comptime as CT;
 
-pub let Integer = fn (T: type) -> type {
-    if !M::Integer(T) {
-        B::compileError("Given type does not satisfy the Integer traits.", ());
-    }
+pub let Integer = struct {
+    let Check = fn (T: type) -> bool {
+        return B::typeInfo(T).tag == @Integer;
+    };
+    
+    let Trait = fn (T: type) -> type {
+        if !Check(T) {
+            B::compileError("Given type does not satisfy the Integer traits.", ());
+        }
 
-    return T;
+        return T;
+    };
 };
 
-pub let Numeric = fn (T: type) -> type {
-    if !M::Numeric(T) {
-        B::compileError("Given type does not satisfy the Numeric traits.", ());
-    }
+pub let Numeric = struct {
+    let Check = fn (T: type) -> bool {
+        return Integer::Check(T) or T == float;
+    };
 
-    return T;
+    let Trait = fn (T: type) -> type {
+        if !Check(T) {
+            B::compileError("Given type does not satisfy the Numeric traits.", ());
+        }
+
+        return T;
+    };
 };
 
-pub let Signed = fn (T: type) -> type {
-    if !M::Signed(T) {
-        B::compileError("Given type does not satisfy the Signed traits.", ());
-    }
+pub let Signed = struct {
+    let Check = fn (T: type) -> bool {
+        return switch B::typeInfo(T) {
+            @Integer -> |i| i.signed,
+            @Float -> true,
+            else -> false,
+        };
+    }; 
 
-    return T;
+    let Trait = fn (T: type) -> type {
+        if !Check(T) {
+            B::compileError("Given type does not satisfy the Signed traits.", ());
+        }
+
+        return T;
+    };
 };
 
-pub let Unsigned = fn (T: type) -> type {
-    if !M::Unsigned(T) {
-        B::compileError("Given type does not satisfy the Unsigned traits.", ());
-    }
+pub let Unsigned = struct {
+    let Check = fn (T: type) -> bool {
+        return !Signed::Check(T);
+    }; 
 
-    return T;
+    let Trait = fn (T: type) -> type {
+        if !Check(T) {
+            B::compileError("Given type does not satisfy the Unsigned traits.", ());
+        }
+
+        return T;
+    };
 };
 
-// TODO: Addable, Subtractable etc. traits
+pub let Limits = fn (T: type) -> type {
+    return struct {
+        pub let Max = switch B::typeInfo(Numeric::Check(T)) {
+            @Integer -> |i|
+                if (i.signed) M::pow(2, i.size - 1) - 1
+                else M::pow(2, i.size) - 1,
+            @Float -> 340282350000000000000000000000000000000.0,
+            else -> B::unreachable(),
+        };
+
+        pub let Min = switch B::typeInfo(Numeric(T)) {
+            @Integer -> |i|
+                if (i.signed) -M::pow(2, i.size - 1)
+                else 0,
+            @Float -> -Max(T),
+            else -> B::unreachable(),
+        };
+    };
+};
+
+pub let Addable = struct {
+    let Self = B::this();
+
+    pub let Check = fn (T: type) -> bool {
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "add", *fn (T, T) -> T)),
+            ),
+        );
+
+        return switch B::typeInfo(T) {
+            @Integer -> true,
+            @Float -> true,
+            @Struct -> CT::CheckTrait(trait, T),
+            else -> false,
+        };
+    };
+
+    pub let Trait = fn (T: type) -> type {
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "add", *fn (T, T) -> T)),
+            ),
+        );
+
+        return switch B::typeInfo(T) {
+            @Integer -> T,
+            @Float -> T,
+            @Struct -> CT::VerifyTrait(trait, T),
+            else -> B::compileError("Given type '{any}' is not addable.", (T)),
+        };
+    };
+};
+
+pub let Negatable = struct {
+    let Self = B::this();
+
+    pub let Check = fn (T: type) -> bool {
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "negate", *fn (T) -> T)),
+            ),
+        );
+
+        return switch B::typeInfo(T) {
+            @Integer -> |i| i.signed,
+            @Float -> true,
+            @Struct -> CT::CheckTrait(trait, T),
+            else -> false,
+        };
+    };
+
+    pub let Trait = fn (T: type) -> type {
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "negate", *fn (T) -> T)),
+            ),
+        );
+
+        return switch B::typeInfo(T) {
+            @Integer -> |i|
+                if (i.signed) true
+                else B::compileError("Negation on unsigned integers is not allowed.", ()),
+            @Float -> true,
+            @Struct -> CT::VerifyTrait(trait, T),
+            else -> B::compileError("Given type '{any}' is not negatable.", (T)),
+        };
+    };
+};
+
+pub let Negatable = struct {
+    let Self = B::this();
+
+    pub let Check = fn (T: type) -> bool {
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "negate", *fn (T) -> T)),
+            ),
+        );
+
+        return switch B::typeInfo(T) {
+            @Integer -> |i| i.signed,
+            @Float -> true,
+            @Struct -> CT::CheckTrait(trait, T),
+            else -> false,
+        };
+    };
+
+    pub let Trait = fn (T: type) -> type {
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "negate", *fn (T) -> T)),
+            ),
+        );
+
+        return switch B::typeInfo(T) {
+            @Integer -> |i|
+                if (i.signed) true
+                else B::compileError("Negation on unsigned integers is not allowed.", ()),
+            @Float -> true,
+            @Struct -> CT::VerifyTrait(trait, T),
+            else -> B::compileError("Given type '{any}' is not negatable.", (T)),
+        };
+    };
+};
