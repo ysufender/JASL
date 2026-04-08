@@ -414,7 +414,7 @@ pub const Scanner = struct {
     fn previous(self: *const Self) u8 {
         return
             if (self.current <= 0) 0
-            else self.source[self.current];
+            else self.source[self.current-1];
     }
 
     fn peek(self: *const Self) u8 {

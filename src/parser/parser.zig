@@ -856,10 +856,14 @@ pub const Parser = struct {
         while (self.match(&.{.Cast})) {
             const typeExpr = try self.ifExpression();
 
+            const start: u32 = @intCast(self.extra.items.len);
+            self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+            self.extra.append(self.allocator(), typeExpr) catch return error.AllocatorFailure;
+
             const newExpr = try self.alloc(Expression);
             self.expressionMap.set(newExpr, .{
                 .type = .Cast,
-                .value = typeExpr,
+                .value = start,
             });
 
             expr = newExpr;

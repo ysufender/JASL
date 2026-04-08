@@ -225,11 +225,9 @@ pub let DefaultConstructible = struct {
 
         let typeInfo = baseTypeInfo.Struct;
 
-        let i: u32 = 0;
-        while i < typeInfo.fields.len {
-            defer i = i + 1;
-            _ = Trait(typeInfo.fields[i].valueType);
-        }
+
+        _ = I::Slice(R::TypeInfo)(typeInfo.fields)
+            .terminate(I::Fold(type)).with(fn |_, f| Trait(f.valueType));
 
         return T;
     };
@@ -256,15 +254,8 @@ pub let DefaultConstructible = struct {
 
         let typeInfo = baseTypeInfo.Struct;
 
-        let i: u32 = 0;
-        while i < typeInfo.fields.len {
-            defer i = i + 1;
-            if !Check(typeInfo.fields[i].valueType) {
-                return false;
-            }
-        }
-
-        return true;
+        return I::Slice(R::TypeInfo)(typeInfo.fields)
+            .terminate(I::All).with(fn |f| Check(f.valueType));
     };
 
     pub let Construct = fn (T: type) -> Trait(T) {
@@ -284,7 +275,7 @@ pub let DefaultConstructible = struct {
             let ret: mut T = undefined;
 
             let i: mut u32 = 0;
-            while i < typeInfo.fields.len {
+            while mark(@inline) i < typeInfo.fields.len {
                 defer i = i + 1;
                 let field = typeInfo.fields[i];
                 B::field(ret, field.name) = Construct(field.valueType);

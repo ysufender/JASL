@@ -383,16 +383,8 @@ pub let Extract = fn (Iter: type, What: enum { Of, Over, With, Terminal }) -> sw
     return field;
 };
 
-pub let len = fn (Iter: type) -> *fn (Iterator(Extract(Iter, @Of))::Trait(I)) -> u32 {
-    return fn (iterator: Iter) -> u32 {
-        let length: mut u32 = 0;
-        while !iterator.eos() {
-            length = length + 1;
-            _ = iterator.next();
-        }
-
-        return length;
-    };
+pub let len = fn (Iter: type, iterator: Iterator(Extract(Iter, @Of))::Trait(Iter)) -> u32 {
+    return iterator.terminate(Fold(u32)).with(fn |acc, i| acc + 1);
 };
 
 pub let Map = fn (To: type) -> *fn (type) -> type {
@@ -604,7 +596,7 @@ pub let Fold = fn (Of: type) -> *fn (type) -> type {
     };
 };
 
-pub let Sum = return fn (Over: type) -> type {
+pub let Sum = fn (Over: type) -> type {
     return struct {
         pub let Of = N::Numeric(Extract(Over, @Of));
         pub let Over = Over;

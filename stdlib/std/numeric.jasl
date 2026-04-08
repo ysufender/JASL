@@ -153,7 +153,7 @@ pub let Negatable = struct {
     pub let Check = fn (T: type) -> bool {
         let trait = CT::TraitInfo(
             B::typeInfo(Self).Struct.name, (
-                CT::MemberInfo(@Definition, (true, "negate", *fn (T) -> T)),
+                CT::MemberInfo(@Definition, (true, "neg", *fn (T) -> T)),
             ),
         );
 
@@ -168,7 +168,7 @@ pub let Negatable = struct {
     pub let Trait = fn (T: type) -> type {
         let trait = CT::TraitInfo(
             B::typeInfo(Self).Struct.name, (
-                CT::MemberInfo(@Definition, (true, "negate", *fn (T) -> T)),
+                CT::MemberInfo(@Definition, (true, "neg", *fn (T) -> T)),
             ),
         );
 
@@ -183,9 +183,50 @@ pub let Negatable = struct {
     };
 
     pub let Generic = fn (T: type, n: Trait(T)) -> T {
-        return switch B::typeInfo(n) {
-            @Struct -> n.negate(),
+        return switch B::typeInfo(T) {
+            @Struct -> n.neg(),
             else -> -n,
+        };
+    };
+};
+
+pub let Subtractable = struct {
+    let Self = B::this();
+
+    pub let Check = fn (T: type) -> bool {
+        return Negatable::Check(T) and Addable::Check(T);
+    };
+
+    pub let Trait = fn (T: type) -> type {
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "sub", *fn (T, T) -> T)),
+            ),
+        );
+
+        if CT::CheckTrait(trait, T) {
+            return T;
+        }
+
+        if Check(T) {
+            return T;
+        }
+
+        B::compileError("A subtractable type must either be both negatable and addable, or implement 'sub' method.", ());
+    };
+
+    pub let Generic = fn (T: type, lhs: Trait(T), rhs: Trait(T)) -> T {
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "sub", *fn (T, T) -> T)),
+            ),
+        );
+
+        return switch B::typeInfo(T) {
+            @Struct ->
+                if (CT::CheckTrait(T)) lhs.sub(rhs)
+                else lhs.add(rhs.neg()),
+            else -> lhs - rhs,
         };
     };
 };
