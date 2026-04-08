@@ -504,8 +504,14 @@ pub const Parser = struct {
         const body = try self.statement();
 
         const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-        self.extra.append(self.allocator(), hints.start) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), hints.end) catch return error.AllocatorFailure;
+        if (hints.start == hints.end) {
+            self.extra.append(self.allocator(), 0) catch return error.AllocatorFailure;
+        }
+        else {
+            self.extra.append(self.allocator(), 1) catch return error.AllocatorFailure;
+            self.extra.append(self.allocator(), hints.start) catch return error.AllocatorFailure;
+            self.extra.append(self.allocator(), hints.end) catch return error.AllocatorFailure;
+        }
         self.extra.append(self.allocator(), condition) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), body) catch return error.AllocatorFailure;
         
@@ -700,7 +706,7 @@ pub const Parser = struct {
             else {
                 self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
             }
-            self.scratch.append(self.allocator(), try self.expression()) catch return error.AllocatorFailure;
+            self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
 
             if (!self.match(&.{.Comma})) break;
         }
@@ -1018,8 +1024,14 @@ pub const Parser = struct {
                 const body = try self.statement();
 
                 const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-                self.extra.append(self.allocator(), hints.start) catch return error.AllocatorFailure;
-                self.extra.append(self.allocator(), hints.end) catch return error.AllocatorFailure;
+                if (hints.start == hints.end) {
+                    self.extra.append(self.allocator(), 0) catch return error.AllocatorFailure;
+                }
+                else {
+                    self.extra.append(self.allocator(), 1) catch return error.AllocatorFailure;
+                    self.extra.append(self.allocator(), hints.start) catch return error.AllocatorFailure;
+                    self.extra.append(self.allocator(), hints.end) catch return error.AllocatorFailure;
+                }
                 self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
                 self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
                 self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;

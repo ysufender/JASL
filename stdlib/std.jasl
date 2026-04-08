@@ -322,52 +322,50 @@ pub let Equible = struct {
             @Float -> T,
             @Type -> T,
             @Enum -> T,
-            @Pointer -> B::compileError("Type '{s}' is not default comparable because it can either be a shallow comparison or a deep one.", (T)),
+            @Bool -> T,
+            @Pointer -> B::compileError("Type '{any}' is not default comparable because it can either be a shallow comparison or a deep one.", (T)),
             @Struct ->
                 if (CT::CheckTrait(trait, T)) T
-                else I::Slice(R::FieldInfo, @Forward) (typeInfo.fields)
-                    .pipe(I::Fold(bool)).with(fn |acc, |)
+                else if (
+                    I::Slice(R::FieldInfo)(typeInfo.fields)
+                    .terminate(I::All).with(fn |f| Trait(f.valueType) == f.valueType)
+                ) T
+                else B::unreachable(),
+            @Union ->
+                if (I::Slice(R::FieldInfo)(typeInfo.fields)
+                    .terminate(I::All).with(fn |f| Trait(f.valueType) == f.valueType)
+                ) T
+                else B::unreachable(),
+            else -> B::compileError("Type '{s}' is not default comparable because it is not comparable at all.", (T)),
         };
     };
-};
 
-pub let GenericEqual = fn (T: type, lhs: T, rhs: T) -> bool {
-    let baseTypeInfo = B::typeInfo(T);
-    let tag = baseTypeInfo.tag;
+    pub let Generic = fn (T: type, lhs: Trait(T), rhs: Trait(T)) -> bool {
+        let trait = CT::TraitInfo(
+            B::typeInfo(Self).Struct.name, (
+                CT::MemberInfo(@Definition, (true, "equals", *fn (T, T) -> bool)),
+            ),
+        );
 
-    if C::contains(R::TypeInfo::Tag)(tag, (@Integer, @Void, @Float, @Type, @Enum)) {
-        return lhs == rhs;
-    }
+        let baseTypeInfo = B::typeInfo(T);
+        let tag = baseTypeInfo.tag;
 
-    if tag == @Pointer {
-        B::compileError("Type '{s}' is not default comparable because it can either be a shallow comparison or a deep one.", (T));
-    }
-
-    if C::contains(R::TypeInfo::Tag)(tag, (@Function, @Noreturn, @Any)) {
-        B::compileError("Type '{s}' is not default comparable because it is not comparable at all.", (T));
-    }
-
-    switch baseTypeInfo {
-        @Struct -> |typeInfo| {
-            let i: u32 = 0;
-            while mark(@inline) (i < typeInfo.fields.len) {
-                defer i = i + 1;
-                let field = typeInfo.fields[i];
-
-                if !GenericEqual(field.valueType, B::field(lhs, field.name), B::field(rhs, field.name)) {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        @Union -> |typeInfo| {
-            return
-                if (lhs.tag != rhs.tag) false
-                else GenericEqual(B::typeOf(B::field(lhs, B::enumStr(lhs.tag))), B::field(lhs, B::enumStr(lhs.tag)), B::field(rhs, B::enumStr(rhs.tag)));
-        }
-
-        else -> B::unreachable();
-    }
+        return switch baseTypeInfo {
+            @Integer -> lhs == rhs,
+            @Void -> lhs == rhs,
+            @Float -> lhs == rhs,
+            @Type -> lhs == rhs,
+            @Enum -> lhs == rhs,
+            @Bool -> lhs == rhs,
+            @Struct -> |s|
+                if (CT::CheckTrait(trait, T)) lhs.equals(rhs)
+                else I::Slice(R::FieldInfo)(s.fields)
+                    .terminate(I::All).with(fn |f| Generic(f.valueType, B::field(lhs, f.name), B::field(rhs, f.name))),
+            @Union -> |u|
+                lhs.tag == rhs.tag
+                and
+                Generic(B::typeOf(B::field(lhs, B::enumStr(lhs.tag))), B::field(lhs, B::enumStr(lhs.tag)), B::field(rhs, B::enumStr(rhs.tag))),
+            else -> B::unreachable(),
+        };
+    };
 };

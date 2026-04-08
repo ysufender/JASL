@@ -13,7 +13,7 @@ let main = fn () -> Main {
     let result = Repeat(15)
         .pipe(Series).with(fn |acc, _| (acc.second, acc.first + acc.second), (0, 1))
         .pipe(Select).with(fn |n| n.second)
-        .terminal(Collect);
+        .terminate(Collect);
 
     return Main(@Ok);
 };

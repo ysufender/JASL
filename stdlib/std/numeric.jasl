@@ -138,40 +138,11 @@ pub let Addable = struct {
             else -> B::compileError("Given type '{any}' is not addable.", (T)),
         };
     };
-};
 
-pub let Negatable = struct {
-    let Self = B::this();
-
-    pub let Check = fn (T: type) -> bool {
-        let trait = CT::TraitInfo(
-            B::typeInfo(Self).Struct.name, (
-                CT::MemberInfo(@Definition, (true, "negate", *fn (T) -> T)),
-            ),
-        );
-
+    pub let Generic = fn (T: type, lhs: Trait(T), rhs: Trait(T)) -> T {
         return switch B::typeInfo(T) {
-            @Integer -> |i| i.signed,
-            @Float -> true,
-            @Struct -> CT::CheckTrait(trait, T),
-            else -> false,
-        };
-    };
-
-    pub let Trait = fn (T: type) -> type {
-        let trait = CT::TraitInfo(
-            B::typeInfo(Self).Struct.name, (
-                CT::MemberInfo(@Definition, (true, "negate", *fn (T) -> T)),
-            ),
-        );
-
-        return switch B::typeInfo(T) {
-            @Integer -> |i|
-                if (i.signed) true
-                else B::compileError("Negation on unsigned integers is not allowed.", ()),
-            @Float -> true,
-            @Struct -> CT::VerifyTrait(trait, T),
-            else -> B::compileError("Given type '{any}' is not negatable.", (T)),
+            @Struct -> lhs.add(rhs),
+            else -> lhs + rhs,
         };
     };
 };
@@ -203,11 +174,18 @@ pub let Negatable = struct {
 
         return switch B::typeInfo(T) {
             @Integer -> |i|
-                if (i.signed) true
+                if (i.signed) T
                 else B::compileError("Negation on unsigned integers is not allowed.", ()),
-            @Float -> true,
+            @Float -> T,
             @Struct -> CT::VerifyTrait(trait, T),
             else -> B::compileError("Given type '{any}' is not negatable.", (T)),
+        };
+    };
+
+    pub let Generic = fn (T: type, n: Trait(T)) -> T {
+        return switch B::typeInfo(n) {
+            @Struct -> n.negate(),
+            else -> -n,
         };
     };
 };

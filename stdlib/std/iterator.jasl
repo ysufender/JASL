@@ -19,14 +19,18 @@
         Map,
         Filter,
         Zip,
-        Sum,
+        ZipWith,
+        Fold,
         Range,
         Slice,
         Collect,
+        Loop,
+        Repeat,
+        Tail,
+        Head,
     Description:
-        Defines a comptime Iterator trait and
-        implements two comptime generator functions,
-        Map and Filter using the said trait.
+        Defines a comptime Iterator trait and implements
+        commonly used iterators.
 */
 
 import std;
@@ -163,15 +167,15 @@ pub let Iterator = fn (T: type) -> type {
             *fn (*mut For) -> Self,
         ) {
             return (
-                fn (__: *mut For) -> Next { return Next(@None); },
-                fn (__: *mut For) -> Next { return Next(@None); },
-                fn (__: *mut For) -> bool { return true; },
+                fn (_: *mut For) -> Next { return Next(@None); },
+                fn (_: *mut For) -> Next { return Next(@None); },
+                fn (_: *mut For) -> bool { return true; },
                 Implement(For),
             );
         };
 
         /*
-            Expected:
+            Expected from HigherOrder:
                 To have a field named "iterator", which is the iterator the HigherOrder
                 will wrap over.
 
@@ -214,7 +218,7 @@ pub let Iterator = fn (T: type) -> type {
 
                     let trait = CT::TraitInfo(
                         B::typeInfo(Self).Struct.name, (
-                        CT::MemberInfo(@Field, (false, "iterator", Over)),
+                        CT::MemberInfo(@Field, (false, "iterator", mut Over)),
                         CT::MemberInfo(@Definition, (true, "wrap", *fn Over -> Iter)),
                         CT::MemberInfo(@Definition, (true, "with", *fn withParams -> *mut Iter))
                     ));
@@ -224,7 +228,7 @@ pub let Iterator = fn (T: type) -> type {
 
                 let trait = CT::TraitInfo(
                     B::typeInfo(Self).Struct.name, (
-                    CT::MemberInfo(@Field, (false, "iterator", Over)),
+                    CT::MemberInfo(@Field, (false, "iterator", mut Over)),
                     CT::MemberInfo(@Definition, (true, "wrap", *fn Over -> Iter)),
                 ));
 
@@ -248,7 +252,7 @@ pub let Iterator = fn (T: type) -> type {
         };
 
         /*
-            Expected:
+            Expected from Pipeline:
                 To have a "pipe" method which will accept a Generator, and return
                 the generated instance that wraps Self.
         */
@@ -269,7 +273,12 @@ pub let Iterator = fn (T: type) -> type {
             /*
                 A Terminal shouldn't also be a HigherOrder.
 
-                If a Terminal is a late initialized one, 
+                If a Terminal is a late initialized one (which contains non-empty With def),
+                "terminate" returns the instance, and must be initialized fully with "next".
+                In this case "next" returns the folded value. Otherwise "terminate" both
+                initializes and returns the folded value.
+
+                "with" is not a requirement for early initialized Terminals.
             */
             pub let Terminal = struct {
                 let Self = B::this();
@@ -357,11 +366,11 @@ pub let Extract = fn (Iter: type, What: enum { Of, Over, With, Terminal }) -> sw
 
     let field = B::field(Iter, B::enumStr(What));
 
-    if B::typeOf(field) != switch What {
+    if B::typeOf(field) != (switch What {
         @With -> [][]u8,
         @Terminal -> []type,
         else -> type,
-    } {
+    }) {
         B::compileError("The signature of field '{s}' of '{any}' does not match Iterator({any}){s}.", (
             B::enumStr(What),
             Iter,
@@ -372,7 +381,7 @@ pub let Extract = fn (Iter: type, What: enum { Of, Over, With, Terminal }) -> sw
     }
 
     return field;
-}
+};
 
 pub let len = fn (Iter: type) -> *fn (Iterator(Extract(Iter, @Of))::Trait(I)) -> u32 {
     return fn (iterator: Iter) -> u32 {
@@ -491,6 +500,40 @@ pub let Filter = fn (Over: type) -> type {
     };
 };
 
+pub let Take = fn (Over: type) -> type {
+    return struct {
+        pub let Over = Over;
+        pub let Of = Extract(Over, @Of);
+        pub let With: [][]u8 = ("N");
+
+        let Self = B::this();
+        let Next = std::Option(Of);
+
+        iterator: mut Iterator(Of)::Trait(Over),
+        func: mut u32,
+
+        pub let next = fn (self: *mut Self) -> Next {
+        };
+
+        pub let peek = fn (self: *mut Self) -> Next {
+        };
+ 
+        pub let eos = fn (self: *mut Self) -> bool {
+        };
+
+        pub let iterator, pipe, terminate, wrap = (
+            Iterator(Of)::Interface::Implement(Self),
+            Iterator(Of)::Pipeline::Implement(Self),
+            Iterator(Of)::HigherOrder::Implement(Self),
+        );
+
+        pub let with = fn (self: *mut Self, func: *fn (Of) -> bool) -> *mut Self {
+            self.func = func;
+            return self;
+        };
+    };
+};
+
 /*
     Zip yields a sequence of length min(len(leftIterator), len(rightIterator)),
     reaching eos as soon as one of the iterators reach eos.
@@ -561,18 +604,88 @@ pub let Fold = fn (Of: type) -> *fn (type) -> type {
     };
 };
 
+pub let Sum = return fn (Over: type) -> type {
+    return struct {
+        pub let Of = N::Numeric(Extract(Over, @Of));
+        pub let Over = Over;
+        pub let Terminal: []type = (*fn (Of, OverOf) -> Of, mut Of);
+
+        let Self = B::this();
+
+        pub let terminate = fn (iterator: Over) -> Of {
+            let res: Of = std::DefaultConstructible::Construct(Of);
+            while !self.eos() {
+                N::Addable::Generic(Of, res, self.iterator.next().unwrap());
+            }
+
+            return res;
+        };
+    };
+};
+
+pub let All = fn (Over: type) -> type {
+    return struct {
+        pub let Of = bool;
+        pub let Over = Over;
+        pub let OverOf = Extract(Over, @Of);
+        pub let Terminal: []type = (*fn OverOf -> Of);
+
+        let Self = B::this();
+
+        iterator: mut Iterator(OverOf)::Trait(Over),
+
+        pub let terminate = Iterator(Of)::Pipeline::Implement(Self); 
+
+        pub let with = fn (self: *mut Self, func: *fn OverOf -> bool) -> Of {
+            while !self.eos() {
+                if !func(self.iterator.next().unwrap()) {
+                    return false;
+                }
+            }
+
+            return true;
+        };
+    };
+};
+
+pub let Any = fn (Over: type) -> type {
+    return struct {
+        pub let Of = bool;
+        pub let Over = Over;
+        pub let OverOf = Extract(Over, @Of);
+        pub let Terminal: []type = (*fn OverOf -> Of);
+
+        let Self = B::this();
+
+        iterator: mut Iterator(OverOf)::Trait(Over),
+
+        pub let terminate = Iterator(Of)::Pipeline::Implement(Self); 
+
+        pub let with = fn (self: *mut Self, func: *fn OverOf -> bool) -> Of {
+            while !self.eos() {
+                if func(self.iterator.next().unwrap()) {
+                    return true;
+                }
+            }
+
+            return false;
+        };
+    };
+};
+
 pub let Head = fn (From: type) -> type {
     return struct {
-        pub let Of = std::Option(Extract(From, @Of));
+        pub let Of = Extract(From, @Of);
         pub let Over = From;
         pub let Terminal: []type = ();
 
         let Self = B::this();
 
-        iterator: mut Over,
-
         pub let terminate = fn (iterator: Over) -> Of {
-            return iterator.peek();
+            return switch iterator.peek() {
+                @Some -> |s| s,
+                @None -> D::assert(false, "Given iterator is empty, it contains no head."),
+            };
         };
     };
 };
@@ -581,6 +694,21 @@ pub let Tail = fn (From: type) -> type {
     return struct {
         pub let Of = Extract(From, @Of);
         pub let Over = From;
+        pub let With: [][]u8 = ();
+
+        let Self = B::this();
+        let Next = std::Option(Of);
+
+        iterator: mut Over,
+
+        pub let next = fn (self: *mut Self) -> Next { return self.iterator.next(); };
+        pub let peek = fn (self: *mut Self) -> Next { return self.iterator.peek(); };
+        pub let eos = fn (self: *mut Self) -> bool { return self.iterator.eos(); };
+
+        pub let wrap = fn (iterator: Over) -> Self {
+            _ = iterator.next();
+            return Self(iterator);
+        };
     };
 };
 
@@ -717,7 +845,7 @@ pub let Loop = struct {
     );
 };
 
-pub let Slice = fn (P: type, Type: enum { Forward, Backward }) -> type {
+pub let Slice = fn (P: type) -> type {
     return struct {
         pub let Of = P;
 
@@ -731,26 +859,14 @@ pub let Slice = fn (P: type, Type: enum { Forward, Backward }) -> type {
                 return Next(@None, ());
             }
 
-            let item = self.items[
-                if (Type == @Forward) 0
-                else self.items.len - 1
-            ];
-
-            self.items = self.items.subslice(
-                if (Type == @Forward) (1, self.items.len)
-                else (0, self.items.len - 1)
-            );
-
-            return Next(@Some, item);
+            defer self.items = self.items.subslice(1, self.items.len);
+            return Next(@Some, self.items[0]);
         };
 
         pub let peek = fn (self: *mut Self) -> Next  {
             return
                 if (self.eos()) Next(@None, ())
-                else Next(@Some, self.items[
-                    if (Type == @Forward) 0
-                    else self.items.len - 1
-                ]);
+                else Next(@Some, self.items[0]);
         };
 
         pub let eos = fn (self: *mut Self) -> bool {
