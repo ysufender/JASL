@@ -1,12 +1,15 @@
 const std = @import("std");
 const common = @import("core/common.zig");
 const perfAllc = @import("util/allocator.zig");
-const dependency = @import("parser/dependency.zig");
 const collections = @import("util/collections.zig");
+const defines = @import("core/defines.zig");
 
-const Lexer = @import("lexer/lexer.zig").Scanner;
-const Parser = @import("parser/parser.zig").Parser;
-const Prepass = @import("parser/prepass.zig").Prepass;
+const Lexer = @import("lexer/lexer.zig");
+const Parser = @import("parser/parser.zig");
+const Prepass = @import("parser/prepass.zig");
+const Dependency = @import("parser/dependency.zig");
+const Resolver = @import("typechecker/resolver.zig");
+const Typechecker = @import("typechecker/typechecker.zig");
 
 pub fn main() !void {
     const allocator = perfAllc.performanceAllocator;
@@ -33,7 +36,7 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
         &context,
         context.settings.inputFile,
     );
-    const tokens = try lexer.scanAll();
+    const tokens = try lexer.lex();
 
     var parser = try Parser.init(
         allocator,
@@ -42,12 +45,18 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     );
     const ast = try parser.parse();
 
-    var prepass = try Prepass.init(&context, ast);
+    var prepass =
+        if (defines.threading) try Prepass.init(&context, ast)
+        else try Prepass.init(&context, ast, allocator);
     const modules = try prepass.prepass(allocator);
 
+    var resolver = try Resolver.init(allocator, &context, modules);
+    const resolved = try resolver.resolve(allocator);
+    _ = resolved;
+
     if (false) {
-        var resolver = dependency.Resolver.init(&context, &modules);
-        const dependenciesList = try resolver.generate(allocator);
+        var depResolver = Dependency.init(&context, &modules);
+        const dependenciesList = try depResolver.generate(allocator);
 
         var iterator = modules.modules.iterator();
         var totalModules: usize = 0;

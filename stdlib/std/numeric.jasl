@@ -88,7 +88,7 @@ pub let Unsigned = struct {
 
 pub let Limits = fn (T: type) -> type {
     return struct {
-        pub let Max = switch B::typeInfo(Numeric::Check(T)) {
+        pub let Max = switch B::typeInfo(Numeric::Trait(T)) {
             @Integer -> |i|
                 if (i.signed) M::pow(2, i.size - 1) - 1
                 else M::pow(2, i.size) - 1,
@@ -96,7 +96,7 @@ pub let Limits = fn (T: type) -> type {
             else -> B::unreachable(),
         };
 
-        pub let Min = switch B::typeInfo(Numeric(T)) {
+        pub let Min = switch B::typeInfo(Numeric::Trait(T)) {
             @Integer -> |i|
                 if (i.signed) -M::pow(2, i.size - 1)
                 else 0,

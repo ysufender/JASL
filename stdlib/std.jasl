@@ -37,57 +37,57 @@ pub let Option = fn (T: type) -> type {
         Some: T,
         None: void,
 
-        pub let some = fn mark(@inline) (self: *Self) -> bool {
+        pub let some = mark(@inline) fn (self: *Self) -> bool {
             return switch self {
                 @Some -> true,
                 @None -> false,
             };
         };
 
-        pub let none = fn mark(@inline) (self: *Self) -> bool {
+        pub let none = mark(@inline) fn (self: *Self) -> bool {
             return !self.some();
         };
 
-        pub let unwrap = fn mark(@inline) (self: *Self) -> T {
+        pub let unwrap = mark(@inline) fn (self: *Self) -> T {
             return switch self {
                 @Some -> |s| s,
                 @None -> B::unreachable(),
             };
         };
 
-        pub let orelse = fn mark(@inline) (self: *Self, val: T) -> T {
+        pub let orelse = mark(@inline) fn (self: *Self, val: T) -> T {
             return switch self {
                 @Some -> |s| s,
                 @None -> val,
             };
         };
 
-        pub let orelseWith = fn mark(@inline) (self: *Self, val: *fn () -> T) -> T {
+        pub let orelseWith = mark(@inline) fn (self: *Self, val: *fn () -> T) -> T {
             return switch self {
                 @Some -> |s| s,
                 @None -> val(),
             };
         };
 
-        pub let default = fn mark(@inline) () -> Self {
+        pub let default = mark(@inline) fn () -> Self {
             return Self(@None);
         };
 
-        pub let map = fn mark(@inline) (self: *Self, U: type, mapFn: *fn T -> U) -> Option(U) {
+        pub let map = mark(@inline) fn (self: *Self, U: type, mapFn: *fn T -> U) -> Option(U) {
             return switch self {
                 @Some -> |s| Option(U)(@Some, mapFn(s)),
                 @None -> Option(U)(@None),
             };
         };
 
-        pub let andThen = fn mark(@inline) (self: *Self, U: type, next: *fn T -> Option(U)) -> Option(U) {
+        pub let andThen = mark(@inline) fn (self: *Self, U: type, next: *fn T -> Option(U)) -> Option(U) {
             return switch self {
                 @Some -> |s| next(s),
                 @None -> Option(U)(@None),
             };
         };
 
-        pub let orElseThen = fn mark(@inline) (self: *Self, next: *fn () -> Option(T)) -> Option(T) {
+        pub let orElseThen = mark(@inline) fn (self: *Self, next: *fn () -> Option(T)) -> Option(T) {
             return switch self {
                 @Some -> |s| Option(T)(@Some, s),
                 @None -> next(),
@@ -103,60 +103,60 @@ pub let Result = fn (T: type, E: type) -> type {
         Ok: T,
         Err: E,
 
-        pub let ok = fn mark(@inline) (self: *Self) -> bool {
+        pub let ok = mark(@inline) fn (self: *Self) -> bool {
             return switch self {
                 @Ok -> true,
                 @Err -> false,
             };
         };
 
-        pub let err = fn mark(@inline) (self: *Self) -> bool {
+        pub let err = mark(@inline) fn (self: *Self) -> bool {
             return !self.ok();
         };
 
-        pub let unwrap = fn mark(@inline) (self: *Self) -> T {
+        pub let unwrap = mark(@inline) fn (self: *Self) -> T {
             return switch self {
                 @Ok -> |o| o,
                 @Err -> B::unreachable(),
             };
         };
 
-        pub let orelse = fn mark(@inline) (self: *Self, val: T) -> T {
+        pub let orelse = mark(@inline) fn (self: *Self, val: T) -> T {
             return switch self {
                 @Ok -> |o| o,
                 @Err -> val,
             };
         };
 
-        pub let orelseWith = fn mark(@inline) (self: *Self, val: *fn () -> T) -> T {
+        pub let orelseWith = mark(@inline) fn (self: *Self, val: *fn () -> T) -> T {
             return switch self {
                 @Ok -> |o| o,
                 @Err -> val(),
             };
         };
 
-        pub let map = fn mark(@inline) (self: *Self, U: type, mapFn: *fn T -> U) -> Result(U, E) {
+        pub let map = mark(@inline) fn (self: *Self, U: type, mapFn: *fn T -> U) -> Result(U, E) {
             return switch self {
                 @Ok -> |o| Result(U, E)(@Ok, mapFn(o)),
                 @Err -> |e| Result(U, E)(@Err, e),
             };
         };
 
-        pub let mapErr = fn mark(@inline) (self: *Self, U: type, mapFn: *fn E -> U) -> Result(T, U) {
+        pub let mapErr = mark(@inline) fn (self: *Self, U: type, mapFn: *fn E -> U) -> Result(T, U) {
             return switch self {
                 @Ok -> |o| Result(T, U)(@Ok, o),
                 @Err -> |e| Result(T, U)(@Err, mapFn(e)),
             };
         };
 
-        pub let andThen = fn mark(@inline) (self: *Self, U: type, next: *fn T -> Result(U, E)) -> Result(U, E) {
+        pub let andThen = mark(@inline) fn (self: *Self, U: type, next: *fn T -> Result(U, E)) -> Result(U, E) {
             return switch self {
                 @Ok -> |o| next(o),
                 @Err -> |e| Result(U, E)(@Err, e),
             };
         };
 
-        pub let orElseThen = fn mark(@inline) (self: *Self, U: type, next: *fn E -> Result(T, U)) -> Result(T, U) {
+        pub let orElseThen = mark(@inline) fn (self: *Self, U: type, next: *fn E -> Result(T, U)) -> Result(T, U) {
             return switch self {
                 @Ok -> |o| Result(T, U)(@Ok, o),
                 @Err -> |e| next(e),
@@ -172,7 +172,7 @@ pub let Pair = fn (T: type, P: type) -> type {
         pub first: T,
         pub second: P,
 
-        pub let swap = fn mark(@inline) (self: *mut Self) -> void {
+        pub let swap = mark(@inline) fn (self: *mut Self) -> void {
             self.* = Self(self.second, self.first);
         };
     };
@@ -275,7 +275,7 @@ pub let DefaultConstructible = struct {
             let ret: mut T = undefined;
 
             let i: mut u32 = 0;
-            while mark(@inline) i < typeInfo.fields.len {
+            mark(@inline) while i < typeInfo.fields.len {
                 defer i = i + 1;
                 let field = typeInfo.fields[i];
                 B::field(ret, field.name) = Construct(field.valueType);

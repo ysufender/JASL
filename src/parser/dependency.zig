@@ -15,8 +15,6 @@ const LevelList = []const Level;
 /// should be handled in typechecking by waiting for dependencies
 /// to be handle e.g. marking unknowns as waiting/resolved etc..
 pub const Graph = struct {
-    const Self = @This();
-
     pub const Node = struct {
         name: []const u8,
         depends: []const defines.Offset,
@@ -120,75 +118,73 @@ pub const Graph = struct {
 
     nodes: []Node,
 
-    pub fn init(allocator: std.mem.Allocator, size: u32) Error!Self {
+    pub fn init(allocator: std.mem.Allocator, size: u32) Error!Graph {
         return .{
             .nodes = allocator.alloc(Node, size) catch return error.AllocatorFailure,
         };
     }
 
-    pub fn iterator(self: *const Self, allocator: std.mem.Allocator) Error!collections.Iterator(Iterator, Node) {
+    pub fn iterator(self: *const Graph, allocator: std.mem.Allocator) Error!collections.Iterator(Iterator, Node) {
         return .init(self.nodes, allocator);
     }
 };
 
-pub const Resolver = struct {
-    const Self = @This();
+const Self = @This();
 
-    modules: *const ModuleList,
-    context: *Context,
-    arena: std.heap.ArenaAllocator,
-    resolved: std.StringHashMapUnmanaged(defines.Offset),
-    lock: defines.Lock,
+modules: *const ModuleList,
+context: *Context,
+arena: std.heap.ArenaAllocator,
+resolved: std.StringHashMapUnmanaged(defines.Offset),
+lock: defines.Lock,
 
-    pub fn init(context: *Context, modules: *const ModuleList) Self {
-        return .{
-            .context = context,
-            .modules = modules,
-            .arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator),
-            .resolved = .empty,
-            .lock = .{},
-        };
+pub fn init(context: *Context, modules: *const ModuleList) Self {
+    return .{
+        .context = context,
+        .modules = modules,
+        .arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator),
+        .resolved = .empty,
+        .lock = .{},
+    };
+}
+
+pub fn generate(self: *Self, owner: std.mem.Allocator) Error!Graph {
+    defer self.arena.deinit();
+
+    const allocator = self.arena.allocator();
+
+    self.resolved.ensureTotalCapacity(allocator, self.modules.modules.len) catch return error.AllocatorFailure;
+
+    var graph = try Graph.init(allocator, self.modules.modules.len);
+
+    for (0..self.modules.modules.len) |i| {
+        _ = try self.generateNode(@intCast(i), &graph);
     }
 
-    pub fn generate(self: *Self, owner: std.mem.Allocator) Error!Graph {
-        defer self.arena.deinit();
+    return collections.deepCopy(graph, owner);
+}
 
-        const allocator = self.arena.allocator();
+fn generateNode(self: *Self, moduleIndex: u32, graph: *Graph) Error!u32 {
+    const allocator = self.arena.allocator();
 
-        self.resolved.ensureTotalCapacity(allocator, self.modules.modules.len) catch return error.AllocatorFailure;
+    const name = self.modules.modules.items(.name)[moduleIndex];
 
-        var graph = try Graph.init(allocator, self.modules.modules.len);
-
-        for (0..self.modules.modules.len) |i| {
-            _ = try self.generateNode(@intCast(i), &graph);
-        }
-
-        return collections.deepCopy(graph, owner);
+    if (self.resolved.get(name)) |node| {
+        return node;
     }
 
-    fn generateNode(self: *Self, moduleIndex: u32, graph: *Graph) Error!u32 {
-        const allocator = self.arena.allocator();
+    const dependencies = self.modules.modules.items(.dependencies)[moduleIndex].items;
 
-        const name = self.modules.modules.items(.name)[moduleIndex];
+    var depends = allocator.alloc(defines.Offset, dependencies.len) catch return error.AllocatorFailure;
+    const idx = self.resolved.size;
+    self.resolved.putAssumeCapacityNoClobber(name, idx);
 
-        if (self.resolved.get(name)) |node| {
-            return node;
-        }
-
-        const dependencies = self.modules.modules.items(.dependencies)[moduleIndex].items;
-
-        var depends = allocator.alloc(defines.Offset, dependencies.len) catch return error.AllocatorFailure;
-        const idx = self.resolved.size;
-        self.resolved.putAssumeCapacityNoClobber(name, idx);
-
-        for (dependencies, 0..) |dependency, i| {
-            depends[i] = try self.generateNode(self.modules.ids.get(dependency).?, graph);
-        }
- 
-        graph.nodes[idx] = .{
-            .name = name,
-            .depends = depends,
-        };
-        return idx;
+    for (dependencies, 0..) |dependency, i| {
+        depends[i] = try self.generateNode(self.modules.ids.get(dependency).?, graph);
     }
-};
+
+    graph.nodes[idx] = .{
+        .name = name,
+        .depends = depends,
+    };
+    return idx;
+}

@@ -52,4 +52,9 @@ pub const SignaturePtr = u32;
 pub const SymbolPtr = u32;
 pub const ModulePtr = u32;
 
+pub const ScopePtr = u32;
+pub const DeclPtr = u32;
+
+pub const TypePtr = u32;
+
 pub const rehashLimit = 512;
