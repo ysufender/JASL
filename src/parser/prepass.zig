@@ -201,86 +201,62 @@ fn prepassImpl(self: *Prepass, ast: Parser.AST, name: []const u8) if (defines.th
 
     //std.debug.print("\nPrepass {s}", .{name});
     //ast.print(self.context);
-    statementLoop: for (ast.statementMask) |stmt| {
-        const statement = ast.statements.get(stmt);
+    var statement: Parser.Statement = undefined;
+    var first = true;
+    var stmt: u32 = 0;
+    statementLoop: while (stmt < ast.statementMask.len) {
+        if (first) {
+            first = false;
+            statement = ast.statements.get(ast.statementMask[stmt]);
+        }
 
-        switch (statement.type) {
+        case: switch (statement.type) {
             .Import => {
                 const module = getModuleName(statement.value, ast, self.context);
-                file.dependencies.append(allocator, module) catch |e| {
+                file.dependencies.append(allocator, module) catch {
                     self.report("Couldn't add dependency {s} to {s}.", .{module, file.name}, file.dataIndex, null);
 
-                    if (defines.threading) {
-                        fail = true;
-                        continue;
-                    }
-                    else {
-                        return e;
-                    }
+                    fail = true;
+                    break :case;
                 };
 
                 const path = getModulePathWithExtension(allocator, statement.value, ast, self.context) catch |err| {
                     self.report("Couldn't get module path for {s}: {s}.", .{module, @errorName(err)}, file.dataIndex, null);
 
-                    if (defines.threading) {
-                        fail = true;
-                        continue;
-                    }
-                    else {
-                        return err;
-                    }
+                    fail = true;
+                    break :case;
                 };
 
                 if (self.context.isProcessed(path)) {
-                    continue;
+                break :case;
                 }
 
-                var lexer = Lexer.init(allocator, self.context, path) catch |e| {
+                var lexer = Lexer.init(allocator, self.context, path) catch {
                     self.report("Couldn't scan module at path {s}.", .{path}, self.context.getFileId(path), null);
 
-                    if (defines.threading) {
-                        fail = true;
-                        continue;
-                    }
-                    else {
-                        return e;
-                    }
+                    fail = true;
+                    break :case;
                 };
 
-                const moduleTokens = lexer.lex() catch |e| {
+                const moduleTokens = lexer.lex() catch {
                     self.report("Couldn't scan module at path {s}.", .{path}, file.dataIndex, null);
 
-                    if (defines.threading) {
-                        fail = true;
-                        continue;
-                    }
-                    else {
-                        return e;
-                    }
+                    fail = true;
+                    break :case;
                 };
 
-                var prs = Parser.init(allocator, self.context, moduleTokens) catch |e| {
+                var prs = Parser.init(allocator, self.context, moduleTokens) catch {
                     self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex, null);
 
-                    if (defines.threading) {
-                        fail = true;
-                        continue;
-                    }
-                    else {
-                        return e;
-                    }
+                    fail = true;
+                    break :case;
                 };
 
-                const imported = prs.parse() catch |e| {
+                const imported = prs.parse() catch {
                     self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex, null);
 
-                    if (defines.threading) {
-                        fail = true;
-                        continue;
-                    }
-                    else {
-                        return e;
-                    }
+                    fail = true;
+                    break :case;
                 };
 
                 if (defines.threading) {
@@ -307,7 +283,7 @@ fn prepassImpl(self: *Prepass, ast: Parser.AST, name: []const u8) if (defines.th
                             sig.name,
                         );
                         fail = true;
-                        continue :statementLoop;
+                        break :case;
                     };
 
                     file.symbolPtrs.put(allocator, sigName, idx) catch {
@@ -318,7 +294,7 @@ fn prepassImpl(self: *Prepass, ast: Parser.AST, name: []const u8) if (defines.th
                             sig.name,
                         );
                         fail = true;
-                        continue :statementLoop;
+                        break :case;
                     };
 
                     file.symbols.set(idx, .{
@@ -328,49 +304,24 @@ fn prepassImpl(self: *Prepass, ast: Parser.AST, name: []const u8) if (defines.th
                     });
                 }
             },
-            .Extern => {
-                const sign = ast.signatures.items(.name)[ast.extra[statement.value + 2]];
-                const signame = tokens.get(sign).lexeme(self.context, file.dataIndex);
-
-                const idx = file.symbols.addOne(allocator) catch {
-                    self.report(
-                        "Couldn't add symbol {s} to module map. System is out of memory.",
-                        .{signame},
-                        file.dataIndex,
-                        sign,
-                    );
-                    fail = true;
-                    continue :statementLoop;
-                };
-
-                file.symbolPtrs.put(allocator, signame, idx) catch {
-                    self.report(
-                        "Couldn't add symbol {s} to module map. System is out of memory.",
-                        .{signame},
-                        file.dataIndex,
-                        sign,
-                    );
-                    fail = true;
-                    continue :statementLoop;
-                };
-
-                file.symbols.set(idx, .{
-                    .public = ast.signatures.items(.public)[ast.extra[statement.value + 2]],
-                    .name = sign,
-                    .value = 0,
-                });
+            .Mark => {
+                statement = ast.statements.get(ast.extra[statement.value + 2]); 
+                continue :statementLoop;
             },
             else => {
                 self.report(
-                    "Only definitions are allowed at top-level.",
-                    .{},
+                    "Only definitions are allowed at top-level. Received: {s}",
+                    .{@tagName(statement.type)},
                     file.dataIndex,
                     null
                 );
                 fail = true;
-                continue :statementLoop;
+                break :case;
             },
         }
+
+        stmt += 1;
+        statement = if (stmt >= ast.statementMask.len) statement else ast.statements.get(ast.statementMask[stmt]);
     }
 
     if (defines.threading) {
@@ -381,6 +332,11 @@ fn prepassImpl(self: *Prepass, ast: Parser.AST, name: []const u8) if (defines.th
 
         self.lock.lock();
         defer self.lock.unlock();
+    }
+    else {
+        if (fail) {
+            return error.MultipleErrors;
+        }
     }
 
     const index = self.modules.modules.addOne(allocator) catch |e| {

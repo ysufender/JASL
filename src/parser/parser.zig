@@ -30,7 +30,7 @@ pub const Expression = struct {
         EnumDefinition, // ok
         UnionDefinition, // ok
         FunctionDefinition, // ok
-        Mark,
+        Mark, // ok
         Lambda, // ok
         Call, // ok
         Conditional, // ok
@@ -63,12 +63,13 @@ pub const Statement = struct {
         While, // ok
         Break, // ok
         Continue, // ok
+        Mark, // ok
         VariableDefinition, // ok
         Discard, // ok
         Import, // ok
         Expression, // ok
         Defer, // ok
-        Extern, // ok
+        // Extern, // ok
     };
 
     type: Type,
@@ -150,7 +151,7 @@ pub const AST = struct {
         for (self.extra[0..@min(16, self.extra.len)]) |extra| {
             std.debug.print("{d} ", .{extra});
         }
-        std.debug.print("\n", .{});
+        std.debug.print("\n\n", .{});
     }
 };
 
@@ -261,7 +262,7 @@ fn statement(self: *Parser) StatementResult {
         .Continue => self.continueStatement(),
         .Pub => switch (self.tokens.items(.type)[self.advance()]) {
             .Let => self.variable(true),
-            .Extern => self.externStatement(true),
+            // .Extern => self.externStatement(true),
             else => {
                 self.report("Expected a variable definition after 'pub' specifier.", .{});
                 return error.InvalidToken;
@@ -275,7 +276,8 @@ fn statement(self: *Parser) StatementResult {
             return error.InvalidToken;
         },
         .Defer => self.deferStatement(),
-        .Extern => self.externStatement(false),
+        // .Extern => self.externStatement(false),
+        .Mark => self.mark(true),
         else => self.expressionStmt(),
     };
 }
@@ -319,23 +321,17 @@ fn deferStatement(self: *Parser) StatementResult {
 fn expressionStmt(self: *Parser) StatementResult {
     self.current -= 1;
 
-    const isMark = self.tokens.items(.type)[self.peek()] == .Mark;
-    const expr =
-        if (isMark) try self.mark(true)
-        else try self.expression();
+    const expr = try self.expression();
 
     switch (self.expressionMap.items(.type)[expr]) {
-        .Assignment, .Call, .Mark => { },
+        .Assignment, .Call => { },
         else => |t| {
             self.report("Only assignment and function calls are allowed as expression statements. Received '{s}'", .{@tagName(t)});
             return error.IllegalSyntax;
         },
     }
 
-
-    if (!isMark) {
-        _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
-    }
+    _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
     const result = try self.alloc(Statement);
     self.statementMap.set(result, .{
@@ -989,11 +985,29 @@ fn primary(self: *Parser) ExpressionResult {
     }
 }
 
-fn mark(self: *Parser, comptime stmt: bool) ExpressionResult {
+fn mark(self: *Parser, comptime stmt: bool) if (stmt) StatementResult else ExpressionResult {
+    self.current -= if (stmt) 1 else 0;
+
     const marks = try self.compilerHint();
     const marked =
         if (stmt) try self.statement()
         else try self.expression();
+
+    if (stmt) switch (self.statementMap.items(.type)[marked]) {
+        // .Extern,
+        .While, .VariableDefinition => {},
+        else  => |t| {
+            self.report("Statement metadata can only be attached to extern, variable definition and while statements. Received '{s}'", .{@tagName(t)});
+            return error.IllegalSyntax;
+        },
+    }
+    else switch (self.expressionMap.items(.type)[marked]) {
+        .StructDefinition, .EnumDefinition, .UnionDefinition, .FunctionDefinition, .Lambda => {},
+        else  => |t| {
+            self.report("Expression metadata can only be attached to type definitions and function/closures. Received '{s}'", .{@tagName(t)});
+            return error.IllegalSyntax;
+        },
+    }
 
     if (marks.start == marks.end) {
         return marked;
@@ -1004,8 +1018,8 @@ fn mark(self: *Parser, comptime stmt: bool) ExpressionResult {
     self.extra.append(self.allocator(), marks.end) catch return error.AllocatorFailure;
     self.extra.append(self.allocator(), marked) catch return error.AllocatorFailure;
 
-    const ptr = try self.alloc(Expression);
-    self.expressionMap.set(ptr, .{
+    const ptr = try self.alloc(if (stmt) Statement else Expression);
+    (if (stmt) self.statementMap else self.expressionMap).set(ptr, .{
         .type = .Mark,
         .value = start,
     });
@@ -1445,7 +1459,8 @@ fn synchronize(self: *Parser) void {
             .Fn, .Let, .Pub,
             .While, .If, .Asm,
             .Continue, .Return, .Import,
-            .Defer, .Extern,
+            .Defer, .Mark,
+            // .Extern,
             .Discard, .Break => return,
             else => {},
         }

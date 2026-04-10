@@ -22,7 +22,6 @@ pub const Scope = struct {
         Block,
         Struct,
         Union,
-        Enum,
         Comptime,
     };
 
@@ -81,7 +80,7 @@ pub fn init(gpa: Allocator, context: *Context, modules: ModuleList) Error!Resolv
     const allocator = arena.allocator();
 
     const scopeCap = (context.counts.statements / 4) + context.counts.modules;
-    const declCap = (context.counts.expressions / 8) + context.counts.topLevel;
+    const declCap = (context.counts.expressions / 8) + context.counts.topLevels;
 
     var scopes = try ScopeList.init(allocator, scopeCap);
     var decls = try DeclarationList.init(allocator, declCap);
@@ -141,7 +140,15 @@ pub fn resolve(self: *Resolver, _: Allocator) Error!ResolutionMap {
     return undefined;
 }
 
-fn resolveModule(_: *Resolver) Error!void {
+fn resolveModule(self: *Resolver) Error!void {
+    const kind = self.scopes.items(.kind)[self.currentScope];
+    if (kind != .Module) {
+        self.report("Unexpected scope of type '{s}', expected a module scope.", .{@tagName(kind)});
+        return error.UnexpectedScope;
+    }
+
+    const ast = self.context.getAST(self.currentScope);
+    _ = ast;
 }
 
 fn look(self: *Resolver, namePtr: []const u8) ?defines.DeclPtr {
@@ -158,4 +165,9 @@ fn look(self: *Resolver, namePtr: []const u8) ?defines.DeclPtr {
         current = self.scopes.items(.parent)[s];
     }
     return null;
+}
+
+fn report(self: *const Resolver, comptime fmt: []const u8, args: anytype) void {
+    _ = self;
+    common.log.err(fmt, args);
 }

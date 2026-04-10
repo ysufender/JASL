@@ -1,6 +1,9 @@
 import std;
 import experimental::borrowchecker as BC;
 
+#(extern)
+pub let test: *fn a -> b = undefined;
+
 let Main = std::Result(void, std::ErrorCode);
 
 let new = BC::new;

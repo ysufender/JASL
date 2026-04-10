@@ -46,4 +46,5 @@ pub const CompilerError = error {
     IndexOutOfBounds,
     MissingPipe,
     MissingSpecs,
+    UnexpectedScope,
 };

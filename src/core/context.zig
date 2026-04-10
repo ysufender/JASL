@@ -16,7 +16,7 @@ const Prepass = @import("../parser/prepass.zig");
 /// a single token list per file.
 /// - Hence file indices are also token
 /// and ast indices.
-const Self = @This();
+const Context = @This();
 
 const FileNameMap = std.ArrayList([]const u8);
 const FileMap = std.ArrayList([]const u8);
@@ -40,7 +40,7 @@ arena: std.heap.ArenaAllocator,
 lock: threading.OnlyIfThreading(defines.Lock),
 
 counts: struct {
-    topLevel: u32 = 0,
+    topLevels: u32 = 0,
     modules: u32 = 0,
     tokens: u32 = 0,
     expressions: u32 = 0,
@@ -50,7 +50,7 @@ counts: struct {
 
 settings: CompilerSettings,
 
-pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Self {
+pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Context {
     var arena = std.heap.ArenaAllocator.init(baseAllocator);
     const allocator = arena.allocator();
 
@@ -76,11 +76,11 @@ pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Self {
     };
 }
 
-pub fn deinit(self: *Self) void {
+pub fn deinit(self: *Context) void {
     self.arena.deinit();
 }
 
-pub fn openRead(self: *Self, file: []const u8) CompilerError!defines.FilePtr {
+pub fn openRead(self: *Context, file: []const u8) CompilerError!defines.FilePtr {
     const path = try self.realpath(file);
 
     {
@@ -136,7 +136,7 @@ pub fn openWrite(file: []const u8) CompilerError!std.fs.File {
     };
 }
 
-pub fn getFile(self: *Self, file: defines.FilePtr) []const u8 {
+pub fn getFile(self: *Context, file: defines.FilePtr) []const u8 {
     if (defines.threading) {
         self.lock.lockShared();
         defer self.lock.unlockShared();
@@ -145,7 +145,7 @@ pub fn getFile(self: *Self, file: defines.FilePtr) []const u8 {
     return self.fileMap.items[file];
 }
 
-pub fn getFileName(self: *Self, file: defines.FilePtr) []const u8 {
+pub fn getFileName(self: *Context, file: defines.FilePtr) []const u8 {
     if (defines.threading) {
         self.lock.lockShared();
         defer self.lock.unlockShared();
@@ -154,7 +154,7 @@ pub fn getFileName(self: *Self, file: defines.FilePtr) []const u8 {
     return self.filenameMap.items[file];
 }
 
-pub fn registerTokens(self: *Self, tokens: Lexer.TokenList.Slice) CompilerError!defines.TokenPtr {
+pub fn registerTokens(self: *Context, tokens: Lexer.TokenList.Slice) CompilerError!defines.TokenPtr {
     if (defines.threading) {
         self.lock.lock();
         defer self.lock.unlock();
@@ -167,7 +167,7 @@ pub fn registerTokens(self: *Self, tokens: Lexer.TokenList.Slice) CompilerError!
     return @intCast(self.tokenMap.items.len - 1);
 }
 
-pub fn getTokens(self: *Self, tokens: defines.TokenPtr) Lexer.TokenList.Slice {
+pub fn getTokens(self: *Context, tokens: defines.TokenPtr) Lexer.TokenList.Slice {
     if (defines.threading) {
         self.lock.lockShared();
         defer self.lock.unlockShared();
@@ -176,7 +176,7 @@ pub fn getTokens(self: *Self, tokens: defines.TokenPtr) Lexer.TokenList.Slice {
     return self.tokenMap.items[tokens];
 }
 
-pub fn registerAST(self: *Self, ast: Parser.AST) CompilerError!defines.ASTPtr {
+pub fn registerAST(self: *Context, ast: Parser.AST) CompilerError!defines.ASTPtr {
     if (defines.threading) {
         self.lock.lock();
         defer self.lock.unlock();
@@ -192,7 +192,7 @@ pub fn registerAST(self: *Self, ast: Parser.AST) CompilerError!defines.ASTPtr {
     return @intCast(self.astMap.items.len - 1);
 }
 
-pub fn getAST(self: *Self, ast: defines.ASTPtr) Parser.AST {
+pub fn getAST(self: *Context, ast: defines.ASTPtr) Parser.AST {
     if (defines.threading) {
         self.lock.lockShared();
         defer self.lock.unlockShared();
@@ -201,16 +201,16 @@ pub fn getAST(self: *Self, ast: defines.ASTPtr) Parser.AST {
     return self.astMap.items[ast];
 }
 
-pub fn registerModule(self: *Self, module: *const Prepass.Module) void {
+pub fn registerModule(self: *Context, module: *const Prepass.Module) void {
     if (defines.threading) {
         self.lock.lock();
         defer self.lock.unlock();
     }
 
-    self.counts.topLevel += module.symbols.len;
+    self.counts.topLevels += module.symbols.len;
 }
 
-pub fn isProcessed(self: *Self, file: []const u8) bool {
+pub fn isProcessed(self: *Context, file: []const u8) bool {
     if (defines.threading) {
         self.lock.lockShared();
         defer self.lock.unlockShared();
@@ -219,7 +219,7 @@ pub fn isProcessed(self: *Self, file: []const u8) bool {
     return self.resolved.contains(file);
 }
 
-pub fn realpath(self: *Self, file: []const u8) CompilerError![]const u8 {
+pub fn realpath(self: *Context, file: []const u8) CompilerError![]const u8 {
     if (defines.threading) {
         self.lock.lock();
         defer self.lock.unlock();
@@ -246,7 +246,7 @@ pub fn realpath(self: *Self, file: []const u8) CompilerError![]const u8 {
     return self.arena.allocator().dupe(u8, path) catch error.AllocatorFailure;
 }
 
-pub fn getFileId(self: *Self, file: []const u8) defines.FilePtr {
+pub fn getFileId(self: *Context, file: []const u8) defines.FilePtr {
     if (defines.threading) {
         self.lock.lockShared();
         defer self.lock.unlockShared();
@@ -255,4 +255,20 @@ pub fn getFileId(self: *Self, file: []const u8) defines.FilePtr {
     return
         if (self.resolved.get(file)) |f| f
         else 0;
+}
+
+pub fn stats(self: *Context) void {
+    log.info("Stats:", .{});
+    log.info("\tTotal Module Count:              {d}", .{self.counts.modules});
+    log.info("\tTotal Top-Level Signature Count: {d}", .{self.counts.topLevels});
+    log.info("\tTotal Tokens:                    {d}", .{self.counts.tokens});
+    log.info("\tTotal Expressions:               {d}", .{self.counts.expressions});
+    log.info("\tTotal Extras:                    {d}", .{self.counts.extras});
+    log.info("", .{});
+
+    log.info("\tProcessed Files:", .{});
+    for (self.filenameMap.items) |file| {
+        log.info("\t\t{s}", .{file});
+    }
+    log.info("", .{});
 }

@@ -21,7 +21,8 @@ pub const TokenType = enum(u8) {
     Import,
     If, Else, While,
     Switch,
-    Return, Defer, Extern,
+    Return, Defer,
+    // Extern,
     Break, Continue,
     Fn, Struct, Let, Enum, Union,
     Asm,
@@ -93,7 +94,7 @@ const keywords = std.StaticStringMap(TokenType).initComptime(&.{
     .{ "fn", .Fn },
     .{ "return", .Return },
     .{ "defer", .Defer },
-    .{ "extern", .Extern },
+    // .{ "extern", .Extern },
     .{ "let", .Let },
     .{ "import", .Import },
     .{ "false", .False },
@@ -108,7 +109,7 @@ const keywords = std.StaticStringMap(TokenType).initComptime(&.{
     .{ "continue", .Continue },
     .{ "switch", .Switch },
     .{ "as", .Cast },
-    .{ "mark", .Mark },
+    .{ "#", .Mark },
     .{ "_", .Discard },
 });
 
@@ -322,15 +323,19 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
             }
         },
         else => |ch| {
-            if (std.ascii.isDigit(ch)) {
-                while (std.ascii.isDigit(self.peek())) {
+            const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_#";
+            const num = comptime "0123456789";
+            const alphanum = alpha ++ num;
+
+            if (std.mem.containsAtLeastScalar(u8, num, 1, ch)) {
+                while (std.mem.containsAtLeastScalar(u8, num, 1, self.peek())) {
                     _ = self.advance();
                 }
 
-                if (self.check('.') and std.ascii.isDigit(self.peekn(1))) {
+                if (self.check('.') and std.mem.containsAtLeastScalar(u8, num, 1, self.peekn(1))) {
                     _ = self.advance();
 
-                    while (std.ascii.isDigit(self.peek())) {
+                    while (std.mem.containsAtLeastScalar(u8, num, 1, self.peek())) {
                         _ = self.advance();
                     }
 
@@ -344,11 +349,7 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
 
                 break :blk self.addToken(.Integer);
             }
-            else if (std.ascii.isAlphabetic(ch) or ch == '_'){
-                const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
-                const num = comptime "0123456789";
-                const alphanum = alpha ++ num;
-
+            else if (std.mem.containsAtLeastScalar(u8, alpha, 1, ch) or ch == '_'){
                 const index =
                     if (std.mem.indexOfNonePos(u8, self.source, self.current, alphanum))
                         |idx| idx 

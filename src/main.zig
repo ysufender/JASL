@@ -54,45 +54,11 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     const resolved = try resolver.resolve(allocator);
     _ = resolved;
 
-    if (false) {
+    if (true) {
         var depResolver = Dependency.init(&context, &modules);
         const dependenciesList = try depResolver.generate(allocator);
 
-        var iterator = modules.modules.iterator();
-        var totalModules: usize = 0;
-        var totalTopLevels: usize = 0;
-        while (iterator.next()) |module| {
-            totalModules += 1;
-            totalTopLevels += module.symbols.len;
-        }
-
-        var totalTokens: usize = 0;
-        for (context.tokenMap.items) |t| {
-            totalTokens += t.len;
-        }
-
-        var totalExpressions: usize = 0;
-        var totalStatements: usize = 0;
-        var totalExtras: usize = 0;
-        for (context.astMap.items) |a| {
-            totalExpressions += a.expressions.len;
-            totalStatements += a.statements.len;
-            totalExtras += a.extra.len;
-        }
-
-        common.log.info("Stats:", .{});
-        common.log.info("\tTotal Module Count:              {d}", .{totalModules});
-        common.log.info("\tTotal Top-Level Signature Count: {d}", .{totalTopLevels});
-        common.log.info("\tTotal Tokens:                    {d}", .{totalTokens});
-        common.log.info("\tTotal Expressions:               {d}", .{totalExpressions});
-        common.log.info("\tTotal Extras:                    {d}", .{totalExtras});
-        common.log.info("", .{});
-
-        common.log.info("\tProcessed Files:", .{});
-        for (context.filenameMap.items) |file| {
-            common.log.info("\t\t{s}", .{file});
-        }
-        common.log.info("", .{});
+        context.stats();
 
         var miterator = modules.modules.iterator();
         while (miterator.next()) |mod| {
