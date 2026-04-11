@@ -218,7 +218,7 @@ pub let Iterator = fn (T: type) -> type {
 
                     let trait = CT::TraitInfo(
                         B::typeInfo(Self).Struct.name, (
-                        CT::MemberInfo(@Field, (false, "iterator", mut Over)),
+                        CT::MemberInfo(@Field, (false, "inner", mut Over)),
                         CT::MemberInfo(@Definition, (true, "wrap", *fn Over -> Iter)),
                         CT::MemberInfo(@Definition, (true, "with", *fn withParams -> *mut Iter))
                     ));
@@ -228,7 +228,7 @@ pub let Iterator = fn (T: type) -> type {
 
                 let trait = CT::TraitInfo(
                     B::typeInfo(Self).Struct.name, (
-                    CT::MemberInfo(@Field, (false, "iterator", mut Over)),
+                    CT::MemberInfo(@Field, (false, "inner", mut Over)),
                     CT::MemberInfo(@Definition, (true, "wrap", *fn Over -> Iter)),
                 ));
 
@@ -400,25 +400,25 @@ pub let Map = fn (To: type) -> *fn (type) -> type {
             let Iter = Iterator(To);
             let Next = std::Option(To);
 
-            iterator: mut Iterator(From)::Trait(Over),
+            inner: mut Iterator(From)::Trait(Over),
             func: mut *fn From -> To,
 
             pub let next = fn (self: *mut Self) -> Next {
-                return switch self.iterator.next() {
+                return switch self.inner.next() {
                     @None -> Next(@None),
                     @Some -> |n| Next(@Some, self.func(n))
                 };
             };
 
             pub let peek = fn (self: *mut Self) -> Next {
-                return switch self.iterator.peek() {
+                return switch self.inner.peek() {
                     @Some -> |item| Next(@Some, self.func(item)),
                     @None -> Next(@None),
                 };
             };
 
             pub let eos = fn (self: *mut Self) -> bool {
-                return self.iterator.eos();
+                return self.inner.eos();
             };
 
             pub let iterator, pipe, terminate, wrap = (
@@ -444,12 +444,12 @@ pub let Filter = fn (Over: type) -> type {
         let Self = B::this();
         let Next = std::Option(Of);
 
-        iterator: mut Iterator(Of)::Trait(Over),
+        inner: mut Iterator(Of)::Trait(Over),
         func: *fn (Of) -> bool,
 
         pub let next = fn (self: *mut Self) -> Next {
             while !self.eos() {
-                let n = self.iterator.next();
+                let n = self.inner.next();
 
                 if self.func(n.unwrap()) {
                     return n;
@@ -460,8 +460,8 @@ pub let Filter = fn (Over: type) -> type {
         };
 
         pub let peek = fn (self: *mut Self) -> Next {
-            while !self.iterator.eos() {
-                let maybeNext = self.iterator.peek();
+            while !self.inner.eos() {
+                let maybeNext = self.inner.peek();
 
                 if
                     maybeNext.some()
@@ -469,7 +469,7 @@ pub let Filter = fn (Over: type) -> type {
                     return maybeNext;
                 }
 
-                _ = self.iterator.next();
+                _ = self.inner.next();
             }
 
             return Next(@None, ());
@@ -501,7 +501,7 @@ pub let Take = fn (Over: type) -> type {
         let Self = B::this();
         let Next = std::Option(Of);
 
-        iterator: mut Iterator(Of)::Trait(Over),
+        inner: mut Iterator(Of)::Trait(Over),
         func: mut u32,
 
         pub let next = fn (self: *mut Self) -> Next {
@@ -581,13 +581,13 @@ pub let Fold = fn (Of: type) -> *fn (type) -> type {
 
             let Self = B::this();
 
-            iterator: mut Iterator(OverOf)::Trait(Over),
+            inner: mut Iterator(OverOf)::Trait(Over),
 
             pub let terminate = Iterator(Of)::Pipeline::Implement(Self); 
 
             pub let with = fn (self: *mut Self, func: *fn (Of, OverOf) -> Of, acc: mut Of) -> Of {
                 while !self.eos() {
-                    acc = func(acc, self.iterator.next().unwrap());
+                    acc = func(acc, self.inner.next().unwrap());
                 }
 
                 return acc;
@@ -607,7 +607,7 @@ pub let Sum = fn (Over: type) -> type {
         pub let terminate = fn (iterator: Over) -> Of {
             let res: Of = std::DefaultConstructible::Construct(Of);
             while !self.eos() {
-                N::Addable::Generic(Of, res, self.iterator.next().unwrap());
+                N::Addable::Generic(Of, res, self.inner.next().unwrap());
             }
 
             return res;
@@ -624,13 +624,13 @@ pub let All = fn (Over: type) -> type {
 
         let Self = B::this();
 
-        iterator: mut Iterator(OverOf)::Trait(Over),
+        inner: mut Iterator(OverOf)::Trait(Over),
 
         pub let terminate = Iterator(Of)::Pipeline::Implement(Self); 
 
         pub let with = fn (self: *mut Self, func: *fn OverOf -> bool) -> Of {
             while !self.eos() {
-                if !func(self.iterator.next().unwrap()) {
+                if !func(self.inner.next().unwrap()) {
                     return false;
                 }
             }
@@ -649,13 +649,13 @@ pub let Any = fn (Over: type) -> type {
 
         let Self = B::this();
 
-        iterator: mut Iterator(OverOf)::Trait(Over),
+        inner: mut Iterator(OverOf)::Trait(Over),
 
         pub let terminate = Iterator(Of)::Pipeline::Implement(Self); 
 
         pub let with = fn (self: *mut Self, func: *fn OverOf -> bool) -> Of {
             while !self.eos() {
-                if func(self.iterator.next().unwrap()) {
+                if func(self.inner.next().unwrap()) {
                     return true;
                 }
             }
@@ -691,11 +691,11 @@ pub let Tail = fn (From: type) -> type {
         let Self = B::this();
         let Next = std::Option(Of);
 
-        iterator: mut Over,
+        inner: mut Over,
 
-        pub let next = fn (self: *mut Self) -> Next { return self.iterator.next(); };
-        pub let peek = fn (self: *mut Self) -> Next { return self.iterator.peek(); };
-        pub let eos = fn (self: *mut Self) -> bool { return self.iterator.eos(); };
+        pub let next = fn (self: *mut Self) -> Next { return self.inner.next(); };
+        pub let peek = fn (self: *mut Self) -> Next { return self.inner.peek(); };
+        pub let eos = fn (self: *mut Self) -> bool { return self.inner.eos(); };
 
         pub let wrap = fn (iterator: Over) -> Self {
             _ = iterator.next();

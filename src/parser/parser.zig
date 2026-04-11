@@ -25,26 +25,26 @@ pub const Expression = struct {
         Literal,
         Indexing, // resolved
         Identifier, // resolved
-        Unary,
-        StructDefinition,
-        EnumDefinition,
-        UnionDefinition,
-        FunctionDefinition,
-        Mark,
-        Lambda,
-        Call,
-        Conditional,
-        Switch,
-        Cast,
-        MutableType,
-        PointerType,
-        SliceType,
-        ArrayType,
-        FunctionType,
-        ValueType,
+        Unary, // resolved
+        StructDefinition, // resolved
+        EnumDefinition, // resolved
+        UnionDefinition, // resolved
+        FunctionDefinition, // resolved
+        Mark, // resolved
+        Lambda, // resolved
+        Call, // resolved
+        Conditional, // resolved
+        Switch, // resolved
+        Cast, // resolved
+        MutableType, // resolved
+        PointerType, // resolved
+        SliceType, // resolved
+        ArrayType, // resolved
+        FunctionType, // resolved
+        ValueType, // resolved
         Scoping,
-        ExpressionList,
-        Dot,
+        ExpressionList, // resolved
+        Dot, // resolved
     };
 
     type: Type,
@@ -197,13 +197,7 @@ pub fn init(base: Allocator, context: *common.CompilerContext, tokensPtr: define
 pub fn parse(self: *Parser) common.CompilerError!defines.ASTPtr {
     defer self.arena.deinit();
 
-    // any type
-    self.expressionMap.appendAssumeCapacity(.{
-        .type = .ValueType,
-        .value = 0,
-    });
-
-    var errCount: defines.OpaquePtr = 0;
+    var errCount: u32 = 0;
     var lastErr: common.CompilerError = undefined;
 
     while (!self.isAtEnd()) {
@@ -403,6 +397,7 @@ fn switchStatement(self: *Parser) StatementResult {
         else {
             self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
         }
+
         self.scratch.append(self.allocator(), try self.statement()) catch return error.AllocatorFailure;
     }
 
@@ -860,20 +855,12 @@ fn postfix(self: *Parser) ExpressionResult {
             expr = newExpr;
         }
         else if (self.match(&.{.LParen})) {
-            const argsStart = self.scratch.items.len;
-            while (!self.check(.RParen)) {
-                self.scratch.append(self.allocator(), try self.expression()) catch return error.AllocatorFailure;
-                if (!self.match(&.{.Comma})) {
-                    break;
-                }
-            }
-            _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' in function call.");
-            const args = try self.commitScratch(argsStart);
+            self.current -= 1;
+            const args = try self.primary();
 
             const start: defines.OpaquePtr = @intCast(self.extra.items.len);
             self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
-            self.extra.append(self.allocator(), args.start) catch return error.AllocatorFailure;
-            self.extra.append(self.allocator(), args.end) catch return error.AllocatorFailure;
+            self.extra.append(self.allocator(), args) catch return error.AllocatorFailure;
 
             const newExpr = try self.alloc(Expression);
             self.expressionMap.set(newExpr, .{
@@ -1087,9 +1074,7 @@ fn structDefinition(self: *Parser) ExpressionResult {
     // Check unionDefinition for details.
     // TODO: Fix this.
     // TODO: Maybe two loops using scratch would be better...
-    // var variablesTmp = std.ArrayList(defines.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
-    // var definitions = std.ArrayList(defines.OpaquePtr).initCapacity(self.allocator(), 5) catch return error.AllocatorFailure;
-    var variablesTmp = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
+    var fieldList = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
     var definitions = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
 
     while (!self.check(.RBrace)) {
@@ -1102,7 +1087,7 @@ fn structDefinition(self: *Parser) ExpressionResult {
                         try definitions.append(try self.variable(true));
                     },
                     .Identifier => {
-                        try variablesTmp.append(try self.variableSignature(true, true));
+                        try fieldList.append(try self.variableSignature(true, true));
                         if (!self.match(&.{.Comma})) break;
                     },
                     else => {
@@ -1117,7 +1102,7 @@ fn structDefinition(self: *Parser) ExpressionResult {
                 try definitions.append(try self.variable(false));
             },
             .Identifier => {
-                try variablesTmp.append(try self.variableSignature(false, true));
+                try fieldList.append(try self.variableSignature(false, true));
                 if (!self.match(&.{.Comma})) break;
             },
             else => {
@@ -1130,12 +1115,12 @@ fn structDefinition(self: *Parser) ExpressionResult {
 
     _ = try self.consume(.RBrace, error.MissingBrace, "Expected enclosing brace after struct definition.");
 
-    const variables = try self.commitFromSlice(variablesTmp.items);
+    const fields = try self.commitFromSlice(fieldList.items);
     const defs = try self.commitFromSlice(definitions.items);
 
     const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-    self.extra.append(self.allocator(), variables.start) catch return error.AllocatorFailure;
-    self.extra.append(self.allocator(), variables.end) catch return error.AllocatorFailure;
+    self.extra.append(self.allocator(), fields.start) catch return error.AllocatorFailure;
+    self.extra.append(self.allocator(), fields.end) catch return error.AllocatorFailure;
     self.extra.append(self.allocator(), defs.start) catch return error.AllocatorFailure;
     self.extra.append(self.allocator(), defs.end) catch return error.AllocatorFailure;
 
@@ -1268,12 +1253,9 @@ fn unionDefinition(self: *Parser) ExpressionResult {
     const start: defines.OpaquePtr = @intCast(self.extra.items.len);
     self.extra.append(self.allocator(), tagged) catch return error.AllocatorFailure;
     if (tagged == 1) {
+        self.extra.append(self.allocator(), if (tag) |_| 1 else 0) catch return error.AllocatorFailure;
         if (tag) |t| {
-            self.extra.append(self.allocator(), 1) catch return error.AllocatorFailure;
             self.extra.append(self.allocator(), t) catch return error.AllocatorFailure;
-        }
-        else {
-            self.extra.append(self.allocator(), 0) catch return error.AllocatorFailure;
         }
     }
     self.extra.append(self.allocator(), variables.start) catch return error.AllocatorFailure;
@@ -1334,23 +1316,11 @@ fn typeExpression(self: *Parser) ExpressionResult {
         },
         .Fn => {
             const args = try self.ifExpression();
-            //_ = try self.consume(.LParen, error.MissingParenthesis, "Expected a type list in function pointer type expression.");
-            //const paramsStart = self.scratch.items.len;
-            //while (!self.check(.RParen)) {
-                //self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
-                //if (!self.match(&.{.Comma})) {
-                    //break;
-                //}
-            //}
-            //_ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis ')' after parameter list.");
-            //const params = try self.commitScratch(paramsStart);
 
             _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
             const returns = try self.ifExpression();
 
             const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-            //self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
-            //self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
             self.extra.append(self.allocator(), args) catch return error.AllocatorFailure;
             self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;
 
@@ -1375,8 +1345,14 @@ fn typeExpression(self: *Parser) ExpressionResult {
         .Enum => return self.enumDefinition(),
         .Union => return self.unionDefinition(),
         .Identifier => {
-            self.current -= 1;
-            return self.primary();
+            const typename = self.previous();
+
+            const expr = try self.alloc(Expression);
+            self.expressionMap.set(expr, .{
+                .type = .ValueType,
+                .value = typename,
+            });
+            return expr;
         },
 
         else => {

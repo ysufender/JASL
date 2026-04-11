@@ -1,6 +1,10 @@
+import builtin as B;
+
 pub let Position = union(enum) {
     NotFound: void,
     Index: u32,
+
+    let Self = B::this();
 
     pub let found = fn (self: Self) -> bool {
         return switch self {

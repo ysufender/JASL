@@ -51,7 +51,7 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     var resolver = try Resolver.init(allocator, &context, &modules);
     const resolved = try resolver.resolve(allocator);
 
-    if (true) {
+    if (false) {
         context.stats();
 
         var miterator = modules.modules.iterator();
