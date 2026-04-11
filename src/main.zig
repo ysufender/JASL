@@ -45,33 +45,35 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     );
     const ast = try parser.parse();
 
-    var prepass =
-        if (defines.threading) try Prepass.init(&context, ast)
-        else try Prepass.init(&context, ast, allocator);
+    var prepass = try Prepass.init(&context, ast, allocator);
     const modules = try prepass.prepass(allocator);
 
-    var resolver = try Resolver.init(allocator, &context, modules);
+    var resolver = try Resolver.init(allocator, &context, &modules);
     const resolved = try resolver.resolve(allocator);
-    _ = resolved;
 
     if (true) {
-        var depResolver = Dependency.init(&context, &modules);
-        const dependenciesList = try depResolver.generate(allocator);
-
         context.stats();
 
         var miterator = modules.modules.iterator();
+        _ = miterator.next();
         while (miterator.next()) |mod| {
             mod.print(&context);
         }
 
-        common.log.info("Dependency Graph:", .{});
-        var diterator = try dependenciesList.iterator(allocator);
-        while (diterator.next()) |dep| {
-            common.log.info("\t{s}:", .{dep.name});
-            for (dep.depends) |depDep| {
-                common.log.info("\t\tDepends on {s} {d}", .{dependenciesList.nodes[depDep].name, depDep});
-            }
+        common.log.info("", .{});
+        common.log.info("Resolution Map:", .{});
+        var iterator = resolved.declarations.iterator();
+        while (iterator.next()) |decl| {
+            const dataIndex = modules.modules.items(.dataIndex)[resolved.scopes.items(.module)[decl.scope]];
+            const module = modules.modules.items(.name)[resolved.scopes.items(.module)[decl.scope]];
+            common.log.info("\tFrom {s} decl {s}{s} = {d}:", .{
+                module,
+                if (decl.public) "pub " else "",
+                context.getTokens(dataIndex)
+                    .get(decl.token)
+                    .lexeme(&context, dataIndex),
+                decl.node,
+            });
         }
     }
 }

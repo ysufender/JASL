@@ -20,31 +20,31 @@ pub const StatementMap = collections.MultiArrayList(Statement);
 // performant with collections.MultiArrayList(T)
 pub const Expression = struct {
     pub const Type = enum {
-        Assignment, // ok
-        Binary, // ok
-        Literal, // ok
-        Indexing, // ok
-        Identifier, // ok
-        Unary, // ok
-        StructDefinition, // ok
-        EnumDefinition, // ok
-        UnionDefinition, // ok
-        FunctionDefinition, // ok
-        Mark, // ok
-        Lambda, // ok
-        Call, // ok
-        Conditional, // ok
-        Switch, // ok
-        Cast, // ok
-        MutableType, // ok
-        PointerType, // ok
-        SliceType, // ok
-        ArrayType, // ok
-        FunctionType, // ok
-        ValueType, // ok
-        Scoping, // ok
-        ExpressionList, // ok
-        Dot, // ok
+        Assignment, // resolved
+        Binary, // resolved
+        Literal,
+        Indexing, // resolved
+        Identifier, // resolved
+        Unary,
+        StructDefinition,
+        EnumDefinition,
+        UnionDefinition,
+        FunctionDefinition,
+        Mark,
+        Lambda,
+        Call,
+        Conditional,
+        Switch,
+        Cast,
+        MutableType,
+        PointerType,
+        SliceType,
+        ArrayType,
+        FunctionType,
+        ValueType,
+        Scoping,
+        ExpressionList,
+        Dot,
     };
 
     type: Type,
@@ -55,21 +55,20 @@ pub const Expression = struct {
 // performant with collections.MultiArrayList(T)
 pub const Statement = struct {
     pub const Type = enum {
-        Block, // ok
-        InlineAssembly, // ok
-        Return, // ok
-        Conditional, // ok
-        Switch,
-        While, // ok
-        Break, // ok
-        Continue, // ok
-        Mark, // ok
-        VariableDefinition, // ok
-        Discard, // ok
-        Import, // ok
-        Expression, // ok
-        Defer, // ok
-        // Extern, // ok
+        Block, // resolved
+        InlineAssembly,
+        Return, // resolved
+        Conditional, // resolved
+        Switch, // resolved
+        While, // resolved
+        Break,
+        Continue,
+        Mark, // resolved
+        VariableDefinition, // resolved
+        Discard, // resolved
+        Import, // resolved
+        Expression, // resolved
+        Defer, // resolved
     };
 
     type: Type,
@@ -262,7 +261,6 @@ fn statement(self: *Parser) StatementResult {
         .Continue => self.continueStatement(),
         .Pub => switch (self.tokens.items(.type)[self.advance()]) {
             .Let => self.variable(true),
-            // .Extern => self.externStatement(true),
             else => {
                 self.report("Expected a variable definition after 'pub' specifier.", .{});
                 return error.InvalidToken;
@@ -276,30 +274,16 @@ fn statement(self: *Parser) StatementResult {
             return error.InvalidToken;
         },
         .Defer => self.deferStatement(),
-        // .Extern => self.externStatement(false),
         .Mark => self.mark(true),
         else => self.expressionStmt(),
     };
 }
 
-fn externStatement(self: *Parser, public: bool) StatementResult {
-    const sign = try self.variableSignature(public, true);
-    _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
-
-    const result = try self.alloc(Statement);
-    self.statementMap.set(result, .{
-        .type = .Extern,
-        .value = sign,
-    });
-
-    return result;
-}
-
 /// Defer only allows function calls and assignments, for now.
 fn deferStatement(self: *Parser) StatementResult {
-    const call = try self.expression();
+    const deferred = try self.expression();
 
-    switch (self.expressionMap.items(.type)[call]) {
+    switch (self.expressionMap.items(.type)[deferred]) {
         .Call, .Assignment => { },
         else => {
             self.report("Only function calls and variable assignments are allowed in defer statements.", .{});
@@ -312,7 +296,7 @@ fn deferStatement(self: *Parser) StatementResult {
     const result = try self.alloc(Statement);
     self.statementMap.set(result, .{
         .type = .Defer,
-        .value = call,
+        .value = deferred,
     });
 
     return result;
@@ -365,7 +349,7 @@ fn block(self: *Parser) StatementResult {
 }
 
 fn inlineAssembly(self: *Parser) StatementResult {
-    const asmly = (try self.consume(.String, error.MissingBrace, "Expected block after 'asm' statement."));
+    const asmly = (try self.consume(.String, error.MissingBrace, "Expected string literal after 'asm' statement."));
 
     const result = try self.alloc(Statement);
     self.statementMap.set(result, .{
@@ -381,7 +365,7 @@ fn inlineAssembly(self: *Parser) StatementResult {
 fn returnStatement(self: *Parser) StatementResult {
     const expr = try self.expression();
     _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
-    
+
     const result = try self.alloc(Statement);
     self.statementMap.set(result, .{
         .type = .Return,
@@ -423,6 +407,8 @@ fn switchStatement(self: *Parser) StatementResult {
     }
 
     _ = try self.consume(.RBrace, error.MissingBrace, "Missing enclosing brace '}' after switch statement.");
+
+    // (<expr>, <stmt>) pairs
     const cases = try self.commitScratch(scratchStart);
 
     const start: defines.OpaquePtr = @intCast(self.extra.items.len);
@@ -545,7 +531,6 @@ fn variable(self: *Parser, public: bool) StatementResult {
     self.extra.append(self.allocator(), signatures.end) catch return error.AllocatorFailure;
     self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
 
-
     const result = try self.alloc(Statement);
     self.statementMap.set(result, .{
         .type = .VariableDefinition,
@@ -571,6 +556,15 @@ fn discard(self: *Parser) StatementResult {
 
 fn import(self: *Parser) StatementResult {
     const module = try self.postfix();
+
+    switch (self.expressionMap.items(.type)[module]) {
+        .Identifier, .Scoping => {},
+        else => |t| {
+            self.report("Expected a module name, received '{s}'", .{@tagName(t)});
+            return error.MissingModuleName;
+        },
+    }
+
     const maybeAlias =
         if (self.match(&.{.Cast})) self.advance()
         else null;
@@ -578,12 +572,9 @@ fn import(self: *Parser) StatementResult {
 
     const start: u32 = @intCast(self.extra.items.len);
     self.extra.append(self.allocator(), module) catch return error.AllocatorFailure;
+    self.extra.append(self.allocator(), if (maybeAlias) |_| 1 else 0) catch return error.AllocatorFailure;
     if (maybeAlias) |alias| {
-        self.extra.append(self.allocator(), 1) catch return error.AllocatorFailure;
         self.extra.append(self.allocator(), alias) catch return error.AllocatorFailure;
-    }
-    else {
-        self.extra.append(self.allocator(), 0) catch return error.AllocatorFailure;
     }
 
     const result = try self.alloc(Statement);
@@ -994,7 +985,6 @@ fn mark(self: *Parser, comptime stmt: bool) if (stmt) StatementResult else Expre
         else try self.expression();
 
     if (stmt) switch (self.statementMap.items(.type)[marked]) {
-        // .Extern,
         .While, .VariableDefinition => {},
         else  => |t| {
             self.report("Statement metadata can only be attached to extern, variable definition and while statements. Received '{s}'", .{@tagName(t)});
@@ -1446,21 +1436,14 @@ fn commonBinary(self: *Parser, expr: defines.ExpressionPtr, comptime next: anyty
 }
 
 fn synchronize(self: *Parser) void {
-    //defer _ = self.advance();
-
     self.current -= 1;
 
     while (!self.isAtEnd()) {
-        //if (self.tokens.items(.type)[self.previous()] == .Semicolon) {
-        //    return;
-        //}
-
         switch (self.tokens.items(.type)[self.peek()]) {
             .Fn, .Let, .Pub,
             .While, .If, .Asm,
             .Continue, .Return, .Import,
             .Defer, .Mark,
-            // .Extern,
             .Discard, .Break => return,
             else => {},
         }

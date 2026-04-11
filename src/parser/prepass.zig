@@ -17,6 +17,7 @@ pub const Module = struct {
         public: bool,
         name: defines.TokenPtr,
         value: defines.ExpressionPtr,
+        index: u32,
     };
 
     /// namespace of the module
@@ -67,6 +68,10 @@ pub const ModuleList = struct {
         };
     }
 
+    pub fn get(self: *const ModuleList, name: []const u8) defines.ModulePtr {
+        return self.ids.get(name).?;
+    }
+
     pub fn dupe(self: *const ModuleList, allocator: std.mem.Allocator) Error!ModuleList {
         return .{
             .modules = try collections.deepCopy(self.modules.mutableSlice(), allocator),
@@ -95,35 +100,29 @@ wg: threading.OnlyIfThreading(defines.WaitGroup) = undefined,
 pool: threading.OnlyIfThreading(defines.ThreadPool) = undefined,
 
 /// Uses multithreaded allocator under the hood
-pub const init =
-    if (defines.threading) struct {
-        fn init(context: *Context, initial: defines.ASTPtr) Error!Prepass {
-            var arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator);
+pub fn init(context: *Context, initial: defines.ASTPtr, allocator: std.mem.Allocator) Error!Prepass {
+    var arena = std.heap.ArenaAllocator.init(
+        if (defines.threading) std.heap.smp_allocator
+        else allocator
+    );
 
-            return .{
-                .initial = context.getAST(initial),
-                .arena = arena,
-                .context = context,
-                .modules = try ModuleList.init(arena.allocator(), 128),
-                .lock = .{},
-                .wg = .{},
-                .hadErr = .init(false),
-            };
+    return
+        if (defines.threading) .{
+            .initial = context.getAST(initial),
+            .arena = arena,
+            .context = context,
+            .modules = try ModuleList.init(arena.allocator(), 128),
+            .lock = .{},
+            .wg = .{},
+            .hadErr = .init(false),
         }
-    }.init
-    else struct {
-        fn init(context: *Context, initial: defines.ASTPtr, allocator: std.mem.Allocator) Error!Prepass {
-            var arena = std.heap.ArenaAllocator.init(allocator);
-
-            return .{
-                .initial = context.getAST(initial),
-                .arena = arena,
-                .context = context,
-                .modules = try ModuleList.init(arena.allocator(), 128),
-            };
-        }
-    }.init;
-
+        else .{
+            .initial = context.getAST(initial),
+            .arena = arena,
+            .context = context,
+            .modules = try ModuleList.init(arena.allocator(), 128),
+        };
+}
 
 /// Returns a module list slice containing all modules. Releases the ownership.
 pub fn prepass(self: *Prepass, allocator: std.mem.Allocator) Error!ModuleList {
@@ -138,6 +137,17 @@ pub fn prepass(self: *Prepass, allocator: std.mem.Allocator) Error!ModuleList {
     }
 
     defer self.arena.deinit();
+
+    const bname: []const u8 = "builtin";
+    const builtin = try self.modules.modules.addOne(allocator);
+    self.modules.modules.set(builtin, .{
+        .name = try collections.deepCopy(bname, allocator), 
+        .dataIndex = 0,
+        .dependencies = .empty,
+        .symbolPtrs = .empty,
+        .symbols = try .init(allocator, 0),
+    });
+    self.modules.ids.putAssumeCapacityNoClobber(bname, builtin);
 
     if (defines.threading) {
         self.prepassImpl(self.initial, "root");
@@ -154,7 +164,7 @@ pub fn prepass(self: *Prepass, allocator: std.mem.Allocator) Error!ModuleList {
         }
     }
 
-    for (0..self.modules.modules.len) |i| {
+    for (1..self.modules.modules.len) |i| {
         self.modules.modules.items(.dependencies)[i].shrinkAndFree(
             if (defines.threading) self.safeAlloc.allocator() else self.arena.allocator(),
             self.modules.modules.items(.dependencies)[i].items.len
@@ -301,6 +311,7 @@ fn prepassImpl(self: *Prepass, ast: Parser.AST, name: []const u8) if (defines.th
                         .public = sig.public,
                         .name = sig.name,
                         .value = ast.extra[statement.value + 2],
+                        .index = @as(u32, @intCast(ptr)) - sigsStart,
                     });
                 }
             },

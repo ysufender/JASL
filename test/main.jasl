@@ -1,28 +1,29 @@
-import std;
-import experimental::borrowchecker as BC;
-
-#(extern)
-pub let test: *fn a -> b = undefined;
+import std::iterator as I;
+import std::math as M;
 
 let Main = std::Result(void, std::ErrorCode);
 
-let new = BC::new;
-let Value = BC::Value;
-
 let main = fn () -> Main {
-    let someInt = new(u32, 54);
-    someFuncBorrow(someInt.borrow());
-    someFunc(someInt.own());
+    _ = integrate(fn |x| x * x, 0.0, 4.0);
 
     return Main(@Ok);
 };
 
-let someFunc = fn (value: Value(u32)) -> Value(u32) {
-    value.Owned();
-    return new(u32, value + 15);
-};
+let b = cunt;
+let integrate = #(@default(@dx, 0.0001)) fn (
+    func: *fn (float) -> float,
+    from: float,
+    to: float,
+    dx: float,
+) -> float {
+    let Interval = I::Range(float);
+    let Graph = I::Map(float);
+    let Integral = I::Map(float);
+    let Sum = I::Sum;
 
-let someFuncBorrow = fn (value: Value(u32)) -> Value(u32) {
-    value.Borrowed();
-    return new(u32, value + 10);
+    return I::Range(float)
+        .init(from, to, dx)
+        .pipe(Graph).with(func)
+        .pipe(Integral).with(fn |y| y * dx)
+        .terminate(Sum);
 };

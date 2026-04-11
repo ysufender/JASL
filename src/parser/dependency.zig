@@ -156,7 +156,7 @@ pub fn generate(self: *Self, owner: std.mem.Allocator) Error!Graph {
 
     var graph = try Graph.init(allocator, self.modules.modules.len);
 
-    for (0..self.modules.modules.len) |i| {
+    for (1..self.modules.modules.len) |i| {
         _ = try self.generateNode(@intCast(i), &graph);
     }
 

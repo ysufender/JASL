@@ -63,7 +63,7 @@ pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Context {
     var resolved = ResolveMap.empty;
     resolved.ensureTotalCapacity(allocator, 512) catch return error.AllocatorFailure;
 
-    return .{
+    var self = Context{
         .filenameMap = FileNameMap.initCapacity(allocator, 512) catch return error.AllocatorFailure,
         .fileMap = FileMap.initCapacity(allocator, 512) catch return error.AllocatorFailure,
         .tokenMap = TokenMap.initCapacity(allocator, 512) catch return error.AllocatorFailure,
@@ -74,6 +74,22 @@ pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Context {
         .settings = settings,
         .counts = .{},
     };
+
+    // Hardcoded, convert to "stdlib/builtin.jasl"
+    self.filenameMap.appendAssumeCapacity("builtin");
+    self.fileMap.appendAssumeCapacity("// Builtin Module");
+    self.tokenMap.appendAssumeCapacity((try Lexer.TokenList.init(allocator, 0)).slice());
+    self.astMap.appendAssumeCapacity(Parser.AST{
+        .expressions = (try Parser.ExpressionMap.init(allocator, 0)).slice(),
+        .tokens = 0,
+        .extra = &.{},
+        .signatures = (try Parser.VariableSignatureMap.init(allocator, 0)).slice(),
+        .statementMask = &.{},
+        .statements = (try Parser.StatementMap.init(allocator, 0)).slice(),
+    });
+    self.resolved.putAssumeCapacityNoClobber("builtin", 0);
+
+    return self;
 }
 
 pub fn deinit(self: *Context) void {
