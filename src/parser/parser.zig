@@ -552,12 +552,16 @@ fn discard(self: *Parser) StatementResult {
 fn import(self: *Parser) StatementResult {
     const module = try self.postfix();
 
-    switch (self.expressionMap.items(.type)[module]) {
-        .Identifier, .Scoping => {},
-        else => |t| {
-            self.report("Expected a module name, received '{s}'", .{@tagName(t)});
-            return error.MissingModuleName;
-        },
+    var lhs = module;
+    loop: while (true) {
+        switch (self.expressionMap.items(.type)[lhs]) {
+            .Identifier => break :loop,
+            .Scoping => lhs = self.extra.items[self.expressionMap.items(.value)[lhs]],
+            else => |t| {
+                self.report("Expected a module name, received '{s}'", .{@tagName(t)});
+                return error.MissingModuleName;
+            },
+        }
     }
 
     const maybeAlias =

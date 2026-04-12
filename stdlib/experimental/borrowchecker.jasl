@@ -19,7 +19,6 @@
         Provides a comptime ownership model, similar to Rust's.
 */
 
-import builtin as B;
 import std::numeric as N;
 
 let Ownership = struct {
@@ -34,7 +33,7 @@ pub let new = fn (T: type, value: T) -> Value(T) {
 
 pub let Value = fn (T: type) -> type {
     return struct {
-        let Self = B::this();
+        let Self = this();
 
         ownership: type,
         value: T,
@@ -66,20 +65,20 @@ pub let Value = fn (T: type) -> type {
 
         pub let Owned = fn (self: *Self) -> void {
             if value.ownership != Ownership.Owned {
-                B::compileError("Expected an owned value.", ());
+                compileError("Expected an owned value.", ());
             }
         };
 
         pub let Borrowed = fn (self: *mut Self) -> void {
             if value.ownership != Ownership.Borrowed {
-                B::compileError("Expected a borrowed value.", ());
+                compileError("Expected a borrowed value.", ());
             }
             value.ownership = Ownership.Owned;
         };
 
         pub let Valid = fn (self: *Self) -> void {
             if value.ownership == Ownership.Invalid {
-                B::compileError("Expected a valid value.", ());
+                compileError("Expected a valid value.", ());
             }
         };
     };

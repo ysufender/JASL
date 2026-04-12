@@ -23,7 +23,6 @@
         Defines core utilities for error handling, value generation etc.
 */
 
-import builtin as B;
 import std::math as M;
 import std::iterator as I;
 import builtin::type as R;
@@ -32,7 +31,7 @@ import std::collections as C;
 
 pub let Option = fn (T: type) -> type {
     return union(enum) {
-        let Self = B::this();
+        let Self = this();
 
         Some: T,
         None: void,
@@ -51,7 +50,7 @@ pub let Option = fn (T: type) -> type {
         pub let unwrap = #(@inline) fn (self: *Self) -> T {
             return switch self {
                 @Some -> |s| s,
-                @None -> B::unreachable(),
+                @None -> unreachable(),
             };
         };
 
@@ -98,7 +97,7 @@ pub let Option = fn (T: type) -> type {
 
 pub let Result = fn (T: type, E: type) -> type {
     return union(enum) {
-        let Self = B::this();
+        let Self = this();
 
         Ok: T,
         Err: E,
@@ -117,7 +116,7 @@ pub let Result = fn (T: type, E: type) -> type {
         pub let unwrap = #(@inline) fn (self: *Self) -> T {
             return switch self {
                 @Ok -> |o| o,
-                @Err -> B::unreachable(),
+                @Err -> unreachable(),
             };
         };
 
@@ -167,7 +166,7 @@ pub let Result = fn (T: type, E: type) -> type {
 
 pub let Pair = fn (T: type, P: type) -> type {
     return struct {
-        let Self = B::this();
+        let Self = this();
 
         pub first: T,
         pub second: P,
@@ -199,10 +198,10 @@ pub let ErrorCode = enum {
         Union and Enum -> Defaulting to any field may cause unexpected behaviour.
 */
 pub let DefaultConstructible = struct {
-    let Self = B::this();
+    let Self = this();
 
     pub let Trait = fn (T: type) -> type {
-        let baseTypeInfo = B::typeInfo(T);
+        let baseTypeInfo = typeInfo(T);
         let tag = baseTypeInfo.tag;
 
         if C::contains(R::TypeInfo::Tag)(tag, (@Integer, @Void, @Float)) {
@@ -210,7 +209,7 @@ pub let DefaultConstructible = struct {
         }
 
         let trait = CT::TraitInfo(
-            B::typeInfo(Self).Struct.name, (
+            typeInfo(Self).Struct.name, (
                 CT::MemberInfo(@Definition, (true, "default", *fn void -> T)),
             )
         );
@@ -220,7 +219,7 @@ pub let DefaultConstructible = struct {
         }
 
         if C::contains(R::TypeInfo::Tag)(tag, (@Pointer, @Function, @Noreturn, @Type, @Any, @Union, @Enum)) {
-            B::compileError("Type '{any}' is not default constructible.", (T));
+            compileError("Type '{any}' is not default constructible.", (T));
         }
 
         let typeInfo = baseTypeInfo.Struct;
@@ -233,11 +232,11 @@ pub let DefaultConstructible = struct {
     };
 
     pub let Check = fn (T: type) -> type {
-        let baseTypeInfo = B::typeInfo(T);
+        let baseTypeInfo = typeInfo(T);
         let tag = baseTypeInfo.tag;
 
         let trait = CT::TraitInfo(
-            B::typeInfo(Self).Struct.name, (
+            typeInfo(Self).Struct.name, (
                 CT::MemberInfo(@Definition, (true, "default", *fn void -> T)),
             )
         );
@@ -259,10 +258,10 @@ pub let DefaultConstructible = struct {
     };
 
     pub let Construct = fn (T: type) -> Trait(T) {
-        let typeInfo = B::typeInfo(T);
+        let typeInfo = typeInfo(T);
 
         let trait = CT::TraitInfo(
-            B::typeInfo(Self).Struct.name, (
+            typeInfo(Self).Struct.name, (
                 CT::MemberInfo(@Definition, (true, "default", *fn void -> T)),
             )
         );
@@ -278,7 +277,7 @@ pub let DefaultConstructible = struct {
             #(@inline) while i < typeInfo.fields.len {
                 defer i = i + 1;
                 let field = typeInfo.fields[i];
-                B::field(ret, field.name) = Construct(field.valueType);
+                field(ret, field.name) = Construct(field.valueType);
             }
 
             return ret;
@@ -290,55 +289,55 @@ pub let DefaultConstructible = struct {
             @Void -> (),
             @Float -> 0.0,
             @Bool -> false,
-            else -> B::unreachable(),
+            else -> unreachable(),
         };
     };
 };
 
 pub let Equible = struct {
-    let Self = B::this();
+    let Self = this();
 
     pub let Trait = fn (T: type) -> type {
         let trait = CT::TraitInfo(
-            B::typeInfo(Self).Struct.name, (
+            typeInfo(Self).Struct.name, (
                 CT::MemberInfo(@Definition, (true, "equals", *fn (T, T) -> bool)),
             ),
         );
 
-        let typeInfo = B::typeInfo(T);
+        let typeInfo = typeInfo(T);
 
-        return switch B::typeInfo(T) {
+        return switch typeInfo(T) {
             @Integer -> T,
             @Void -> T,
             @Float -> T,
             @Type -> T,
             @Enum -> T,
             @Bool -> T,
-            @Pointer -> B::compileError("Type '{any}' is not default comparable because it can either be a shallow comparison or a deep one.", (T)),
+            @Pointer -> compileError("Type '{any}' is not default comparable because it can either be a shallow comparison or a deep one.", (T)),
             @Struct ->
                 if (CT::CheckTrait(trait, T)) T
                 else if (
                     I::Slice(R::FieldInfo)(typeInfo.fields)
                     .terminate(I::All).with(fn |f| Trait(f.valueType) == f.valueType)
                 ) T
-                else B::unreachable(),
+                else unreachable(),
             @Union ->
                 if (I::Slice(R::FieldInfo)(typeInfo.fields)
                     .terminate(I::All).with(fn |f| Trait(f.valueType) == f.valueType)
                 ) T
-                else B::unreachable(),
-            else -> B::compileError("Type '{s}' is not default comparable because it is not comparable at all.", (T)),
+                else unreachable(),
+            else -> compileError("Type '{s}' is not default comparable because it is not comparable at all.", (T)),
         };
     };
 
     pub let Generic = fn (T: type, lhs: Trait(T), rhs: Trait(T)) -> bool {
         let trait = CT::TraitInfo(
-            B::typeInfo(Self).Struct.name, (
+            typeInfo(Self).Struct.name, (
                 CT::MemberInfo(@Definition, (true, "equals", *fn (T, T) -> bool)),
             ),
         );
 
-        let baseTypeInfo = B::typeInfo(T);
+        let baseTypeInfo = typeInfo(T);
         let tag = baseTypeInfo.tag;
 
         return switch baseTypeInfo {
@@ -351,12 +350,12 @@ pub let Equible = struct {
             @Struct -> |s|
                 if (CT::CheckTrait(trait, T)) lhs.equals(rhs)
                 else I::Slice(R::FieldInfo)(s.fields)
-                    .terminate(I::All).with(fn |f| Generic(f.valueType, B::field(lhs, f.name), B::field(rhs, f.name))),
+                    .terminate(I::All).with(fn |f| Generic(f.valueType, field(lhs, f.name), field(rhs, f.name))),
             @Union -> |u|
                 lhs.tag == rhs.tag
                 and
-                Generic(B::typeOf(B::field(lhs, B::enumStr(lhs.tag))), B::field(lhs, B::enumStr(lhs.tag)), B::field(rhs, B::enumStr(rhs.tag))),
-            else -> B::unreachable(),
+                Generic(typeOf(B::field(lhs, B::enumStr(lhs.tag))), B::field(lhs, B::enumStr(lhs.tag)), B::field(rhs, B::enumStr(rhs.tag))),
+            else -> unreachable(),
         };
     };
 };

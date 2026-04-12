@@ -3,6 +3,7 @@ const common = @import("../core/common.zig");
 const defines = @import("../core/defines.zig");
 const collections = @import("../util/collections.zig");
 
+const Lexer = @import("../lexer/lexer.zig");
 const Parser = @import("../parser/parser.zig");
 const Prepass = @import("../parser/prepass.zig");
 
@@ -79,16 +80,20 @@ pub const Resolution = struct {
     declarations: DeclarationList.Slice,
     scopes: ScopeList.Slice,
 
-    pub fn tryGet(self: *const Resolution, expr: defines.ExpressionPtr) ?defines.DeclPtr {
-        return self.resolutionMap.get(expr);
+    pub fn tryGet(self: *const Resolution, key: ResolutionKey) ?defines.DeclPtr {
+        return self.resolutionMap.get(key);
     }
 
-    pub fn get(self: *const Resolution, expr: defines.ExpressionPtr) defines.DeclPtr {
-        return self.resolutionMap.get(expr);
+    pub fn get(self: *const Resolution, key: ResolutionKey) defines.DeclPtr {
+        return self.resolutionMap.get(key).?;
     }
 
-    pub fn getDecl(self: *const Resolution, expr: defines.ExpressionPtr) Declaration {
-        return self.declarations.get(self.get(expr));
+    pub fn tryGetDecl(self: *const Resolution, key: ResolutionKey) ?Declaration {
+        return self.declarations.get(self.tryGet(key) orelse return null);
+    }
+
+    pub fn getDecl(self: *const Resolution, key: ResolutionKey) Declaration {
+        return self.declarations.get(self.get(key));
     }
 };
 
@@ -111,13 +116,16 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
     const scopeCap = (context.counts.statements / 4) + context.counts.modules;
     const declCap = (context.counts.expressions / 8) + context.counts.topLevels;
 
-    var scopes = try ScopeList.init(allocator, scopeCap);
-    var decls = try DeclarationList.init(allocator, declCap);
+    var scopes = try ScopeList.init(allocator, scopeCap + 1);
+    var decls = try DeclarationList.init(allocator, declCap + builtins.len);
     var lookup = LookupMap.empty;
     var reso = ResolutionMap.empty;
 
     lookup.ensureTotalCapacity(allocator, declCap) catch return error.AllocatorFailure;
     reso.ensureTotalCapacity(allocator, declCap) catch return error.AllocatorFailure;
+
+    // For null scope
+    _ = try scopes.addOne(allocator);
 
     const builtin = try scopes.addOne(allocator);
     scopes.set(builtin, .{
@@ -194,7 +202,7 @@ pub fn resolve(self: *Resolver, allocator: Allocator) Error!Resolution {
     var lastErr: common.CompilerError = undefined;
 
     const modules = self.scopes.len;
-    for (1..modules) |i| {
+    for (2..modules) |i| {
         self.currentScope = @intCast(i);
         self.resolveModule() catch |err| {
             errCount += 1;
@@ -729,14 +737,91 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
         },
         .MutableType, .PointerType, .SliceType => try self.resolveExpression(expr.value),
         .FunctionType, .ArrayType => {
-            const size = ast.extra[expr.value];
-            try self.resolveExpression(size);
+            const sizeorArgs = ast.extra[expr.value];
+            try self.resolveExpression(sizeorArgs);
 
-            const inner = ast.extra[expr.value + 1];
-            try self.resolveExpression(inner);
+            const innerOrReturns = ast.extra[expr.value + 1];
+            try self.resolveExpression(innerOrReturns);
         },
         .Scoping => {
-            // TODO: Handle pure namespace resolution.
+            var root = exprPtr;
+            var chainLen: u32 = 0;
+            while (ast.expressions.items(.type)[root] == .Scoping) {
+                root = ast.extra[ast.expressions.items(.value)[root]];
+                chainLen += 1;
+            }
+
+            if (ast.expressions.items(.type)[root] != .Identifier) {
+                try self.resolveExpression(root);
+                return;
+            }
+
+            const rootTokenPtr = ast.expressions.items(.value)[root];
+            const nameStart = self.context.getTokens(self.dataIndex()).items(.start)[rootTokenPtr];
+
+            var matchedModuleIdx: ?defines.ModulePtr = null;
+            var consumedDepth: u32 = 0;
+
+            var prefixDepth: u32 = 0;
+            while (prefixDepth <= chainLen) : (prefixDepth += 1) {
+                var cur = exprPtr;
+                var steps: u32 = 0;
+                while (steps < chainLen - prefixDepth) : (steps += 1) {
+                    cur = ast.extra[ast.expressions.items(.value)[cur]];
+                }
+
+                const endToken =
+                    if (prefixDepth == 0) rootTokenPtr
+                    else ast.extra[ast.expressions.items(.value)[cur] + 1];
+
+                const nameEnd = self.context.getTokens(self.dataIndex()).items(.end)[endToken];
+                const moduleName = self.context.getFile(self.dataIndex())[nameStart..nameEnd];
+
+                if (self.modules.ids.get(moduleName)) |moduleIdx| {
+                    matchedModuleIdx = moduleIdx;
+                    consumedDepth = prefixDepth;
+                }
+            }
+
+            var currentDecl: defines.DeclPtr = undefined;
+
+            if (matchedModuleIdx) |moduleIdx| {
+                const d = try self.decls.addOne(allocator);
+                self.decls.set(d, .{
+                    .kind = .Namespace,
+                    .scope = self.currentScope,
+                    .public = false,
+                    .index = 0,
+                    .token = rootTokenPtr,
+                    .node = moduleIdx,
+                });
+                currentDecl = d;
+            } else {
+                currentDecl = self.look(rootTokenPtr) catch return error.InvalidIdentifier;
+                consumedDepth = 0;
+            }
+
+            var depth: u32 = chainLen - consumedDepth;
+            while (depth > 0) {
+                depth -= 1;
+
+                var cur = exprPtr;
+                var steps: u32 = 0;
+                while (steps < depth) {
+                    cur = ast.extra[ast.expressions.items(.value)[cur]];
+                    steps += 1;
+                }
+
+                const member = ast.extra[ast.expressions.items(.value)[cur] + 1];
+
+                if (self.decls.items(.kind)[currentDecl] == .Namespace) {
+                    const targetScope = self.decls.items(.node)[currentDecl] + 1;
+                    currentDecl = self.lookAt(member, targetScope) catch return;
+                } else return;
+            }
+
+            self.resolved.putNoClobber(allocator, .{ .file = self.dataIndex(), .expr = exprPtr }, currentDecl)
+                catch return error.AllocatorFailure;
         },
         .ExpressionList => {
             const expressions = defines.Range{
@@ -899,12 +984,8 @@ fn handleScopeDefs(self: *Resolver, declarations: defines.Range) Error!void {
     }
 }
 
-fn lookAt(self: *Resolver, namePtr: defines.TokenPtr, scope: defines.ScopePtr) Error!defines.DeclPtr {
-    const currentModule = self.modules.modules.items(.name)[self.scopes.items(.module)[self.currentScope]];
-    const name = self.context
-        .getTokens(self.dataIndex())
-        .get(namePtr)
-        .lexeme(self.context, self.dataIndex());
+fn lookNameAt(self: *Resolver, name: []const u8, scope: defines.ScopePtr) Error!defines.DeclPtr {
+    const currentModule = self.modules.modules.items(.name)[self.scopes.items(.module)[scope]];
 
     var current: ?defines.ScopePtr = scope;
     while (current) |s| {
@@ -923,8 +1004,6 @@ fn lookAt(self: *Resolver, namePtr: defines.TokenPtr, scope: defines.ScopePtr) E
         current = self.scopes.items(.parent)[s];
     }
 
-    self.lastToken = namePtr;
-
     self.report("Couldn't resolve given identifier '{s}' in the given scope ({s}).", .{
         name,
         currentModule,
@@ -932,7 +1011,21 @@ fn lookAt(self: *Resolver, namePtr: defines.TokenPtr, scope: defines.ScopePtr) E
     return error.InvalidIdentifier;
 }
 
+fn lookAt(self: *Resolver, namePtr: defines.TokenPtr, scope: defines.ScopePtr) Error!defines.DeclPtr {
+    self.lastToken = namePtr;
+    const name = self.context
+        .getTokens(self.dataIndex())
+        .get(namePtr)
+        .lexeme(self.context, self.dataIndex());
+    return self.lookNameAt(name, scope);
+}
+
+fn lookName(self: *Resolver, name: []const u8) Error!defines.DeclPtr {
+    return self.lookNameAt(name, self.currentScope);
+}
+
 fn look(self: *Resolver, namePtr: defines.TokenPtr) Error!defines.DeclPtr {
+    self.lastToken = namePtr;
     return self.lookAt(namePtr, self.currentScope);
 }
 
@@ -940,7 +1033,7 @@ fn report(self: *Resolver, comptime fmt: []const u8, args: anytype) void {
     common.log.err(fmt, args);
     const token = self.context.getTokens(self.dataIndex()).get(self.lastToken);
     const position = token.position(self.context, self.dataIndex());
-    common.log.err("\t{s} {d}:{d}", .{ self.context.getFileName(self.dataIndex()), position.line, position.column});
+    common.log.err("\t{s} {d}:{d}\n", .{ self.context.getFileName(self.dataIndex()), position.line, position.column});
 }
 
 fn dataIndex(self: *const Resolver) u32 {
@@ -971,7 +1064,10 @@ fn getModuleName(self: *Resolver, module: defines.ExpressionPtr) []const u8 {
     return self.context.getFile(self.dataIndex())[start..end];
 }
 
-const builtins: [10][]const u8 = .{
+const builtins = [_][]const u8 {
     "u8", "i8", "float", "u32", "i32",
     "bool", "void", "any", "type", "undefined",
+    "typeInfo", "hasField", "compileError", "bitSet",
+    "bitSizeOf", "unreachable", "enumStr", "typeOf",
+    "field", "fieldIndex", "hasDef", "definitionIndex",
 };

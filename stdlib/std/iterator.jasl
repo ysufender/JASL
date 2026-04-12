@@ -34,7 +34,6 @@
 */
 
 import std;
-import builtin as B;
 import std::math as M;
 import std::debug as D;
 import std::numeric as N;
@@ -81,13 +80,13 @@ pub let Iterator = fn (T: type) -> type {
         pub let Of = T;
         let Next = std::Option(Of);
 
-        let Self = B::this();
+        let Self = this();
 
         pub let Trait = fn (Iter: type) -> type {
             _ = Extract(Iter, @Of);
 
             let trait = CT::TraitInfo(
-                B::typeInfo(Self).Struct.name, (
+                typeInfo(Self).Struct.name, (
                     CT::MemberInfo(@Definition, (true, "next", *fn (*mut Iter) -> Next)),
                     CT::MemberInfo(@Definition, (true, "peek", *fn (*mut Iter) -> Next)),
                     CT::MemberInfo(@Definition, (true, "eos", *fn (*mut Iter) -> bool)),
@@ -116,7 +115,7 @@ pub let Iterator = fn (T: type) -> type {
                 eos: *fn (*mut void) -> bool,
             };
 
-            let Self = B::this();
+            let Self = this();
             pub let Of = Of;
 
             pub let Implement = fn (For: type) -> *fn (*mut Trait(For)) -> Self {
@@ -134,7 +133,7 @@ pub let Iterator = fn (T: type) -> type {
 
             pub let NotImplemented = fn (For: type) -> *fn (*mut Trait(For)) -> Self {
                 return fn (__: *mut For) -> Self {
-                    return B::unreachable();
+                    return unreachable();
                 };
             };
 
@@ -154,7 +153,7 @@ pub let Iterator = fn (T: type) -> type {
             };
 
             pub let iterator = fn (self: *mut Self) -> Self {
-                B::compileError("Interface.iterator() is pointless, and unsafe to use.", ());
+                compileError("Interface.iterator() is pointless, and unsafe to use.", ());
             };
 
             pub let pipe = Pipeline::Implement(Self);
@@ -187,7 +186,7 @@ pub let Iterator = fn (T: type) -> type {
                 for the pipeline.
         */
         pub let HigherOrder = struct {
-            let Self = B::this();
+            let Self = this();
 
             pub let Trait = fn (Iter: type) -> *fn type -> type {
                 _ = Iterator(Of)::Trait(Iter);
@@ -198,7 +197,7 @@ pub let Iterator = fn (T: type) -> type {
 
                 let With = Extract(Iter, @With);
 
-                let typeInfo = B::typeInfo(Iter).Struct;
+                let typeInfo = typeInfo(Iter).Struct;
 
                 if With.len != 0 {
                     let withParams: [With.len + 1]type = undefined;
@@ -217,7 +216,7 @@ pub let Iterator = fn (T: type) -> type {
                     }
 
                     let trait = CT::TraitInfo(
-                        B::typeInfo(Self).Struct.name, (
+                        typeInfo(Self).Struct.name, (
                         CT::MemberInfo(@Field, (false, "inner", mut Over)),
                         CT::MemberInfo(@Definition, (true, "wrap", *fn Over -> Iter)),
                         CT::MemberInfo(@Definition, (true, "with", *fn withParams -> *mut Iter))
@@ -227,7 +226,7 @@ pub let Iterator = fn (T: type) -> type {
                 }
 
                 let trait = CT::TraitInfo(
-                    B::typeInfo(Self).Struct.name, (
+                    typeInfo(Self).Struct.name, (
                     CT::MemberInfo(@Field, (false, "inner", mut Over)),
                     CT::MemberInfo(@Definition, (true, "wrap", *fn Over -> Iter)),
                 ));
@@ -257,11 +256,11 @@ pub let Iterator = fn (T: type) -> type {
                 the generated instance that wraps Self.
         */
         pub let Pipeline = struct {
-            let Self = B::this();
+            let Self = this();
 
             pub let Trait = fn (Iter: type) -> type {
                 let trait = CT::TraitInfo(
-                    B::typeInfo(Self).Struct.name, (
+                    typeInfo(Self).Struct.name, (
                         CT::MemberInfo(@Definition, (true, "pipe", *fn (*Iter, *fn type -> type) -> any)),
                         CT::MemberInfo(@Definition, (true, "terminate", *fn (*Iter, *fn type -> type) -> any)),
                     ),
@@ -281,7 +280,7 @@ pub let Iterator = fn (T: type) -> type {
                 "with" is not a requirement for early initialized Terminals.
             */
             pub let Terminal = struct {
-                let Self = B::this();
+                let Self = this();
 
                 pub let Trait = fn (Iter: type) -> type {
                     let Over = Extract(Iter, @Over);
@@ -289,11 +288,11 @@ pub let Iterator = fn (T: type) -> type {
 
                     _ = Iterator(Extract(Over, @Of))::Trait(Over);
 
-                    let typeInfo = B::typeInfo(Iter).Struct;
+                    let typeInfo = typeInfo(Iter).Struct;
 
                     if With.len != 0 {
                         let trait = CT::TraitInfo(
-                            B::typeInfo(Self).Struct.name, (
+                            typeInfo(Self).Struct.name, (
                             CT::MemberInfo(@Definition, (true, "terminate", *fn Over -> Iter)),
                             CT::MemberInfo(@Definition, (true, "with", *fn With -> Of)),
                         ));
@@ -302,7 +301,7 @@ pub let Iterator = fn (T: type) -> type {
                     }
 
                     let trait = CT::TraitInfo(
-                        B::typeInfo(Self).Struct.name, (
+                        typeInfo(Self).Struct.name, (
                         CT::MemberInfo(@Definition, (true, "terminate", *fn Over -> Of)),
                     ));
 
@@ -313,7 +312,7 @@ pub let Iterator = fn (T: type) -> type {
                     let With = Extract(For, @Terminal);
 
                     if With.len == 0 {
-                        B::compileError("'{any}'::terminate can't be default implemented, because it is a direct terminal.", (For));
+                        compileError("'{any}'::terminate can't be default implemented, because it is a direct terminal.", (For));
                     }
 
                     return fn (iterator: Over) -> For {
@@ -354,25 +353,25 @@ pub let Extract = fn (Iter: type, What: enum { Of, Over, With, Terminal }) -> sw
     @Terminal -> []type,
     else -> type,
 } {
-    if !B::hasField(Iter, B::enumStr(What)) {
-        B::compileError("'{any}' does not have the Iterator({any}){s} field '{s}'.", (
+    if !hasField(Iter, enumStr(What)) {
+        compileError("'{any}' does not have the Iterator({any}){s} field '{s}'.", (
             Iter,
             if (What == @Of) ""
             else if (What == @Terminal) "::Pipeline::Terminal"
             else "::HigherOrder",
-            B::enumStr(What),
+            enumStr(What),
         ));
     }
 
-    let field = B::field(Iter, B::enumStr(What));
+    let field = field(Iter, enumStr(What));
 
-    if B::typeOf(field) != (switch What {
+    if typeOf(field) != (switch What {
         @With -> [][]u8,
         @Terminal -> []type,
         else -> type,
     }) {
-        B::compileError("The signature of field '{s}' of '{any}' does not match Iterator({any}){s}.", (
-            B::enumStr(What),
+        compileError("The signature of field '{s}' of '{any}' does not match Iterator({any}){s}.", (
+            enumStr(What),
             Iter,
             if (What == @Of) ""
             else if (What == @Terminal) "::Pipeline::Terminal"
@@ -396,7 +395,7 @@ pub let Map = fn (To: type) -> *fn (type) -> type {
 
             let From = Extract(Over, @Of);
 
-            let Self = B::this();
+            let Self = this();
             let Iter = Iterator(To);
             let Next = std::Option(To);
 
@@ -441,7 +440,7 @@ pub let Filter = fn (Over: type) -> type {
         pub let Of = Extract(Over, @Of);
         pub let With: [][]u8 = ("func");
 
-        let Self = B::this();
+        let Self = this();
         let Next = std::Option(Of);
 
         inner: mut Iterator(Of)::Trait(Over),
@@ -498,7 +497,7 @@ pub let Take = fn (Over: type) -> type {
         pub let Of = Extract(Over, @Of);
         pub let With: [][]u8 = ("N");
 
-        let Self = B::this();
+        let Self = this();
         let Next = std::Option(Of);
 
         inner: mut Iterator(Of)::Trait(Over),
@@ -539,7 +538,7 @@ pub let Zip = fn (Of: type) -> *fn (type, type) -> type {
 
             pub let Of = Of;
 
-            let Self = B::this();
+            let Self = this();
             let Next = std::Option(Of);
 
             leftIterator: mut Iterator(OfThis)::Trait(OverThis),
@@ -579,7 +578,7 @@ pub let Fold = fn (Of: type) -> *fn (type) -> type {
             pub let OverOf = Extract(Over, @Of);
             pub let Terminal: []type = (*fn (Of, OverOf) -> Of, mut Of);
 
-            let Self = B::this();
+            let Self = this();
 
             inner: mut Iterator(OverOf)::Trait(Over),
 
@@ -602,7 +601,7 @@ pub let Sum = fn (Over: type) -> type {
         pub let Over = Over;
         pub let Terminal: []type = (*fn (Of, OverOf) -> Of, mut Of);
 
-        let Self = B::this();
+        let Self = this();
 
         pub let terminate = fn (iterator: Over) -> Of {
             let res: Of = std::DefaultConstructible::Construct(Of);
@@ -622,7 +621,7 @@ pub let All = fn (Over: type) -> type {
         pub let OverOf = Extract(Over, @Of);
         pub let Terminal: []type = (*fn OverOf -> Of);
 
-        let Self = B::this();
+        let Self = this();
 
         inner: mut Iterator(OverOf)::Trait(Over),
 
@@ -647,7 +646,7 @@ pub let Any = fn (Over: type) -> type {
         pub let OverOf = Extract(Over, @Of);
         pub let Terminal: []type = (*fn OverOf -> Of);
 
-        let Self = B::this();
+        let Self = this();
 
         inner: mut Iterator(OverOf)::Trait(Over),
 
@@ -671,7 +670,7 @@ pub let Head = fn (From: type) -> type {
         pub let Over = From;
         pub let Terminal: []type = ();
 
-        let Self = B::this();
+        let Self = this();
 
         pub let terminate = fn (iterator: Over) -> Of {
             return switch iterator.peek() {
@@ -688,7 +687,7 @@ pub let Tail = fn (From: type) -> type {
         pub let Over = From;
         pub let With: [][]u8 = ();
 
-        let Self = B::this();
+        let Self = this();
         let Next = std::Option(Of);
 
         inner: mut Over,
@@ -712,19 +711,19 @@ pub let Collect = fn (From: type) -> type {
 
 pub let Range = fn (T: type) -> type {
     if !N::Numeric::Trait(T) {
-        B::compileError("Range(T) expects T to be a numeric type.", ());
+        compileError("Range(T) expects T to be a numeric type.", ());
     }
 
     return struct {
         pub let Of = T;
 
-        let Self = B::this();
+        let Self = this();
         let Next = std::Option(T);
 
         start: mut T,
         end: T,
         by: T,
-        sign: if (M::Unsigned(T)) void else T,
+        sign: if (N::Unsigned(T)) void else T,
 
         pub let init = fn (start: T, end: T, by: T) -> Self {
             let self = Self(
@@ -782,7 +781,7 @@ pub let Range = fn (T: type) -> type {
 pub let Repeat = struct {
     pub let Of = void;
 
-    let Self = B::this();
+    let Self = this();
     let Next = std::Option(void);
 
     times: mut u32,
@@ -816,7 +815,7 @@ pub let Repeat = struct {
 pub let Loop = struct {
     pub let Of = void;
 
-    let Self = B::this();
+    let Self = this();
     let Next = std::Option(void);
 
     pub let next = fn (self: *mut Self) -> Next {
@@ -841,7 +840,7 @@ pub let Slice = fn (P: type) -> type {
     return struct {
         pub let Of = P;
 
-        let Self = B::this();
+        let Self = this();
         let Next = std::Option(P);
 
         items: mut []P,

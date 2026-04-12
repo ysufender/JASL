@@ -22,7 +22,6 @@
         "theoric" side of the numbers, see std::numeric.
 */
 
-import builtin as B;
 import std::collections as C;
 import std::numeric as N;
 
@@ -33,7 +32,7 @@ pub let isApprox = fn (lhs: float, rhs: float) -> bool {
 };
 
 pub let abs = fn (T: type, number: N::Signed::Trait(T)) -> N::Numeric::Trait(T) {
-    return B::bitSet(number, B::bitSizeOf(T), 0);
+    return bitSet(number, bitSizeOf(T), 0);
 };
 
 pub let pow = fn (base: float, power: float) -> float {

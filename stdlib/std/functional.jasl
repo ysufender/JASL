@@ -21,7 +21,6 @@
 */
 
 import std::iterator as iterator;
-import builtin as B;
 
 pub let LoopResult = fn (T: type) -> type {
     return union(enum) {
@@ -32,10 +31,10 @@ pub let LoopResult = fn (T: type) -> type {
 };
 
 pub let for = fn (Iter: type, With: type)
-    -> *fn (iterator::Iterator(iterator::ExtractIteratorType(Iter))::Trait(Iter), *fn (iterator::ExtractIteratorType(Iter)) -> LoopResult(With))
+    -> *fn (iterator::Iterator(iterator::Extract(Iter, @Of))::Trait(Iter), *fn (iterator::Extract(Iter, @Of)) -> LoopResult(With))
         -> LoopResult(With) {
 
-    let Over = iterator::ExtractIteratorType(Iter);
+    let Over = iterator::Extract(Iter, @Of);
     
     return fn (it: Iter, loop: *fn (Over) -> LoopResult(With)) -> LoopResult(With) {
         while !it.eos() {

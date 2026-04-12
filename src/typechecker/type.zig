@@ -1,3 +1,5 @@
+pub const Type = u32;
+
 pub const TypeInfo = union(enum) {
     Struct: Struct,
     Union: Union,
@@ -17,29 +19,29 @@ pub const TypeInfo = union(enum) {
 
 pub const FieldInfo = struct {
     public: bool,
-    name: []u8,
-    valueType: type,
+    name: []const u8,
+    valueType: Type,
 };
 
 pub const Struct = struct {
     mutable: bool,
-    name: []u8,
-    fields: []FieldInfo,
-    definitions: []FieldInfo,
+    name: []const u8,
+    fields: []const FieldInfo,
+    definitions: []const FieldInfo,
 };
 
 pub const Union = Struct;
 
 pub const Enum = struct {
     mutable: bool,
-    name: []u8,
-    fields: [][]u8,
-    definitions: []FieldInfo,
+    name: []const u8,
+    fields: []const []const u8,
+    definitions: []const FieldInfo,
 };
 
 pub const Pointer = struct {
     mutable: bool,
-    child: type,
+    child: Type,
     pointerType: enum {
         Slice,
         Single,
@@ -48,9 +50,9 @@ pub const Pointer = struct {
 
 pub const Function = struct {
     mutable: bool,
-    name: []u8,
-    argTypes: []type,
-    returnTypes: []type,
+    name: []const u8,
+    argTypes: []const Type,
+    returnTypes: []const Type,
 };
 
 pub const Integer = struct {
