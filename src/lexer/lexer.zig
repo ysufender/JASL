@@ -68,13 +68,13 @@ pub const Token = struct {
     pub fn position(self: *const Token, context: *common.CompilerContext, file: defines.FilePtr) Position {
         var source = context.getFile(file)[0..self.start];
 
-        var line: defines.Offset = 0;
+        var line: defines.Offset = 1;
         while (std.mem.indexOfScalar(u8, source, '\n')) |newline| {
-            source = source[(newline + 1)..];
             line += 1;
+            source = source[(newline + 1)..];
         }
 
-        const col: defines.Offset = @intCast(source.len - 1);
+        const col: defines.Offset = @intCast(if (source.len > 0) source.len - 1 else 0);
 
         return .{
             .line = line,

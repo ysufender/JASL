@@ -2,7 +2,6 @@ const std = @import("std");
 const common = @import("../core/common.zig");
 const defines = @import("../core/defines.zig");
 const collections = @import("../util/collections.zig");
-const threading = @import("../util/threading.zig");
 
 const Lexer = @import("../lexer/lexer.zig");
 const Parser = @import("parser.zig");
@@ -89,53 +88,25 @@ const Prepass = @This();
 
 initial: Parser.AST,
 arena: std.heap.ArenaAllocator,
-safeAlloc: threading.OnlyIfThreading(std.heap.ThreadSafeAllocator) = undefined,
 
 /// Maps the module names (scoping::expressions::mhm) to ModulePtr's
 modules: ModuleList,
 context: *Context,
-lock: threading.OnlyIfThreading(defines.Lock) = undefined,
-hadErr: threading.OnlyIfThreading(std.atomic.Value(bool)) = undefined,
-wg: threading.OnlyIfThreading(defines.WaitGroup) = undefined,
-pool: threading.OnlyIfThreading(defines.ThreadPool) = undefined,
 
 /// Uses multithreaded allocator under the hood
 pub fn init(context: *Context, initial: defines.ASTPtr, allocator: std.mem.Allocator) Error!Prepass {
-    var arena = std.heap.ArenaAllocator.init(
-        if (defines.threading) std.heap.smp_allocator
-        else allocator
-    );
+    var arena = std.heap.ArenaAllocator.init(allocator);
 
-    return
-        if (defines.threading) .{
-            .initial = context.getAST(initial),
-            .context = context,
-            .modules = try ModuleList.init(arena.allocator(), 128),
-            .lock = .{},
-            .wg = .{},
-            .hadErr = .init(false),
-            .arena = arena,
-        }
-        else .{
-            .initial = context.getAST(initial),
-            .context = context,
-            .modules = try ModuleList.init(arena.allocator(), 128),
-            .arena = arena,
-        };
+    return .{
+        .initial = context.getAST(initial),
+        .context = context,
+        .modules = try ModuleList.init(arena.allocator(), 128),
+        .arena = arena,
+    };
 }
 
 /// Returns a module list slice containing all modules. Releases the ownership.
 pub fn prepass(self: *Prepass, allocator: std.mem.Allocator) Error!ModuleList {
-    if (defines.threading) {
-        self.safeAlloc = .{
-            .child_allocator = self.arena.allocator(),
-        };
-
-        self.pool.init(.{
-            .allocator = self.safeAlloc.allocator(),
-        }) catch return error.ThreadingError;
-    }
-
     defer self.arena.deinit();
 
     const bname: []const u8 = "builtin";
@@ -149,24 +120,11 @@ pub fn prepass(self: *Prepass, allocator: std.mem.Allocator) Error!ModuleList {
     });
     self.modules.ids.putAssumeCapacityNoClobber(bname, builtin);
 
-    if (defines.threading) {
-        self.prepassImpl(self.initial, "root");
-    }
-    else {
-        try self.prepassImpl(self.initial, "root");
-    }
-
-    if (defines.threading) {
-        self.wg.wait();
-
-        if (self.hadErr.load(.acquire)) {
-            return error.ThreadingError;
-        }
-    }
+    try self.prepassImpl(self.initial, "root");
 
     for (1..self.modules.modules.len) |i| {
         self.modules.modules.items(.dependencies)[i].shrinkAndFree(
-            if (defines.threading) self.safeAlloc.allocator() else self.arena.allocator(),
+            self.arena.allocator(),
             self.modules.modules.items(.dependencies)[i].items.len
         );
     }
@@ -175,36 +133,19 @@ pub fn prepass(self: *Prepass, allocator: std.mem.Allocator) Error!ModuleList {
 }
 
 /// Threaded recursive prepassing. Uses mutexes.
-fn prepassImpl(self: *Prepass, ast: Parser.AST, name: []const u8) if (defines.threading) void else Error!void {
+fn prepassImpl(self: *Prepass, ast: Parser.AST, name: []const u8) Error!void {
     const tokens = self.context.getTokens(ast.tokens);
-    const allocator =
-        if (defines.threading) self.safeAlloc.allocator()
-        else self.arena.allocator();
+    const allocator = self.arena.allocator();
 
     var file = Module{
         .dataIndex = tokens.items(.start)[0],
         .name = name,
-        .dependencies = DependencyList.initCapacity(allocator, @max(tokens.len / 32, 16)) catch |e|
-            if (defines.threading) {
-                self.hadErr.store(true, .release);
-                return;
-            }
-            else return e,
+        .dependencies = DependencyList.initCapacity(allocator, @max(tokens.len / 32, 16)) catch |e| return e,
         .symbolPtrs = .empty,
-        .symbols = SymbolList.init(allocator, @max(tokens.len / 16, 16)) catch |e|
-            if (defines.threading) {
-                self.hadErr.store(true, .release);
-                return;
-            }
-            else return e,
+        .symbols = SymbolList.init(allocator, @max(tokens.len / 16, 16)) catch |e| return e,
     };
 
-    file.symbolPtrs.ensureTotalCapacity(allocator, @max(tokens.len / 16, 16)) catch |e|
-        if (defines.threading) {
-            self.hadErr.store(true, .release);
-            return;
-        }
-        else return e;
+    file.symbolPtrs.ensureTotalCapacity(allocator, @max(tokens.len / 16, 16)) catch |e| return e;
 
     var fail = false;
 
@@ -230,7 +171,14 @@ fn prepassImpl(self: *Prepass, ast: Parser.AST, name: []const u8) if (defines.th
                 };
 
                 const path = getModulePathWithExtension(allocator, statement.value, ast, self.context) catch |err| {
-                    self.report("Couldn't get module path for {s}: {s}.", .{module, @errorName(err)}, file.dataIndex, null);
+                    self.report("Couldn't get module path for {s}: {s}.",
+                        .{module, @errorName(err)},
+                        file.dataIndex,
+                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
+                            ast.expressions.items(.value)[ast.extra[statement.value]]
+                        else
+                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1],
+                    );
 
                     fail = true;
                     break :case;
@@ -241,40 +189,54 @@ fn prepassImpl(self: *Prepass, ast: Parser.AST, name: []const u8) if (defines.th
                 }
 
                 var lexer = Lexer.init(allocator, self.context, path) catch {
-                    self.report("Couldn't scan module at path {s}.", .{path}, self.context.getFileId(path), null);
+                    self.report("Couldn't scan module at path {s}.", .{path}, self.context.getFileId(path),
+                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
+                            ast.expressions.items(.value)[ast.extra[statement.value]]
+                        else
+                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1]
+                    );
 
                     fail = true;
                     break :case;
                 };
 
                 const moduleTokens = lexer.lex() catch {
-                    self.report("Couldn't scan module at path {s}.", .{path}, file.dataIndex, null);
+                    self.report("Couldn't scan module at path {s}.", .{path}, file.dataIndex,
+                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
+                            ast.expressions.items(.value)[ast.extra[statement.value]]
+                        else
+                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1]
+                    );
 
                     fail = true;
                     break :case;
                 };
 
                 var prs = Parser.init(allocator, self.context, moduleTokens) catch {
-                    self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex, null);
+                    self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex,
+                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
+                            ast.expressions.items(.value)[ast.extra[statement.value]]
+                        else
+                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1]
+                    );
 
                     fail = true;
                     break :case;
                 };
 
                 const imported = prs.parse() catch {
-                    self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex, null);
+                    self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex,
+                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
+                            ast.expressions.items(.value)[ast.extra[statement.value]]
+                        else
+                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1]
+                    );
 
                     fail = true;
                     break :case;
                 };
 
-                if (defines.threading) {
-                    // ThreadPool already has a mutex.
-                    self.pool.spawnWg(&self.wg, prepassImpl, .{self, self.context.getAST(imported), module});
-                }
-                else {
-                    try self.prepassImpl(self.context.getAST(imported), module);
-                }
+                try self.prepassImpl(self.context.getAST(imported), module);
             },
             .VariableDefinition => {
                 const sigsStart = ast.extra[statement.value];
@@ -334,40 +296,13 @@ fn prepassImpl(self: *Prepass, ast: Parser.AST, name: []const u8) if (defines.th
         statement = if (stmt >= ast.statementMask.len) statement else ast.statements.get(ast.statementMask[stmt]);
     }
 
-    if (defines.threading) {
-        if (fail) {
-            self.hadErr.store(true, .release);
-            return;
-        }
-
-        self.lock.lock();
-        defer self.lock.unlock();
-    }
-    else {
-        if (fail) {
-            return error.MultipleErrors;
-        }
+    if (fail) {
+        return error.MultipleErrors;
     }
 
-    const index = self.modules.modules.addOne(allocator) catch |e| {
-        if (defines.threading) {
-            self.hadErr.store(true, .release);
-            return;
-        }
-        else {
-            return e;
-        }
-    };
+    const index = self.modules.modules.addOne(allocator) catch |e| return e;
 
-    self.modules.ids.put(allocator, file.name, index) catch |e| {
-        if (defines.threading) {
-            self.hadErr.store(true, .release);
-            return;
-        }
-        else {
-            return e;
-        }
-    };
+    self.modules.ids.put(allocator, file.name, index) catch |e| return e;
     self.modules.modules.set(index, file);
 
     if (self.modules.ids.count() > defines.rehashLimit) {
@@ -452,11 +387,6 @@ fn getModuleNameStartIndex(id: defines.ExpressionPtr, ast: Parser.AST, context: 
 }
 
 fn report(self: *Prepass, comptime fmt: []const u8, args: anytype, file: u32, token: ?u32) void {
-    if (defines.threading) {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
-    }
-
     common.log.err(fmt, args);
     if (
         self.context.astMap.items.len > file

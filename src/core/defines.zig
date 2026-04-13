@@ -4,35 +4,6 @@ const builtin = @import("builtin");
 
 const Settings = common.CompilerSettings;
 
-// TODO: There is a multithreading bug, fix it sometime.
-pub const threading = false and !builtin.is_test;
-
-//pub const Lock = std.Thread.Mutex;
-pub const Lock =
-    if (threading) std.Thread.RwLock
-    else struct {
-        pub fn lock(_: *Lock) void {}
-        pub fn unlock(_: *Lock) void {}
-
-        pub fn lockShared(_: *Lock) void {}
-        pub fn unlockShared(_: *Lock) void {}
-    };
-
-pub const ThreadPool =
-    if (threading) std.Thread.Pool
-    else struct {
-        pub fn init(_: *ThreadPool, _: anytype) common.CompilerError!void { }
-        pub fn spawnWg(_: *ThreadPool, _: *WaitGroup, function: anytype, args: anytype) void {
-            _ = @call(.always_inline, function, args);
-        }
-    };
-
-pub const WaitGroup =
-    if (threading) std.Thread.WaitGroup
-    else struct {
-        pub fn wait(_: *WaitGroup) void {}
-    };
-
 pub const FilePtr = u32;
 pub const TokenListPtr = u32;
 pub const ASTPtr = u32;

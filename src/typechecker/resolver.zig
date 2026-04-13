@@ -1,3 +1,5 @@
+// TODO: Add Incomplete resolutions for Typechecker to populate.
+
 const std = @import("std");
 const common = @import("../core/common.zig");
 const defines = @import("../core/defines.zig");
@@ -124,9 +126,6 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
     lookup.ensureTotalCapacity(allocator, declCap) catch return error.AllocatorFailure;
     reso.ensureTotalCapacity(allocator, declCap) catch return error.AllocatorFailure;
 
-    // For null scope
-    _ = try scopes.addOne(allocator);
-
     const builtin = try scopes.addOne(allocator);
     scopes.set(builtin, .{
         .parent = null,
@@ -202,7 +201,7 @@ pub fn resolve(self: *Resolver, allocator: Allocator) Error!Resolution {
     var lastErr: common.CompilerError = undefined;
 
     const modules = self.scopes.len;
-    for (2..modules) |i| {
+    for (1..modules) |i| {
         self.currentScope = @intCast(i);
         self.resolveModule() catch |err| {
             errCount += 1;
@@ -764,7 +763,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             }
 
             const rootTokenPtr = ast.expressions.items(.value)[root];
-            const nameStart = self.context.getTokens(self.dataIndex()).items(.start)[rootTokenPtr];
+            const nameStart = tokens.items(.start)[rootTokenPtr];
 
             var matchedModuleIdx: ?defines.ModulePtr = null;
             var consumedDepth: u32 = 0;
@@ -781,7 +780,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                     if (prefixDepth == 0) rootTokenPtr
                     else ast.extra[ast.expressions.items(.value)[cur] + 1];
 
-                const nameEnd = self.context.getTokens(self.dataIndex()).items(.end)[endToken];
+                const nameEnd = tokens.items(.end)[endToken];
                 const moduleName = self.context.getFile(self.dataIndex())[nameStart..nameEnd];
 
                 if (self.modules.ids.get(moduleName)) |moduleIdx| {
@@ -822,7 +821,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                 const member = ast.extra[ast.expressions.items(.value)[cur] + 1];
 
                 if (self.decls.items(.kind)[currentDecl] == .Namespace) {
-                    const targetScope = self.decls.items(.node)[currentDecl] + 1;
+                    const targetScope = self.decls.items(.node)[currentDecl];
                     currentDecl = self.lookAt(member, targetScope) catch return;
                 } else return;
             }

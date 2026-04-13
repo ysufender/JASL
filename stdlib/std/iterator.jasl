@@ -19,7 +19,6 @@
         Map,
         Filter,
         Zip,
-        ZipWith,
         Fold,
         Range,
         Slice,
@@ -568,8 +567,6 @@ pub let Zip = fn (Of: type) -> *fn (type, type) -> type {
         };
     };
 };
-
-pub let ZipWith = Zip;
 
 pub let Fold = fn (Of: type) -> *fn (type) -> type {
     return fn (Over: type) -> type {

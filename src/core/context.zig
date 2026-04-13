@@ -1,7 +1,6 @@
 const std = @import("std");
 const defines = @import("defines.zig");
 const collections = @import("../util/collections.zig");
-const threading = @import("../util/threading.zig");
 const cli = @import("cli.zig");
 const log = @import("log.zig");
 
@@ -37,8 +36,6 @@ astMap: ASTMap,
 
 arena: std.heap.ArenaAllocator,
 
-lock: threading.OnlyIfThreading(defines.Lock),
-
 counts: struct {
     topLevels: u32 = 0,
     modules: u32 = 0,
@@ -69,7 +66,6 @@ pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Context {
         .tokenMap = TokenMap.initCapacity(allocator, 512) catch return error.AllocatorFailure,
         .astMap = ASTMap.initCapacity(allocator, 512) catch return error.AllocatorFailure,
         .arena = arena,
-        .lock = if (defines.threading) .{} else {},
         .resolved = resolved,
         .settings = settings,
         .counts = .{},
@@ -85,19 +81,8 @@ pub fn deinit(self: *Context) void {
 pub fn openRead(self: *Context, file: []const u8) CompilerError!defines.FilePtr {
     const path = try self.realpath(file);
 
-    {
-        if (defines.threading) {
-            self.lock.lockShared();
-            defer self.lock.unlockShared();
-        }
-        if (self.resolved.get(path)) |id| {
-            return id;
-        }
-    }
-
-    if (defines.threading) {
-        self.lock.lock();
-        defer self.lock.unlock();
+    if (self.resolved.get(path)) |id| {
+        return id;
     }
 
     self.filenameMap.append(self.arena.allocator(), path) catch return error.AllocatorFailure;
@@ -139,29 +124,14 @@ pub fn openWrite(file: []const u8) CompilerError!std.fs.File {
 }
 
 pub fn getFile(self: *Context, file: defines.FilePtr) []const u8 {
-    if (defines.threading) {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
-    }
-
     return self.fileMap.items[file];
 }
 
 pub fn getFileName(self: *Context, file: defines.FilePtr) []const u8 {
-    if (defines.threading) {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
-    }
-
     return self.filenameMap.items[file];
 }
 
 pub fn registerTokens(self: *Context, tokens: Lexer.TokenList.Slice) CompilerError!defines.TokenPtr {
-    if (defines.threading) {
-        self.lock.lock();
-        defer self.lock.unlock();
-    }
-
     self.counts.tokens += tokens.len;
 
     self.tokenMap.append(self.arena.allocator(), try collections.deepCopy(tokens, self.arena.allocator())) catch return error.AllocatorFailure;
@@ -170,20 +140,10 @@ pub fn registerTokens(self: *Context, tokens: Lexer.TokenList.Slice) CompilerErr
 }
 
 pub fn getTokens(self: *Context, tokens: defines.TokenPtr) Lexer.TokenList.Slice {
-    if (defines.threading) {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
-    }
-
     return self.tokenMap.items[tokens];
 }
 
 pub fn registerAST(self: *Context, ast: Parser.AST) CompilerError!defines.ASTPtr {
-    if (defines.threading) {
-        self.lock.lock();
-        defer self.lock.unlock();
-    }
-
     self.counts.modules += 1;
     self.counts.expressions += ast.expressions.len;
     self.counts.statements += ast.statements.len;
@@ -195,38 +155,18 @@ pub fn registerAST(self: *Context, ast: Parser.AST) CompilerError!defines.ASTPtr
 }
 
 pub fn getAST(self: *Context, ast: defines.ASTPtr) Parser.AST {
-    if (defines.threading) {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
-    }
-
     return self.astMap.items[ast];
 }
 
 pub fn registerModule(self: *Context, module: *const Prepass.Module) void {
-    if (defines.threading) {
-        self.lock.lock();
-        defer self.lock.unlock();
-    }
-
     self.counts.topLevels += module.symbols.len;
 }
 
 pub fn isProcessed(self: *Context, file: []const u8) bool {
-    if (defines.threading) {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
-    }
-
     return self.resolved.contains(file);
 }
 
 pub fn realpath(self: *Context, file: []const u8) CompilerError![]const u8 {
-    if (defines.threading) {
-        self.lock.lock();
-        defer self.lock.unlock();
-    }
-
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     var allocator = std.heap.FixedBufferAllocator.init(&buf);
 
@@ -249,11 +189,6 @@ pub fn realpath(self: *Context, file: []const u8) CompilerError![]const u8 {
 }
 
 pub fn getFileId(self: *Context, file: []const u8) defines.FilePtr {
-    if (defines.threading) {
-        self.lock.lockShared();
-        defer self.lock.unlockShared();
-    }
-
     return
         if (self.resolved.get(file)) |f| f
         else 0;
