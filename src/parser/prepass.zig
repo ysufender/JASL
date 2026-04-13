@@ -109,18 +109,18 @@ pub fn init(context: *Context, initial: defines.ASTPtr, allocator: std.mem.Alloc
     return
         if (defines.threading) .{
             .initial = context.getAST(initial),
-            .arena = arena,
             .context = context,
             .modules = try ModuleList.init(arena.allocator(), 128),
             .lock = .{},
             .wg = .{},
             .hadErr = .init(false),
+            .arena = arena,
         }
         else .{
             .initial = context.getAST(initial),
-            .arena = arena,
             .context = context,
             .modules = try ModuleList.init(arena.allocator(), 128),
+            .arena = arena,
         };
 }
 
@@ -177,7 +177,6 @@ pub fn prepass(self: *Prepass, allocator: std.mem.Allocator) Error!ModuleList {
 /// Threaded recursive prepassing. Uses mutexes.
 fn prepassImpl(self: *Prepass, ast: Parser.AST, name: []const u8) if (defines.threading) void else Error!void {
     const tokens = self.context.getTokens(ast.tokens);
-    //std.debug.print("Prepassing module {s} with id {d}\n", .{name, tokens.items(.start)[0]});
     const allocator =
         if (defines.threading) self.safeAlloc.allocator()
         else self.arena.allocator();

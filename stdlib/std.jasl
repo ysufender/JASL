@@ -164,6 +164,16 @@ pub let Result = fn (T: type, E: type) -> type {
     };
 };
 
+// TODO: Improve
+pub let Either = fn (T: type, P: type) -> type {
+    return union(enum) {
+        let Self = this();
+
+        This: T,
+        That: P,
+    };
+};
+
 pub let Pair = fn (T: type, P: type) -> type {
     return struct {
         let Self = this();
@@ -354,7 +364,7 @@ pub let Equible = struct {
             @Union -> |u|
                 lhs.tag == rhs.tag
                 and
-                Generic(typeOf(B::field(lhs, B::enumStr(lhs.tag))), B::field(lhs, B::enumStr(lhs.tag)), B::field(rhs, B::enumStr(rhs.tag))),
+                Generic(typeOf(field(lhs, enumStr(lhs.tag))), field(lhs, enumStr(lhs.tag)), field(rhs, enumStr(rhs.tag))),
             else -> unreachable(),
         };
     };

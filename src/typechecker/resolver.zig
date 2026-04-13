@@ -736,12 +736,19 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             try self.resolveExpression(lhs);
         },
         .MutableType, .PointerType, .SliceType => try self.resolveExpression(expr.value),
-        .FunctionType, .ArrayType => {
-            const sizeorArgs = ast.extra[expr.value];
-            try self.resolveExpression(sizeorArgs);
+        .ArrayType => {
+            const size = ast.extra[expr.value];
+            try self.resolveExpression(size);
 
-            const innerOrReturns = ast.extra[expr.value + 1];
-            try self.resolveExpression(innerOrReturns);
+            const inner = ast.extra[expr.value + 1];
+            try self.resolveExpression(inner);
+        },
+        .FunctionType => {
+            const args = ast.extra[expr.value];
+            try self.resolveExpression(args);
+
+            const returns = ast.extra[expr.value + 1];
+            try self.resolveExpression(returns);
         },
         .Scoping => {
             var root = exprPtr;
@@ -855,25 +862,10 @@ fn resolveSignature(self: *Resolver, signaturePtr: defines.SignaturePtr, index: 
                 self.lastToken = signaturePtr;
                 const lexeme = field.lexeme(self.context, self.dataIndex());
 
-                const decl = try self.decls.addOne(allocator);
-                self.decls.set(decl, .{
-                    .kind = t,
-                    .scope = self.currentScope,
-                    .public = true,
-                    .index = index,
-                    .token = signaturePtr,
-                    .node = signaturePtr,
-                });
-
                 const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
                     catch return error.AllocatorFailure;
 
-                return
-                    if (isPresent.found_existing) true
-                    else blk: {
-                        isPresent.value_ptr.* = decl;
-                        break :blk false;
-                    };
+                return isPresent.found_existing;
             }
             else {
                 const field = ast.signatures.get(signaturePtr);
@@ -981,6 +973,9 @@ fn handleScopeDefs(self: *Resolver, declarations: defines.Range) Error!void {
                 .node = field.type,
             });
         }
+
+        const initializer = ast.extra[def + 2];
+        try self.resolveExpression(initializer);
     }
 }
 
@@ -1070,4 +1065,5 @@ const builtins = [_][]const u8 {
     "typeInfo", "hasField", "compileError", "bitSet",
     "bitSizeOf", "unreachable", "enumStr", "typeOf",
     "field", "fieldIndex", "hasDef", "definitionIndex",
+    "this",
 };

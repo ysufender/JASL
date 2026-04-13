@@ -16,6 +16,8 @@ pub const VariableSignatureMap = collections.MultiArrayList(VariableSignature);
 pub const ExpressionMap = collections.MultiArrayList(Expression);
 pub const StatementMap = collections.MultiArrayList(Statement);
 
+const assert = std.debug.assert;
+
 // Because manually tagged unions are more
 // performant with collections.MultiArrayList(T)
 pub const Expression = struct {
@@ -91,7 +93,7 @@ pub const AST = struct {
 
     pub fn eql(self: *const AST, other: *const AST) bool {
         return
-            self.tokens.eql(other.tokens)
+            self.tokens == other.tokens
             and self.expressions.eql(&other.expressions)
             and self.statements.eql(&other.statements)
             and self.signatures.eql(&other.signatures)
@@ -102,7 +104,7 @@ pub const AST = struct {
     pub fn print(self: *const AST, context: *common.CompilerContext) void {
         const tokens = context.getTokens(self.tokens);
         const file = tokens.items(.start)[0];
-        std.debug.print("\nTokens:      ", .{});
+        std.debug.print("\nTokens ({d}):    ", .{tokens.len});
         var titerator = tokens.iterator();
         var i: u32 = 0;
         while (titerator.next()) |token| {
@@ -112,7 +114,7 @@ pub const AST = struct {
             }
             std.debug.print("({d} {s}) ", .{titerator.idx - 1, @tagName(token.type)});
         }
-        std.debug.print("\nExpressions: ", .{});
+        std.debug.print("\nExpressions ({d}):", .{self.expressions.len});
         var eiterator = self.expressions.iterator();
         i = 0;
         while (eiterator.next()) |expr| {
@@ -122,7 +124,7 @@ pub const AST = struct {
             }
             std.debug.print("({s} {d}) ", .{@tagName(expr.type), expr.value});
         }
-        std.debug.print("\nStatements:  ", .{});
+        std.debug.print("\nStatements ({d}):", .{self.statements.len});
         var siterator = self.statements.iterator();
         i = 0;
         while (siterator.next()) |stmt| {
@@ -132,7 +134,7 @@ pub const AST = struct {
             }
             std.debug.print("({s} {d}) ", .{@tagName(stmt.type), stmt.value});
         }
-        std.debug.print("\nSignatures:  ", .{});
+        std.debug.print("\nSignatures ({d}):", .{self.signatures.len});
         var viterator = self.signatures.iterator();
         i = 0;
         while (viterator.next()) |sign| {
@@ -142,11 +144,11 @@ pub const AST = struct {
             }
             std.debug.print("({s}{s} {d}) ", .{if (sign.public) "pub " else "", tokens.get(sign.name).lexeme(context, file), sign.type});
         }
-        std.debug.print("\nMask:        ", .{});
+        std.debug.print("\nMask ({d}):      ", .{self.statementMask.len});
         for (self.statementMask[0..@min(16, self.statementMask.len)]) |stmt| {
             std.debug.print("{d} ", .{stmt});
         }
-        std.debug.print("\nExtra:       ", .{});
+        std.debug.print("\nExtra ({d}):     ", .{self.extra.len});
         for (self.extra[0..@min(16, self.extra.len)]) |extra| {
             std.debug.print("{d} ", .{extra});
         }
@@ -182,13 +184,13 @@ pub fn init(base: Allocator, context: *common.CompilerContext, tokensPtr: define
         .expressionMap = try ExpressionMap.init(arena.allocator(), tokens.len / 2),
         .statementMap = try StatementMap.init(arena.allocator(), tokens.len / 4),
         .statementMask = std.ArrayList(defines.StatementPtr).initCapacity(arena.allocator(), tokens.len / 4) catch return error.AllocatorFailure,
+        .extra = std.ArrayList(defines.OpaquePtr).initCapacity(arena.allocator(), tokens.len) catch return error.AllocatorFailure,
+        .scratch = std.ArrayList(defines.OpaquePtr).initCapacity(arena.allocator(), 128) catch return error.AllocatorFailure,
         .file = tokens.items(.start)[0],
         .context = context,
         .tokens = tokens,
         .current = 1,
         .arena = arena,
-        .extra = std.ArrayList(defines.OpaquePtr).initCapacity(arena.allocator(), tokens.len) catch return error.AllocatorFailure,
-        .scratch = std.ArrayList(defines.OpaquePtr).initCapacity(arena.allocator(), 128) catch return error.AllocatorFailure,
     };
 }
 
@@ -234,8 +236,6 @@ pub fn parse(self: *Parser) common.CompilerError!defines.ASTPtr {
     };
 
     const result = try self.context.registerAST(ast);
-    //std.debug.print("\nParse {s}", .{self.context.getFileName(self.file)});
-    //ast.print(self.context);
     return result;
 }
 
@@ -297,6 +297,7 @@ fn deferStatement(self: *Parser) StatementResult {
 }
 
 fn expressionStmt(self: *Parser) StatementResult {
+    assert(self.current > 0);
     self.current -= 1;
 
     const expr = try self.expression();
@@ -403,7 +404,7 @@ fn switchStatement(self: *Parser) StatementResult {
 
     _ = try self.consume(.RBrace, error.MissingBrace, "Missing enclosing brace '}' after switch statement.");
 
-    // (<expr>, <stmt>) pairs
+    // (<expr>, <binds>, <stmt>)
     const cases = try self.commitScratch(scratchStart);
 
     const start: defines.OpaquePtr = @intCast(self.extra.items.len);
@@ -488,7 +489,7 @@ fn breakStatement(self: *Parser) StatementResult {
     const result = try self.alloc(Statement);
     self.statementMap.set(result, .{
         .type = .Break,
-        .value = 0
+        .value = 0 // maybe future label
     });
     return result;
 }
@@ -498,7 +499,7 @@ fn continueStatement(self: *Parser) StatementResult {
     const result = try self.alloc(Statement);
     self.statementMap.set(result, .{
         .type = .Continue,
-        .value = 0
+        .value = 0 // maybe future label
     });
     return result;
 }
@@ -859,6 +860,7 @@ fn postfix(self: *Parser) ExpressionResult {
             expr = newExpr;
         }
         else if (self.match(&.{.LParen})) {
+            assert(self.current > 0);
             self.current -= 1;
             const args = try self.primary();
 
@@ -968,6 +970,7 @@ fn primary(self: *Parser) ExpressionResult {
 }
 
 fn mark(self: *Parser, comptime stmt: bool) if (stmt) StatementResult else ExpressionResult {
+    assert(if (stmt) self.current > 0 else true);
     self.current -= if (stmt) 1 else 0;
 
     const marks = try self.compilerHint();
@@ -983,9 +986,9 @@ fn mark(self: *Parser, comptime stmt: bool) if (stmt) StatementResult else Expre
         },
     }
     else switch (self.expressionMap.items(.type)[marked]) {
-        .StructDefinition, .EnumDefinition, .UnionDefinition, .FunctionDefinition, .Lambda => {},
+        .StructDefinition, .EnumDefinition, .UnionDefinition, .FunctionDefinition => {},
         else  => |t| {
-            self.report("Expression metadata can only be attached to type definitions and function/closures. Received '{s}'", .{@tagName(t)});
+            self.report("Expression metadata can only be attached to type definitions and functions. Received '{s}'", .{@tagName(t)});
             return error.IllegalSyntax;
         },
     }
@@ -1360,6 +1363,7 @@ fn typeExpression(self: *Parser) ExpressionResult {
         },
 
         else => {
+            assert(self.current > 0);
             self.current -= 1;
             _ = try self.consume(.Identifier, error.MissingTypeSpecifier, "Expected type name.");
         }
@@ -1416,6 +1420,7 @@ fn commonBinary(self: *Parser, expr: defines.ExpressionPtr, comptime next: anyty
 }
 
 fn synchronize(self: *Parser) void {
+    assert(self.current > 0);
     self.current -= 1;
 
     while (!self.isAtEnd()) {
@@ -1448,11 +1453,11 @@ fn commitScratch(self: *Parser, scratchStart: usize) common.CompilerError!define
 }
 
 fn alloc(self: *Parser, comptime T: type) common.CompilerError!defines.OpaquePtr {
-    if (comptime T == Expression) {
+    if (T == Expression) {
         return @intCast(self.expressionMap.addOne(self.allocator()) catch return error.AllocatorFailure);
-    } else if (comptime T == Statement) {
+    } else if (T == Statement) {
         return @intCast(self.statementMap.addOne(self.allocator()) catch return error.AllocatorFailure);
-    } else if (comptime T == VariableSignature) {
+    } else if (T == VariableSignature) {
         return @intCast(try self.signaturePool.addOne(self.allocator()));
     } else {
         @compileError("Unsupported type.");
@@ -1494,7 +1499,7 @@ fn consume(self: *Parser, tokenType: Lexer.TokenType, err: common.CompilerError,
 }
 
 fn previous(self: *Parser) defines.TokenPtr {
-    if (self.current == 0) unreachable;
+    assert(self.current != 0);
     return self.current - 1;
 }
 
@@ -1508,8 +1513,9 @@ fn isAtEnd(self: *Parser) bool {
 }
 
 fn advance(self: *Parser) defines.TokenPtr {
-    if (!self.isAtEnd()) self.current += 1;
-    return self.previous();
+    assert(!self.isAtEnd());
+    defer self.current += 1;
+    return self.current;
 }
 
 fn check(self: *Parser, tokenType: Lexer.TokenType) bool {

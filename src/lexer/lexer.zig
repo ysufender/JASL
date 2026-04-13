@@ -3,6 +3,8 @@ const common = @import("../core/common.zig");
 const collections = @import("../util/collections.zig");
 const defines = @import("../core/defines.zig");
 
+const assert = std.debug.assert;
+
 pub const TokenList = collections.MultiArrayList(Token);
 
 pub const TokenType = enum(u8) {
@@ -53,27 +55,26 @@ pub const Token = struct {
     pub fn toString(self: *const Token, gpa: std.mem.Allocator, file: defines.FilePtr) []const u8 {
         const string = self.lexeme(file);
         const length =  @tagName(self.type).len + lex.len + 4;
-        const buffer = gpa.alloc(u8, length) catch return "";
+        const buffer = gpa.alloc(u8, length) catch return @errorName(error.AllocatorFailure);
         return std.fmt.bufPrint(buffer, "<{s}: {s}>", .{@tagName(self.type), string}) catch unreachable;
     }
 
     pub fn lexeme(self: *const Token, context: *common.CompilerContext, file: defines.FilePtr) []const u8 {
+        assert(self.start <= self.end);
+
         return context.getFile(file)[self.start..self.end];
     }
 
     pub fn position(self: *const Token, context: *common.CompilerContext, file: defines.FilePtr) Position {
-        const source = context.getFile(file)[0..self.start];
-        var line: defines.Offset = 1;
-        var col: defines.Offset = 0;
+        var source = context.getFile(file)[0..self.start];
 
-        for (source) |ch| {
-            if (ch == '\n') {
-                line += 1;
-                col = 0;
-            }
-
-            col += 1;
+        var line: defines.Offset = 0;
+        while (std.mem.indexOfScalar(u8, source, '\n')) |newline| {
+            source = source[(newline + 1)..];
+            line += 1;
         }
+
+        const col: defines.Offset = @intCast(source.len - 1);
 
         return .{
             .line = line,
@@ -174,7 +175,7 @@ pub fn lex(self: *Lexer) common.CompilerError!defines.TokenListPtr {
     self.start = 0;
     self.current = 0;
 
-    return self.context.registerTokens(self.tokens.toOwnedSlice());
+    return self.context.registerTokens(self.tokens.slice());
 }
 
 pub fn lexToken(self: *Lexer) common.CompilerError!Token {
@@ -187,6 +188,7 @@ pub fn lexToken(self: *Lexer) common.CompilerError!Token {
     }
     else {
         try self.scanToken();
+        assert(self.tokens.len > 0);
         return self.tokens[self.tokens.len - 1];
     }
 }
@@ -235,6 +237,7 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
             else if (self.match('*')) {
                 var ident: u32 = 1;
 
+                // Rewrite SIMD
                 while (ident > 0 and !self.isAtEnd()) {
                     const ch = self.advance();
 
@@ -303,7 +306,7 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
             if (std.ascii.isAlphabetic(ch) or ch == '_'){
                 const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
                 const num = comptime "0123456789";
-                const alphanum = alpha ++ num;
+                const alphanum = comptime (alpha ++ num);
 
                 const index =
                     if (std.mem.indexOfNonePos(u8, self.source, self.current, alphanum))
@@ -323,7 +326,7 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
         else => |ch| {
             const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_#";
             const num = comptime "0123456789";
-            const alphanum = alpha ++ num;
+            const alphanum = comptime (alpha ++ num);
 
             if (std.mem.containsAtLeastScalar(u8, num, 1, ch)) {
                 while (std.mem.containsAtLeastScalar(u8, num, 1, self.peek())) {
@@ -383,15 +386,6 @@ fn skipWhitespace(self: *Lexer) void {
             self.end;
 
     self.current = @intCast(index);
-
-//        while (self.current < self.end) {
-//            switch (self.source[self.current]) {
-//                ' ', '\t', '\r', '\n' => {
-//                    self.current += 1;
-//                },
-//                else => return,
-//            }
-//        }
 }
 
 fn check(self: *const Lexer, expected: u8) bool {
@@ -409,9 +403,8 @@ fn match(self: *Lexer, expected: u8) bool {
 }
 
 fn previous(self: *const Lexer) u8 {
-    return
-        if (self.current <= 0) 0
-        else self.source[self.current-1];
+    assert(self.current > 0);
+    return self.source[self.current-1];
 }
 
 fn peek(self: *const Lexer) u8 {
@@ -421,9 +414,8 @@ fn peek(self: *const Lexer) u8 {
 }
 
 fn peekn(self: *const Lexer, n: u32) u8 {
-    return
-        if (self.current + n >= self.source.len) 0
-        else self.source[self.current + n];
+    assert(self.current + n < self.source.len);
+    return self.source[self.current + n];
 }
 
 fn advance(self: *Lexer) u8 {

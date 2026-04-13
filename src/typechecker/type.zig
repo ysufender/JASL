@@ -1,4 +1,4 @@
-pub const Type = u32;
+pub const TypeID = u32;
 
 pub const TypeInfo = union(enum) {
     Struct: Struct,
@@ -20,7 +20,7 @@ pub const TypeInfo = union(enum) {
 pub const FieldInfo = struct {
     public: bool,
     name: []const u8,
-    valueType: Type,
+    valueType: TypeID,
 };
 
 pub const Struct = struct {
@@ -41,7 +41,7 @@ pub const Enum = struct {
 
 pub const Pointer = struct {
     mutable: bool,
-    child: Type,
+    child: TypeID,
     pointerType: enum {
         Slice,
         Single,
@@ -51,8 +51,8 @@ pub const Pointer = struct {
 pub const Function = struct {
     mutable: bool,
     name: []const u8,
-    argTypes: []const Type,
-    returnTypes: []const Type,
+    argTypes: []const TypeID,
+    returnTypes: []const TypeID,
 };
 
 pub const Integer = struct {

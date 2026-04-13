@@ -169,7 +169,7 @@ pub let Iterator = fn (T: type) -> type {
                 fn (_: *mut For) -> Next { return Next(@None); },
                 fn (_: *mut For) -> Next { return Next(@None); },
                 fn (_: *mut For) -> bool { return true; },
-                Implement(For),
+                Interface::Implement(For),
             );
         };
 
@@ -310,6 +310,7 @@ pub let Iterator = fn (T: type) -> type {
 
                 pub let Implement = fn (For: type) -> *fn (Extract(For, @Over)) -> For {
                     let With = Extract(For, @Terminal);
+                    let Over = Extract(For, @Over);
 
                     if With.len == 0 {
                         compileError("'{any}'::terminate can't be default implemented, because it is a direct terminal.", (For));
@@ -599,14 +600,15 @@ pub let Sum = fn (Over: type) -> type {
     return struct {
         pub let Of = N::Numeric(Extract(Over, @Of));
         pub let Over = Over;
+        let OverOf = Extract(Over, @Of);
         pub let Terminal: []type = (*fn (Of, OverOf) -> Of, mut Of);
 
         let Self = this();
 
         pub let terminate = fn (iterator: Over) -> Of {
             let res: Of = std::DefaultConstructible::Construct(Of);
-            while !self.eos() {
-                N::Addable::Generic(Of, res, self.inner.next().unwrap());
+            while !iterator.eos() {
+                res = N::Addable::Generic(Of, res, iterator.next().unwrap());
             }
 
             return res;
@@ -733,7 +735,7 @@ pub let Range = fn (T: type) -> type {
                 if (end < start) -1 else 1
             );
 
-            if M::Unsigned(T) and end < start {
+            if N::Unsigned(T) and end < start {
                 D::assert(false, "Impossible backward iteration with unsigned values in Range iterator.");
             }
 
@@ -765,7 +767,7 @@ pub let Range = fn (T: type) -> type {
         };
 
         pub let eos = fn (self: *mut Self) -> bool {
-            return switch M::Unsigned(T) or self.sign > 0 {
+            return switch N::Unsigned(T) or self.sign > 0 {
                 true -> self.start >= self.end,
                 false -> self.start <= self.end,
             };

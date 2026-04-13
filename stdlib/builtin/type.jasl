@@ -1,3 +1,5 @@
+pub let Type = u32;
+
 pub let TypeInfo = union(enum) {
     Struct: Struct,
     Union: Union,
@@ -16,45 +18,45 @@ pub let TypeInfo = union(enum) {
 };
 
 pub let FieldInfo = struct {
-    pub public: bool,
-    pub name: []u8,
-    pub valueType: type,
+    public: bool,
+    name: []u8,
+    valueType: Type,
 };
 
 pub let Struct = struct {
-    pub mutable: bool,
-    pub name: []u8,
-    pub fields: []FieldInfo,
-    pub definitions: []FieldInfo,
+    mutable: bool,
+    name: []u8,
+    fields: []FieldInfo,
+    definitions: []FieldInfo,
 };
 
 pub let Union = Struct;
 
 pub let Enum = struct {
-    pub mutable: bool,
-    pub name: []u8,
-    pub fields: [][]u8,
-    pub definitions: []FieldInfo,
+    mutable: bool,
+    name: []u8,
+    fields: [][]u8,
+    definitions: []FieldInfo,
 };
 
 pub let Pointer = struct {
-    pub mutable: bool,
-    pub child: type,
-    pub pointerType: enum {
+    mutable: bool,
+    child: Type,
+    pointerType: enum {
         Slice,
         Single,
     },
 };
 
 pub let Function = struct {
-    pub mutable: bool,
-    pub name: []u8,
-    pub argTypes: []type,
-    pub returnTypes: []type,
+    mutable: bool,
+    name: []u8,
+    argTypes: []Type,
+    returnTypes: []Type,
 };
 
 pub let Integer = struct {
-    pub mutable: bool,
-    pub size: u8,
-    pub signed: bool,
+    mutable: bool,
+    size: u8,
+    signed: bool,
 };

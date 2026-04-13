@@ -1,6 +1,5 @@
 import std;
 import std::iterator as I;
-import std::math as M;
 
 let Main = std::Result(void, std::ErrorCode);
 
