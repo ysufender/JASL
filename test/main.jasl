@@ -1,28 +1,18 @@
-import std;
-import std::iterator as I;
+/*import std;
 
-let Main = std::Result(void, std::ErrorCode);
+let cPtr: *fn type -> type = fn |T| #(@c) *T;
+let toSlice = fn (T: type, ptr: *T, len: u32) -> []T {
+    return ptr[0..len];
+};
 
 let main = fn () -> Main {
-    _ = integrate(fn |x| x * x, 0.0, 4.0);
+    let cStylePtr: cPtr(u32) = undefined;
+    let cSlice = toSlice(u32, cStylePtr, 32);
 
     return Main(@Ok);
 };
 
-let integrate = #(@default(@dx, 0.0001)) fn (
-    func: *fn (float) -> float,
-    from: float,
-    to: float,
-    dx: float,
-) -> float {
-    let Interval = I::Range(float);
-    let Graph = I::Map(float);
-    let Integral = I::Map(float);
-    let Sum = I::Sum;
+let Main = std::Result(void, std::ErrorCode);
+*/
 
-    return I::Range(float)
-        .init(from, to, dx)
-        .pipe(Graph).with(func)
-        .pipe(Integral).with(fn |y| y * dx)
-        .terminate(Sum);
-};
+let main: u32 = false;

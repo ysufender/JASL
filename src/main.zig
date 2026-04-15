@@ -51,8 +51,11 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     var resolver = try Resolver.init(allocator, &context, &modules);
     const resolved = try resolver.resolve(allocator);
 
-    context.stats();
+    var typechecker = try Typechecker.init(allocator, &context, &modules, &resolved);
+    const typechecked = try typechecker.typecheck(allocator);
+    _ = typechecked;
 
+    context.stats();
     if (false) {
         var miterator = modules.modules.iterator();
         _ = miterator.next();

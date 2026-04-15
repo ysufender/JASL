@@ -48,8 +48,8 @@ pub let eql = fn (T: type) -> *fn ([]T, []T) -> bool {
                 return false;
             }
 
-            this = this.subslice(1, this.len);
-            that = that.subslice(1, that.len);
+            this = this[1..this.len];
+            that = that[1..that.len];
         }
 
         return true;
@@ -94,7 +94,7 @@ pub let filterComptime = fn (T: type, items: []T, pred: *fn T -> bool) -> []T {
         }
     }
 
-    return ret.subslice(0, pass);
+    return ret[0..pass];
 };
 
 pub let mapComptime = fn (T: type, R: type, items: []T, mapFn: *fn T -> R) -> []R {

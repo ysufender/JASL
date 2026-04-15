@@ -26,6 +26,7 @@ pub const Expression = struct {
         Binary, // resolved
         Literal,
         Indexing, // resolved
+        Slicing,
         Identifier, // resolved
         Unary, // resolved
         StructDefinition, // resolved
@@ -85,11 +86,12 @@ pub const VariableSignature = struct {
 
 pub const AST = struct {
     tokens: defines.TokenPtr,
-    expressions: ExpressionMap.Slice,
-    statements: StatementMap.Slice,
-    signatures: VariableSignatureMap.Slice,
+    expressions: ExpressionMap,
+    statements: StatementMap,
+    signatures: VariableSignatureMap,
     statementMask: std.ArrayList(defines.StatementPtr).Slice,
-    extra: std.ArrayList(defines.OpaquePtr).Slice,
+    extra: std.ArrayList(defines.OpaquePtr),
+    stats: Stats,
 
     pub fn eql(self: *const AST, other: *const AST) bool {
         return
@@ -156,9 +158,18 @@ pub const AST = struct {
     }
 };
 
+pub const Stats = struct {
+    integer: u32 = 0,
+    float: u32 = 0,
+    string: u32 = 0,
+    bool: u32 = 0,
+    types: u32 = 0,
+    meta: u32 = 0,
+};
+
 const Parser = @This();
 
-tokens: Lexer.TokenList.Slice,
+tokens: *const Lexer.TokenList.Slice,
 current: defines.TokenPtr,
 
 arena: std.heap.ArenaAllocator,
@@ -174,6 +185,11 @@ scratch: std.ArrayList(defines.OpaquePtr),
 
 file: defines.FilePtr,
 context: *common.CompilerContext,
+
+// expression/statement counts are already stored in the Context.
+/// In debug mode, stores counts for each expression/statement type.
+/// In release mode, only stores literal counts per type.
+stats: Stats,
 
 pub fn init(base: Allocator, context: *common.CompilerContext, tokensPtr: defines.TokenListPtr) common.CompilerError!Parser {
     var arena = std.heap.ArenaAllocator.init(base);
@@ -191,6 +207,7 @@ pub fn init(base: Allocator, context: *common.CompilerContext, tokensPtr: define
         .tokens = tokens,
         .current = 1,
         .arena = arena,
+        .stats = .{ }
     };
 }
 
@@ -198,6 +215,12 @@ pub fn init(base: Allocator, context: *common.CompilerContext, tokensPtr: define
 /// Parser is undefined and should be reinitialized after the call.
 pub fn parse(self: *Parser) common.CompilerError!defines.ASTPtr {
     defer self.arena.deinit();
+
+    // any Type
+    self.expressionMap.appendAssumeCapacity(.{
+        .type = .ValueType,
+        .value = 0,
+    });
 
     var errCount: u32 = 0;
     var lastErr: common.CompilerError = undefined;
@@ -228,11 +251,12 @@ pub fn parse(self: *Parser) common.CompilerError!defines.ASTPtr {
 
     const ast = AST{
         .tokens = self.file,
-        .expressions = self.expressionMap.slice(),
-        .statements = self.statementMap.slice(),
-        .signatures = self.signaturePool.slice(),
+        .expressions = self.expressionMap.mutableSlice(),
+        .statements = self.statementMap.mutableSlice(),
+        .signatures = self.signaturePool.mutableSlice(),
         .statementMask = self.statementMask.items,
-        .extra = self.extra.items,
+        .extra = self.extra,
+        .stats = self.stats,
     };
 
     const result = try self.context.registerAST(ast);
@@ -358,7 +382,7 @@ fn inlineAssembly(self: *Parser) StatementResult {
 }
 
 fn returnStatement(self: *Parser) StatementResult {
-    const expr = try self.expression();
+    const expr = try self.ifExpression();
     _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
     const result = try self.alloc(Statement);
@@ -371,7 +395,7 @@ fn returnStatement(self: *Parser) StatementResult {
 }
 
 fn switchStatement(self: *Parser) StatementResult {
-    const item = try self.expression();
+    const item = try self.ifExpression();
 
     _ = try self.consume(.LBrace, error.MissingBrace, "Expected a block after switch statement.");
 
@@ -422,7 +446,7 @@ fn switchStatement(self: *Parser) StatementResult {
 }
 
 fn conditional(self: *Parser) StatementResult {
-    const condition = try self.expression();
+    const condition = try self.ifExpression();
 
     if (!self.check(.LBrace)) {
         self.report("Expected a block after if statement.", .{});
@@ -462,7 +486,7 @@ fn conditional(self: *Parser) StatementResult {
 }
 
 fn whileStatement(self: *Parser) StatementResult {
-    const condition = try self.expression();
+    const condition = try self.ifExpression();
 
     if (!self.check(.LBrace)) {
         self.report("Expected a while body.", .{});
@@ -519,7 +543,7 @@ fn variable(self: *Parser, public: bool) StatementResult {
     const signatures = try self.commitScratch(sigsStart);
 
     _ = try self.consume(.Equal, error.MissingAssignment, "Expected assignment in variable definition.");
-    const expr = try self.expression();
+    const expr = try self.ifExpression();
     _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
     const start: defines.OpaquePtr = @intCast(self.extra.items.len);
@@ -538,7 +562,7 @@ fn variable(self: *Parser, public: bool) StatementResult {
 
 fn discard(self: *Parser) StatementResult {
     _ = try self.consume(.Equal, error.MissingAssignment, "Expected an assignment after discard.");
-    const expr = try self.expression();
+    const expr = try self.ifExpression();
     _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
     const result = try self.alloc(Statement);
@@ -624,10 +648,10 @@ fn ifExpression(self: *Parser) ExpressionResult {
     _ = try self.consume(.LParen, error.MissingBrace, "Expected a left parenthesis to denote if expression condition.");
     const condition = try self.ifExpression();
     _ = try self.consume(.RParen, error.MissingBrace, "Expected an enclosing parenthesis.");
-    const then = try self.expression();
+    const then = try self.ifExpression();
 
     _ = try self.consume(.Else, error.MissingBranch, "Expected an 'else' branch in conditional expression.");
-    const otherwise = try self.expression();
+    const otherwise = try self.ifExpression();
 
     const start: defines.OpaquePtr = @intCast(self.extra.items.len);
     self.extra.append(self.allocator(), condition) catch return error.AllocatorFailure;
@@ -894,19 +918,39 @@ fn postfix(self: *Parser) ExpressionResult {
             });
             expr = newExpr;
         } else if (self.match(&.{.LBracket})) {
-            const index = try self.expression();
-            _ = try self.consume(.RBracket, error.MissingBracket, "Expected closing bracket ']'.");
+            const index = try self.ifExpression();
 
-            const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-            self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
-            self.extra.append(self.allocator(), index) catch return error.AllocatorFailure;
+            if (self.match(&.{.Range})) {
+                const rangeEnd = try self.ifExpression();
 
-            const newExpr = try self.alloc(Expression);
-            self.expressionMap.set(newExpr, .{
-                .type = .Indexing,
-                .value = start,
-            });
-            expr = newExpr;
+                _ = try self.consume(.RBracket, error.MissingBracket, "Expected closing bracket ']'.");
+
+                const start: defines.OpaquePtr = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), index) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), rangeEnd) catch return error.AllocatorFailure;
+
+                const newExpr = try self.alloc(Expression);
+                self.expressionMap.set(newExpr, .{
+                    .type = .Slicing,
+                    .value = start,
+                });
+                expr = newExpr;
+            }
+            else {
+                _ = try self.consume(.RBracket, error.MissingBracket, "Expected closing bracket ']'.");
+
+                const start: defines.OpaquePtr = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), index) catch return error.AllocatorFailure;
+
+                const newExpr = try self.alloc(Expression);
+                self.expressionMap.set(newExpr, .{
+                    .type = .Indexing,
+                    .value = start,
+                });
+                expr = newExpr;
+            }
         } else {
             break;
         }
@@ -917,7 +961,15 @@ fn postfix(self: *Parser) ExpressionResult {
 
 fn primary(self: *Parser) ExpressionResult {
     switch (self.tokens.items(.type)[self.peek()]) {
-        .False, .True, .Integer, .Float, .String, .EnumLiteral => {
+        .False, .True, .Integer, .Float, .String, .EnumLiteral => |t| {
+            switch (t) {
+                .False, .True => self.stats.bool += 1,
+                .Integer => self.stats.integer += 1,
+                .Float => self.stats.float += 1,
+                .String => self.stats.string += 1,
+                else => { },
+            }
+
             const expr = try self.alloc(Expression);
             self.expressionMap.set(expr, .{
                 .type = .Literal,
@@ -926,14 +978,17 @@ fn primary(self: *Parser) ExpressionResult {
             return expr;
         },
         .Mut, .Star, .LBracket,
-        .Enum, .Struct, .Union => return self.typeExpression(),
+        .Enum, .Struct, .Union => {
+            self.stats.types += 1;
+            return self.typeExpression();
+        },
         .Fn => return self.function(),
         .LParen => {
             _ = self.advance();
 
             const exprsStart = self.scratch.items.len;
             while (!self.check(.RParen)) {
-                self.scratch.append(self.allocator(), try self.expression()) catch return error.AllocatorFailure;
+                self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
                 if (!self.match(&.{.Comma})) {
                     break;
                 }
@@ -976,7 +1031,7 @@ fn mark(self: *Parser, comptime stmt: bool) if (stmt) StatementResult else Expre
     const marks = try self.compilerHint();
     const marked =
         if (stmt) try self.statement()
-        else try self.expression();
+        else try self.ifExpression();
 
     if (stmt) switch (self.statementMap.items(.type)[marked]) {
         .While, .VariableDefinition => {},
@@ -986,7 +1041,8 @@ fn mark(self: *Parser, comptime stmt: bool) if (stmt) StatementResult else Expre
         },
     }
     else switch (self.expressionMap.items(.type)[marked]) {
-        .StructDefinition, .EnumDefinition, .UnionDefinition, .FunctionDefinition => {},
+        .StructDefinition, .EnumDefinition, .UnionDefinition, .FunctionDefinition,
+        .PointerType => {},
         else  => |t| {
             self.report("Expression metadata can only be attached to type definitions and functions. Received '{s}'", .{@tagName(t)});
             return error.IllegalSyntax;
@@ -996,6 +1052,8 @@ fn mark(self: *Parser, comptime stmt: bool) if (stmt) StatementResult else Expre
     if (marks.start == marks.end) {
         return marked;
     }
+
+    self.stats.meta += marks.end - marks.start;
 
     const start: u32 = @intCast(self.extra.items.len);
     self.extra.append(self.allocator(), marks.start) catch return error.AllocatorFailure;
@@ -1053,7 +1111,7 @@ fn function(self: *Parser) ExpressionResult {
             _ = try self.consume(.Pipe, error.MissingParenthesis, "Expected closing pipe '|' after capture list.");
             const params = try self.commitScratch(paramsStart);
 
-            const body = try self.expression();
+            const body = try self.ifExpression();
 
             const start: defines.OpaquePtr = @intCast(self.extra.items.len);
             self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
@@ -1292,7 +1350,18 @@ fn typeExpression(self: *Parser) ExpressionResult {
             return expr;
         },
         .LBracket => {
-            return if (!self.match(&.{.RBracket})) result: {
+            return if (self.match(&.{.RBracket})) result: {
+                const rest = try self.typeExpression();
+
+                const expr = try self.alloc(Expression);
+                self.expressionMap.set(expr, .{
+                    .type = .SliceType,
+                    .value = rest,
+                });
+
+                break :result expr;
+            }
+            else result: {
                 const size = try self.ifExpression();
                 _ = try self.consume(.RBracket, error.MissingBracket, "Expected enclosing bracket in array type.");
                 const rest = try self.typeExpression();
@@ -1305,17 +1374,6 @@ fn typeExpression(self: *Parser) ExpressionResult {
                 self.expressionMap.set(expr, .{
                     .type = .ArrayType,
                     .value = start,
-                });
-
-                break :result expr;
-            }
-            else result: {
-                const rest = try self.typeExpression();
-
-                const expr = try self.alloc(Expression);
-                self.expressionMap.set(expr, .{
-                    .type = .SliceType,
-                    .value = rest,
                 });
 
                 break :result expr;
@@ -1466,7 +1524,7 @@ fn alloc(self: *Parser, comptime T: type) common.CompilerError!defines.OpaquePtr
 
 fn variableSignature(self: *Parser, public: bool, enforceType: bool) common.CompilerError!defines.SignaturePtr {
     const name = 
-        if (self.match(&.{.Identifier, .Discard})) self.previous()
+        if (self.match(&.{.Identifier})) self.previous()
         else {
             self.report("Expected an identifier in variable signature.", .{});
             return error.MissingIdentifier;

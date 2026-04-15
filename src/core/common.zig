@@ -49,4 +49,6 @@ pub const CompilerError = error {
     InvalidIdentifier,
     MissingModuleName,
     DuplicateSymbol,
+    MissingEntry,
+    NotImplemented,
 };

@@ -849,7 +849,7 @@ pub let Slice = fn (P: type) -> type {
                 return Next(@None, ());
             }
 
-            defer self.items = self.items.subslice(1, self.items.len);
+            defer self.items = self.items[1..self.items.len];
             return Next(@Some, self.items[0]);
         };
 

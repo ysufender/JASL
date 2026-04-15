@@ -104,3 +104,7 @@ pub let CheckTrait = fn (Trait: TraitInfo, On: type) -> bool {
 
     return true;
 };
+
+// TODO
+pub let Allocator = struct {
+};

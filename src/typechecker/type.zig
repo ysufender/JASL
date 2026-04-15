@@ -14,7 +14,7 @@ pub const TypeInfo = union(enum) {
     Function: Function,
     Noreturn: void,
     Any: void,
-    Type: void,
+    Type: TypeID,
 };
 
 pub const FieldInfo = struct {
@@ -45,6 +45,7 @@ pub const Pointer = struct {
     pointerType: enum {
         Slice,
         Single,
+        C,
     },
 };
 

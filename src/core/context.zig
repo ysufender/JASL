@@ -10,6 +10,8 @@ const CompilerSettings = @import("settings.zig");
 const Parser = @import("../parser/parser.zig");
 const Prepass = @import("../parser/prepass.zig");
 
+const assert = std.debug.assert;
+
 /// Central database of compilation
 /// - Assumes there is a single AST and
 /// a single token list per file.
@@ -43,6 +45,14 @@ counts: struct {
     expressions: u32 = 0,
     statements: u32 = 0,
     extras: u32 = 0,
+
+    integer: u32 = 0,
+    float: u32 = 0,
+    string: u32 = 0,
+    bool: u32 = 0,
+    types: u32 = 0,
+
+    meta: u32 = 0,
 },
 
 settings: CompilerSettings,
@@ -123,11 +133,13 @@ pub fn openWrite(file: []const u8) CompilerError!std.fs.File {
     };
 }
 
-pub fn getFile(self: *Context, file: defines.FilePtr) []const u8 {
+pub fn getFile(self: *const Context, file: defines.FilePtr) []const u8 {
+    assert(file < self.fileMap.items.len);
     return self.fileMap.items[file];
 }
 
-pub fn getFileName(self: *Context, file: defines.FilePtr) []const u8 {
+pub fn getFileName(self: *const Context, file: defines.FilePtr) []const u8 {
+    assert(file < self.filenameMap.items.len);
     return self.filenameMap.items[file];
 }
 
@@ -139,23 +151,61 @@ pub fn registerTokens(self: *Context, tokens: Lexer.TokenList.Slice) CompilerErr
     return @intCast(self.tokenMap.items.len - 1);
 }
 
-pub fn getTokens(self: *Context, tokens: defines.TokenPtr) Lexer.TokenList.Slice {
-    return self.tokenMap.items[tokens];
+pub fn getTokens(self: *const Context, tokens: defines.TokenPtr) *const Lexer.TokenList.Slice {
+    assert(tokens < self.tokenMap.items.len);
+    return &self.tokenMap.items[tokens];
 }
 
 pub fn registerAST(self: *Context, ast: Parser.AST) CompilerError!defines.ASTPtr {
+    const ptr: defines.ASTPtr = @intCast(self.astMap.items.len);
+    _ = self.astMap.addOne(self.arena.allocator()) catch return error.AllocatorFailure;
+    return self.overwriteAST(ptr, ast);
+}
+
+pub fn getAST(self: *const Context, ast: defines.ASTPtr) *const Parser.AST {
+    assert(ast < self.astMap.items.len);
+    return &self.astMap.items[ast];
+}
+
+/// Transfers the ownership of the given AST to the caller and expects the caller to overwrite
+/// it via Context.overwriteAST afterwards.
+pub fn getASTForOverwrite(self: *Context, allocator: std.mem.Allocator, ast: defines.ASTPtr) Parser.AST {
+    assert(ast < self.astMap.items.len);
+
+    self.counts.modules -= 1;
+    self.counts.expressions -= ast.expressions.len;
+    self.counts.statements -= ast.statements.len;
+    self.counts.extras -= @intCast(ast.extra.len);
+
+    self.counts.integer -= ast.stats.integer;
+    self.counts.float -= ast.stats.float;
+    self.counts.string -= ast.stats.string;
+    self.counts.bool -= ast.stats.bool;
+    self.counts.types -= ast.stats.types;
+
+    self.counts.meta -= ast.stats.meta;
+
+    return collections.deepCopy(self.astMap.items[ast], allocator);
+}
+
+pub fn overwriteAST(self: *Context, astPtr: defines.ASTPtr, ast: Parser.AST) CompilerError!defines.ASTPtr {
+    assert(astPtr < self.astMap.items.len);
+
     self.counts.modules += 1;
     self.counts.expressions += ast.expressions.len;
     self.counts.statements += ast.statements.len;
-    self.counts.extras += @intCast(ast.extra.len);
+    self.counts.extras += @intCast(ast.extra.items.len);
 
-    self.astMap.append(self.arena.allocator(), try collections.deepCopy(ast, self.arena.allocator())) catch return error.AllocatorFailure;
+    self.counts.integer += ast.stats.integer;
+    self.counts.float += ast.stats.float;
+    self.counts.string += ast.stats.string;
+    self.counts.bool += ast.stats.bool;
+    self.counts.types += ast.stats.types;
 
-    return @intCast(self.astMap.items.len - 1);
-}
+    self.counts.meta += ast.stats.meta;
 
-pub fn getAST(self: *Context, ast: defines.ASTPtr) Parser.AST {
-    return self.astMap.items[ast];
+    self.astMap.items[astPtr] = try collections.deepCopy(ast, self.arena.allocator());
+    return astPtr;
 }
 
 pub fn registerModule(self: *Context, module: *const Prepass.Module) void {
@@ -189,9 +239,10 @@ pub fn realpath(self: *Context, file: []const u8) CompilerError![]const u8 {
 }
 
 pub fn getFileId(self: *Context, file: []const u8) defines.FilePtr {
+    assert(self.resolved.contains(file));
     return
         if (self.resolved.get(file)) |f| f
-        else 0;
+        else unreachable;
 }
 
 pub fn stats(self: *Context) void {

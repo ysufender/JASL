@@ -32,7 +32,7 @@ pub const TokenType = enum(u8) {
     Identifier,
     String, Integer, Float, False, True, EnumLiteral,
     Discard,
-    Cast,
+    Cast, Range,
     EOF,
 };
 
@@ -215,6 +215,7 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
                 self.report("Dot (.) prefixed numeric literals are not allowed.", .{});
                 break :blk error.DotPrefixedNumericLiteral;
             }
+            else if (self.match('.')) self.addToken(.Range) 
             else self.addToken(.Dot),
         ':' =>
             if (self.match(':')) self.addToken(.DoubleColon)
@@ -342,11 +343,11 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
 
                     break :blk self.addToken(.Float);
                 }
-                else if (self.check('.')) {
-                    _ = self.advance();
-                    self.report("Trailing dots (.) after numeric literals are not allowed.", .{});
-                    break :blk error.DotPostfixedNumericLiteral;
-                }
+                //else if (self.check('.')) {
+                //    _ = self.advance();
+                //    self.report("Trailing dots (.) after numeric literals are not allowed.", .{});
+                //    break :blk error.DotPostfixedNumericLiteral;
+                //}
 
                 break :blk self.addToken(.Integer);
             }
@@ -459,7 +460,6 @@ fn report(self: *Lexer, comptime fmt: []const u8, args: anytype) void {
     };
     const pos = errToken.position(self.context, self.file);
 
-    common.log.err("[LEXER ERROR] ", .{});
     common.log.err(fmt, args);
     common.log.err("\t{s} {d}:{d}\n", .{self.context.getFileName(self.file), pos.line, pos.column});
 }
