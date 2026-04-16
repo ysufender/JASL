@@ -15,4 +15,4 @@ let main = fn () -> Main {
 let Main = std::Result(void, std::ErrorCode);
 */
 
-let main: u32 = false;
+let main = @Test;

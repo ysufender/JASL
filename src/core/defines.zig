@@ -15,6 +15,14 @@ pub const Offset = u32;
 pub const Range = struct {
     start: u32,
     end: u32,
+
+    pub fn len(self: Range) u32 {
+        return self.end - self.start;
+    }
+
+    pub fn at(self: Range, index: u32) u32 {
+        return self.start + index;
+    }
 };
 
 pub const ExpressionPtr = u32;

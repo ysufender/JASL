@@ -51,4 +51,7 @@ pub const CompilerError = error {
     DuplicateSymbol,
     MissingEntry,
     NotImplemented,
+    InvalidEnumeration,
+    TypeMismatch,
+    DependencyCycle,
 };

@@ -5,6 +5,9 @@ pub const TypeInfo = union(enum) {
     Union: Union,
     Enum: Enum,
 
+    ComptimeInt: void, // Must be const
+    ComptimeFloat: void, // Must be const
+
     Integer: Integer,
     Bool: bool, // mutability bool
     Float: bool, // mutability bool
@@ -13,8 +16,10 @@ pub const TypeInfo = union(enum) {
     Pointer: Pointer,
     Function: Function,
     Noreturn: void,
-    Any: void,
-    Type: TypeID,
+    Any: bool, // mutability bool
+    Type: void,
+
+    Array: Array,
 };
 
 pub const FieldInfo = struct {
@@ -47,6 +52,12 @@ pub const Pointer = struct {
         Single,
         C,
     },
+};
+
+pub const Array = struct {
+    mutable: bool,
+    child: TypeID,
+    len: u32,
 };
 
 pub const Function = struct {

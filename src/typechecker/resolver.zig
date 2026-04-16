@@ -113,13 +113,13 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
         .kind = .Module,
     });
 
-    for (builtins) |b| {
+    for (builtins, 0..) |b, i| {
         const decl = try decls.addOne(allocator);
         decls.set(decl, .{
             .kind = .Builtin,
             .scope = builtin,
             .public = true,
-            .index = 0,
+            .index = @intCast(i),
             .token = 0,
             .node = 0,
         });
@@ -368,11 +368,35 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
             }
 
             for (signatures.start..signatures.end) |signaturePtrPtr| {
-                if (try self.resolveSignature(ast.extra.items[signaturePtrPtr], @as(u32, @intCast(signaturePtrPtr)) - signatures.start, .Variable, .Block)) {
-                    const lexeme = tokens.get(ast.signatures.get(ast.extra.items[signaturePtrPtr]).name).lexeme(self.context, self.dataIndex());
-                    self.report("Given symbol '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
+                //if (try self.resolveSignature(ast.extra.items[signaturePtrPtr], @as(u32, @intCast(signaturePtrPtr)) - signatures.start, .Variable, .Block)) {
+                //    const lexeme = tokens.get(ast.signatures.get(ast.extra.items[signaturePtrPtr]).name).lexeme(self.context, self.dataIndex());
+                //    self.report("Given symbol '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
+                //    return error.DuplicateSymbol;
+                //}
+                const index = @as(u32, @intCast(signaturePtrPtr)) - signatures.start;
+                const signature = ast.signatures.get(ast.extra.items[signaturePtrPtr]);
+                try self.resolveExpression(signature.type);
+
+                const decl = try self.decls.addOne(allocator);
+                self.decls.set(decl, .{
+                    .kind = .Variable,
+                    .scope = self.currentScope,
+                    .public = signature.public,
+                    .index = index,
+                    .token = signature.name,
+                    .node = initializer,
+                });
+
+                const name = tokens.get(signature.name).lexeme(self.context, self.dataIndex());
+                const isPresent = self.lookup.getOrPut(allocator, .{ .name = name, .scope = self.currentScope })
+                    catch return error.AllocatorFailure;
+
+                if (isPresent.found_existing) {
+                    self.report("Given symbol '{s}' collides with the previous definition of '{s}'.", .{name, name});
                     return error.DuplicateSymbol;
                 }
+
+                isPresent.value_ptr.* = decl;
             }
         },
         .Import => {
@@ -842,7 +866,7 @@ fn resolveSignature(self: *Resolver, signaturePtr: defines.SignaturePtr, index: 
 
 
     switch (signatureType) {
-        .Field, .Parameter, .Variable => |t| {
+        .Field, .Parameter => |t| {
             if (bodyType == .Enum) {
                 if (t != .Field) {
                     @compileError("Illegal signature type.");
@@ -944,6 +968,7 @@ fn handleScopeDefs(self: *Resolver, declarations: defines.Range) Error!void {
             .start = ast.extra.items[def],
             .end = ast.extra.items[def + 1],
         };
+        const initializer = ast.extra.items[def + 2];
 
         for (signatures.start..signatures.end) |signaturePtrPtr| {
             const signaturePtr = ast.extra.items[signaturePtrPtr];
@@ -960,12 +985,11 @@ fn handleScopeDefs(self: *Resolver, declarations: defines.Range) Error!void {
                 .scope = self.currentScope,
                 .public = field.public,
                 .token = field.name,
-                .node = signaturePtr,
+                .node = initializer,
                 .index = @as(u32, @intCast(signaturePtrPtr)) - signatures.start,
             });
         }
 
-        const initializer = ast.extra.items[def + 2];
         try self.resolveExpression(initializer);
     }
 }
@@ -1051,10 +1075,11 @@ fn getModuleName(self: *Resolver, module: defines.ExpressionPtr) []const u8 {
 }
 
 const builtins = [_][]const u8 {
-    "u8", "i8", "float", "u32", "i32",
-    "bool", "void", "any", "type", "undefined",
-    "typeInfo", "hasField", "compileError", "bitSet",
+    "u32", "i32", "u8", "i8", "bool",
+    "float", "void", "type", "any", "noreturn",
+
+    "undefined", "typeInfo", "hasField", "compileError",
     "bitSizeOf", "unreachable", "enumStr", "typeOf",
     "field", "fieldIndex", "hasDef", "definitionIndex",
-    "this", "sizeOf", "comptimeAlloc"
+    "this", "sizeOf", "comptimeAlloc", "bitSet",
 };

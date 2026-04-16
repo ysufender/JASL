@@ -22,32 +22,33 @@ const assert = std.debug.assert;
 // performant with collections.MultiArrayList(T)
 pub const Expression = struct {
     pub const Type = enum {
-        Assignment, // resolved
-        Binary, // resolved
-        Literal,
-        Indexing, // resolved
+        Assignment,
+        Binary,
+        Literal, // typechecked
+        Indexing,
         Slicing,
-        Identifier, // resolved
-        Unary, // resolved
-        StructDefinition, // resolved
-        EnumDefinition, // resolved
-        UnionDefinition, // resolved
-        FunctionDefinition, // resolved
-        Mark, // resolved
-        Lambda, // resolved
-        Call, // resolved
-        Conditional, // resolved
-        Switch, // resolved
-        Cast, // resolved
-        MutableType, // resolved
-        PointerType, // resolved
-        SliceType, // resolved
-        ArrayType, // resolved
-        FunctionType, // resolved
-        ValueType, // resolved
+        Identifier,
+        Unary,
+        StructDefinition,
+        EnumDefinition,
+        UnionDefinition,
+        FunctionDefinition,
+        Mark,
+        Lambda,
+        Call,
+        Conditional,
+        Switch,
+        Cast,
+        MutableType,
+        CPointerType,
+        PointerType,
+        SliceType,
+        ArrayType,
+        FunctionType,
+        ValueType,
         Scoping,
-        ExpressionList, // resolved
-        Dot, // resolved
+        ExpressionList,
+        Dot,
     };
 
     type: Type,
@@ -58,20 +59,20 @@ pub const Expression = struct {
 // performant with collections.MultiArrayList(T)
 pub const Statement = struct {
     pub const Type = enum {
-        Block, // resolved
+        Block,
         InlineAssembly,
-        Return, // resolved
-        Conditional, // resolved
-        Switch, // resolved
-        While, // resolved
+        Return,
+        Conditional,
+        Switch,
+        While,
         Break,
         Continue,
-        Mark, // resolved
-        VariableDefinition, // resolved
-        Discard, // resolved
-        Import, // resolved
-        Expression, // resolved
-        Defer, // resolved
+        Mark,
+        VariableDefinition,
+        Discard,
+        Import,
+        Expression,
+        Defer,
     };
 
     type: Type,
@@ -1041,8 +1042,7 @@ fn mark(self: *Parser, comptime stmt: bool) if (stmt) StatementResult else Expre
         },
     }
     else switch (self.expressionMap.items(.type)[marked]) {
-        .StructDefinition, .EnumDefinition, .UnionDefinition, .FunctionDefinition,
-        .PointerType => {},
+        .StructDefinition, .EnumDefinition, .UnionDefinition, .FunctionDefinition, => {},
         else  => |t| {
             self.report("Expression metadata can only be attached to type definitions and functions. Received '{s}'", .{@tagName(t)});
             return error.IllegalSyntax;
@@ -1358,6 +1358,25 @@ fn typeExpression(self: *Parser) ExpressionResult {
                     .type = .SliceType,
                     .value = rest,
                 });
+
+                break :result expr;
+            }
+            else if (self.match(&.{.EnumLiteral})) result: {
+                const literal = self.tokens.get(self.previous()).lexeme(self.context, self.file);
+                _ = try self.consume(.RBracket, error.MissingBracket, "Expected enclosing bracket in array type.");
+                const child = try self.typeExpression();
+                const expr = try self.alloc(Expression);
+
+                self.expressionMap.set(expr,
+                    if (std.mem.eql(u8, literal, "@c")) .{
+                        .type = .CPointerType,
+                        .value = child,
+                    }
+                    else {
+                        self.report("Unexpected slice descriptor '{s}'.", .{literal});
+                        return error.InvalidToken;
+                    }
+                );
 
                 break :result expr;
             }
