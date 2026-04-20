@@ -3,6 +3,7 @@ const common = @import("core/common.zig");
 const perfAllc = @import("util/allocator.zig");
 const collections = @import("util/collections.zig");
 const defines = @import("core/defines.zig");
+const debug = @import("debug/debug.zig");
 
 const Lexer = @import("lexer/lexer.zig");
 const Parser = @import("parser/parser.zig");
@@ -48,6 +49,10 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     var prepass = try Prepass.init(&context, ast, allocator);
     const modules = try prepass.prepass(allocator);
 
+    if (context.settings.printAST) {
+        debug.ASTPrinter.printAST(context.getAST(ast), &context);
+    }
+
     var resolver = try Resolver.init(allocator, &context, &modules);
     const resolved = try resolver.resolve(allocator);
 
@@ -56,7 +61,7 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     _ = typechecked;
 
     context.stats();
-    if (false) {
+    if (true) {
         var miterator = modules.modules.iterator();
         _ = miterator.next();
         while (miterator.next()) |mod| {

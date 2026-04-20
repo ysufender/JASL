@@ -7,6 +7,7 @@ pub const TypeInfo = union(enum) {
 
     ComptimeInt: void, // Must be const
     ComptimeFloat: void, // Must be const
+    EnumLiteral: void, // Must be const and comptime
 
     Integer: Integer,
     Bool: bool, // mutability bool

@@ -17,6 +17,7 @@ pub const Module = struct {
         name: defines.TokenPtr,
         value: defines.StatementPtr,
         index: u32,
+        type: defines.ExpressionPtr,
     };
 
     /// namespace of the module
@@ -178,10 +179,10 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
                     self.report("Couldn't get module path for {s}: {s}.",
                         .{module, @errorName(err)},
                         file.dataIndex,
-                        if (ast.expressions.items(.type)[ast.extra.items[statement.value]] == .Identifier)
-                            ast.expressions.items(.value)[ast.extra.items[statement.value]]
+                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
+                            ast.expressions.items(.value)[ast.extra[statement.value]]
                         else
-                            ast.extra.items[ast.expressions.items(.value)[ast.extra.items[statement.value]] + 1],
+                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1],
                     );
 
                     fail = true;
@@ -194,10 +195,10 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
 
                 var lexer = Lexer.init(allocator, self.context, path) catch {
                     self.report("Couldn't scan module at path {s}.", .{path}, self.context.getFileId(path),
-                        if (ast.expressions.items(.type)[ast.extra.items[statement.value]] == .Identifier)
-                            ast.expressions.items(.value)[ast.extra.items[statement.value]]
+                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
+                            ast.expressions.items(.value)[ast.extra[statement.value]]
                         else
-                            ast.extra.items[ast.expressions.items(.value)[ast.extra.items[statement.value]] + 1]
+                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1]
                     );
 
                     fail = true;
@@ -206,10 +207,10 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
 
                 const moduleTokens = lexer.lex() catch {
                     self.report("Couldn't scan module at path {s}.", .{path}, file.dataIndex,
-                        if (ast.expressions.items(.type)[ast.extra.items[statement.value]] == .Identifier)
-                            ast.expressions.items(.value)[ast.extra.items[statement.value]]
+                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
+                            ast.expressions.items(.value)[ast.extra[statement.value]]
                         else
-                            ast.extra.items[ast.expressions.items(.value)[ast.extra.items[statement.value]] + 1]
+                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1]
                     );
 
                     fail = true;
@@ -218,10 +219,10 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
 
                 var prs = Parser.init(allocator, self.context, moduleTokens) catch {
                     self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex,
-                        if (ast.expressions.items(.type)[ast.extra.items[statement.value]] == .Identifier)
-                            ast.expressions.items(.value)[ast.extra.items[statement.value]]
+                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
+                            ast.expressions.items(.value)[ast.extra[statement.value]]
                         else
-                            ast.extra.items[ast.expressions.items(.value)[ast.extra.items[statement.value]] + 1]
+                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1]
                     );
 
                     fail = true;
@@ -230,10 +231,10 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
 
                 const imported = prs.parse() catch {
                     self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex,
-                        if (ast.expressions.items(.type)[ast.extra.items[statement.value]] == .Identifier)
-                            ast.expressions.items(.value)[ast.extra.items[statement.value]]
+                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
+                            ast.expressions.items(.value)[ast.extra[statement.value]]
                         else
-                            ast.extra.items[ast.expressions.items(.value)[ast.extra.items[statement.value]] + 1]
+                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1]
                     );
 
                     fail = true;
@@ -243,11 +244,11 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
                 try self.prepassImpl(self.context.getAST(imported), module);
             },
             .VariableDefinition => {
-                const sigsStart = ast.extra.items[statement.value];
-                const sigsEnd = ast.extra.items[statement.value + 1];
+                const sigsStart = ast.extra[statement.value];
+                const sigsEnd = ast.extra[statement.value + 1];
 
                 for (sigsStart..sigsEnd) |ptr| {
-                    const sig = ast.signatures.get(ast.extra.items[@intCast(ptr)]);
+                    const sig = ast.signatures.get(ast.extra[@intCast(ptr)]);
                     const sigName = tokens.get(sig.name).lexeme(self.context, file.dataIndex);
 
                     const idx = file.symbols.addOne(allocator) catch {
@@ -277,11 +278,12 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
                         .name = sig.name,
                         .value = stmt,
                         .index = @as(u32, @intCast(ptr)) - sigsStart,
+                        .type = sig.type,
                     });
                 }
             },
             .Mark => {
-                statement = ast.statements.get(ast.extra.items[statement.value + 2]); 
+                statement = ast.statements.get(ast.extra[statement.value + 2]); 
                 continue :statementLoop;
             },
             else => {
@@ -329,7 +331,7 @@ fn getModulePath(allocator: std.mem.Allocator, id: defines.ExpressionPtr, ast: *
     const file = context.getTokens(ast.tokens).items(.start)[0];
 
     var parts = collections.ReverseStackArray([]const u8, std.fs.max_path_bytes).init();
-    var current = ast.extra.items[id];
+    var current = ast.extra[id];
 
     while (true) {
         const expr = ast.expressions.get(current);
@@ -340,8 +342,8 @@ fn getModulePath(allocator: std.mem.Allocator, id: defines.ExpressionPtr, ast: *
                 break;
             },
             .Scoping => {
-                const lhsExpr = ast.extra.items[expr.value];
-                const rhsExpr = ast.extra.items[expr.value + 1];
+                const lhsExpr = ast.extra[expr.value];
+                const rhsExpr = ast.extra[expr.value + 1];
 
                 const rhsStr = context.getTokens(ast.tokens).get(rhsExpr).lexeme(context, file);
                 parts.append(rhsStr) catch return error.PathNameTooLong;
@@ -357,14 +359,14 @@ fn getModulePath(allocator: std.mem.Allocator, id: defines.ExpressionPtr, ast: *
 
 fn getModuleName(id: defines.ExpressionPtr, ast: *const Parser.AST, context: *Context) []const u8 {
     const file = context.getTokens(ast.tokens).items(.start)[0];
-    const expr = ast.expressions.get(ast.extra.items[id]);
+    const expr = ast.expressions.get(ast.extra[id]);
 
     const end = switch (expr.type) {
         .Identifier => context.getTokens(ast.tokens).items(.end)[expr.value],
-        .Scoping => context.getTokens(ast.tokens).items(.end)[ast.extra.items[expr.value + 1]],
+        .Scoping => context.getTokens(ast.tokens).items(.end)[ast.extra[expr.value + 1]],
         else => unreachable,
     };
-    const start = getModuleNameStartIndex(ast.extra.items[id], ast, context);
+    const start = getModuleNameStartIndex(ast.extra[id], ast, context);
 
     return context.getFile(file)[start..end];
 }
@@ -381,7 +383,7 @@ fn getModuleNameStartIndex(id: defines.ExpressionPtr, ast: *const Parser.AST, co
                 break;
             },
             .Scoping => {
-                current = ast.extra.items[expr.value];
+                current = ast.extra[expr.value];
             },
             else => unreachable,
         }

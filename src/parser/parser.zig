@@ -45,7 +45,6 @@ pub const Expression = struct {
         SliceType,
         ArrayType,
         FunctionType,
-        ValueType,
         Scoping,
         ExpressionList,
         Dot,
@@ -87,11 +86,11 @@ pub const VariableSignature = struct {
 
 pub const AST = struct {
     tokens: defines.TokenPtr,
-    expressions: ExpressionMap,
-    statements: StatementMap,
-    signatures: VariableSignatureMap,
+    expressions: ExpressionMap.Slice,
+    statements: StatementMap.Slice,
+    signatures: VariableSignatureMap.Slice,
     statementMask: std.ArrayList(defines.StatementPtr).Slice,
-    extra: std.ArrayList(defines.OpaquePtr),
+    extra: std.ArrayList(defines.OpaquePtr).Slice,
     stats: Stats,
 
     pub fn eql(self: *const AST, other: *const AST) bool {
@@ -217,14 +216,11 @@ pub fn init(base: Allocator, context: *common.CompilerContext, tokensPtr: define
 pub fn parse(self: *Parser) common.CompilerError!defines.ASTPtr {
     defer self.arena.deinit();
 
-    // any Type
-    self.expressionMap.appendAssumeCapacity(.{
-        .type = .ValueType,
-        .value = 0,
-    });
-
     var errCount: u32 = 0;
     var lastErr: common.CompilerError = undefined;
+
+    // any type expression
+    self.expressionMap.appendAssumeCapacity(std.mem.zeroes(Expression));
 
     while (!self.isAtEnd()) {
         if (self.statement()) |index| {
@@ -252,11 +248,11 @@ pub fn parse(self: *Parser) common.CompilerError!defines.ASTPtr {
 
     const ast = AST{
         .tokens = self.file,
-        .expressions = self.expressionMap.mutableSlice(),
-        .statements = self.statementMap.mutableSlice(),
-        .signatures = self.signaturePool.mutableSlice(),
+        .expressions = self.expressionMap.slice(),
+        .statements = self.statementMap.slice(),
+        .signatures = self.signaturePool.slice(),
         .statementMask = self.statementMask.items,
-        .extra = self.extra,
+        .extra = self.extra.items,
         .stats = self.stats,
     };
 
@@ -1342,6 +1338,11 @@ fn typeExpression(self: *Parser) ExpressionResult {
         .Star => {
             const res = try self.typeExpression();
 
+            switch (self.expressionMap.items(.type)[res]) {
+                .FunctionType => return res,
+                else => { },
+            }
+
             const expr = try self.alloc(Expression);
             self.expressionMap.set(expr, .{
                 .type = .PointerType,
@@ -1433,7 +1434,7 @@ fn typeExpression(self: *Parser) ExpressionResult {
 
             const expr = try self.alloc(Expression);
             self.expressionMap.set(expr, .{
-                .type = .ValueType,
+                .type = .Identifier,
                 .value = typename,
             });
             return expr;
@@ -1549,20 +1550,18 @@ fn variableSignature(self: *Parser, public: bool, enforceType: bool) common.Comp
             return error.MissingIdentifier;
         };
 
-    var typename: defines.ExpressionPtr = undefined;
-
-    if (!enforceType and !self.check(.Colon)) {
-        typename = 0;
-    } else {
-        _ = try self.consume(.Colon, error.MissingColon, "Expected a separator colon ':' after identifier.");
-        typename = try self.ifExpression();
-    }
+    const varType = 
+        if (!enforceType and !self.check(.Colon)) 0
+        else res: {
+            _ = try self.consume(.Colon, error.MissingColon, "Expected a separator colon ':' after identifier.");
+            break :res try self.ifExpression();
+        };
 
     const signature = try self.alloc(VariableSignature);
     self.signaturePool.set(signature, .{
         .public = public,
         .name = name,
-        .type = typename,
+        .type = varType,
     });
 
     return signature;

@@ -10,6 +10,7 @@ const Flags = enum {
     MaxErr,
     None,
     Include,
+    PrintAST,
 };
 
 const flags = std.StaticStringMap(Flags).initComptime(&.{
@@ -27,6 +28,8 @@ const flags = std.StaticStringMap(Flags).initComptime(&.{
 
     .{ "--include", .Include },
     .{ "-I", .Include },
+
+    .{ "--print-ast", .PrintAST },
 });
 
 const descriptions = std.StaticStringMap([]const u8).initComptime(&.{
@@ -39,6 +42,8 @@ const descriptions = std.StaticStringMap([]const u8).initComptime(&.{
     .{ "--max-err, -m", " <count>: Set max error count before terminating the compilation. Defaults to 10." },
 
     .{ "--include, -I", " <path>: Add <path> to the searchpath of the compiler. Can be relative or absolute." },
+
+    .{ "--print-ast", ": Print a pretty(!) formatted AST dump to stdout." },
 });
 
 pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.CompilerSettings {
@@ -52,11 +57,13 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
     var workingDir: []const u8 = undefined;
     var includeDirs = NMap.empty;
     var maxErr: u32 = 10;
+    var printAST = false;
 
     includeDirs.ensureTotalCapacity(allocator, 512) catch return error.AllocatorFailure;
 
     while (args.next()) |flag| {
         switch (hash(flag)) {
+            .PrintAST => printAST = true,
             .Help => printHelp(),
             .Version => printHeader(),
             .Working => {
@@ -123,14 +130,13 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
         if (maybeFile) |file| break :blk common.CompilerSettings{
             .inputFile = file,
             .workingDir = workingDir,
-            .includeDirs = try collections.Collect(
-                collections.SliceIteratorType([]const u8, .Forward),
-                []const u8,
-
-                collections.SliceIterator(.Forward, try collect(includeDirs.count(), includeDirs.keyIterator(), allocator)),
+            .includeDirs = try collect(
+                includeDirs.count(),
+                includeDirs.keyIterator(),
                 allocator
             ),
             .maxErr = maxErr,
+            .printAST = printAST,
         }
         else {
             common.log.err("jaslc expects an input file.", .{});

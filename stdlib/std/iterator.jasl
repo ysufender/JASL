@@ -165,9 +165,9 @@ pub let Iterator = fn (T: type) -> type {
             *fn (*mut For) -> Self,
         ) {
             return (
-                fn (_: *mut For) -> Next { return Next(@None); },
-                fn (_: *mut For) -> Next { return Next(@None); },
-                fn (_: *mut For) -> bool { return true; },
+                fn (__: *mut For) -> Next { return Next(@None); },
+                fn (__: *mut For) -> Next { return Next(@None); },
+                fn (__: *mut For) -> bool { return true; },
                 Interface::Implement(For),
             );
         };

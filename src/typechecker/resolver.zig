@@ -15,14 +15,13 @@ const Error = common.CompilerError;
 const Context = common.CompilerContext;
 const Allocator = std.mem.Allocator;
 const Arena = std.heap.ArenaAllocator;
-const ResolutionKey = defines.ResolutionKey;
 
 const assert = std.debug.assert;
 
 pub const ScopeList = MultiArrayList(Scope);
 pub const DeclarationList = MultiArrayList(Declaration);
-pub const ResolutionMap = defines.ResolutionMap(defines.DeclPtr);
-const LookupMap = defines.LookupMap([]const u8, defines.DeclPtr);
+pub const LookupMap = collections.HashMap(LookupKey([]const u8), defines.DeclPtr);
+pub const ResolutionMap = collections.HashMap(ResolutionKey, defines.DeclPtr);
 
 pub const Scope = struct {
     pub const Kind = enum {
@@ -54,7 +53,44 @@ pub const Declaration = struct {
     index: defines.Offset,
     token: defines.TokenPtr,
     node: defines.StatementPtr,
+    type: defines.ExpressionPtr,
+    topLevel: bool,
 };
+
+pub const ResolutionKey = struct {
+    file: defines.FilePtr,
+    expr: defines.ExpressionPtr,
+};
+
+pub fn LookupKey(comptime T: type) type {
+    return struct {
+        scope: defines.OpaquePtr,
+        name: T,
+    };
+}
+
+pub fn LookupContext(comptime T: type) type {
+    return struct {
+        const Self = @This();
+        pub const Key = LookupKey(T);
+
+        pub fn hash(_: Self, key: Key) u64 { 
+            var hasher = std.hash.Wyhash.init(0);
+            std.hash.autoHashStrat(&hasher, key, .DeepRecursive);
+            return hasher.final();
+        }
+
+        pub fn eql(_: Self, a: Key, b: Key) bool {
+            return
+                a.scope == b.scope
+                and
+                switch (@typeInfo(T)) {
+                    .Pointer => |ptr| std.mem.eql(ptr.child, a.name, b.name),
+                    else => a.name == b.name,
+                };
+        }
+    };
+}
 
 pub const Resolution = struct {
     resolutionMap: ResolutionMap,
@@ -62,20 +98,12 @@ pub const Resolution = struct {
     lookup: LookupMap,
     scopes: ScopeList.Slice,
 
-    pub fn tryGet(self: *const Resolution, key: ResolutionKey) ?defines.DeclPtr {
-        return self.resolutionMap.get(key);
+    pub fn getDecl(self: *const Resolution, key: defines.DeclPtr) Declaration {
+        return self.declarations.get(key);
     }
 
-    pub fn get(self: *const Resolution, key: ResolutionKey) defines.DeclPtr {
-        return self.tryGet(key).?;
-    }
-
-    pub fn tryGetDecl(self: *const Resolution, key: ResolutionKey) ?Declaration {
-        return self.declarations.get(self.tryGet(key) orelse return null);
-    }
-
-    pub fn getDecl(self: *const Resolution, key: ResolutionKey) Declaration {
-        return self.tryGetDecl(self.get(key)).?;
+    pub fn findDecl(self: *const Resolution, key: ResolutionKey) defines.DeclPtr {
+        return self.resolutionMap.get(key).?;
     }
 };
 
@@ -121,7 +149,9 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
             .public = true,
             .index = @intCast(i),
             .token = 0,
-            .node = 0,
+            .node = @intCast(i),
+            .type = @intCast(i),
+            .topLevel = true,
         });
 
         lookup.putNoClobber(allocator, .{ .name = b, .scope = builtin }, decl)
@@ -150,8 +180,10 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
                 .kind = .Variable,
                 .public = symbol.public,
                 .token = symbol.name,
-                .node = symbol.value,
                 .index = symbol.index,
+                .node = symbol.value,
+                .type = symbol.type,
+                .topLevel = true,
             });
 
             lookup.put(allocator, .{
@@ -201,12 +233,12 @@ pub fn resolve(self: *Resolver, allocator: Allocator) Error!Resolution {
         return lastErr;
     }
 
-    return .{
-        .resolutionMap = self.resolved.clone(allocator) catch return error.AllocatorFailure,
-        .declarations = try collections.deepCopy(self.decls.slice(), allocator),
-        .scopes = try collections.deepCopy(self.scopes.slice(), allocator),
-        .lookup = self.lookup.clone(allocator) catch return error.AllocatorFailure,
-    };
+    return collections.deepCopy(Resolution{
+        .resolutionMap = self.resolved,
+        .declarations = self.decls.slice(),
+        .scopes = self.scopes.slice(),
+        .lookup = self.lookup,
+    }, allocator);
 }
 
 fn resolveModule(self: *Resolver) Error!void {
@@ -221,6 +253,9 @@ fn resolveModule(self: *Resolver) Error!void {
     var lastErr: common.CompilerError = undefined;
 
     const ast = self.context.getAST(self.dataIndex());
+    const allocator = self.arena.allocator();
+    _ = allocator;
+
     for (ast.statementMask) |item| {
         self.resolveStatement(item, true) catch |err| {
             errCount += 1;
@@ -251,8 +286,8 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
     switch (statement.type) {
         .Block => {
             const stmts = defines.Range{
-                .start = ast.extra.items[statement.value],
-                .end = ast.extra.items[statement.value + 1]
+                .start = ast.extra[statement.value],
+                .end = ast.extra[statement.value + 1]
             };
 
             const block = try self.scopes.addOne(allocator);
@@ -267,35 +302,35 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
             self.currentScope = block;
 
             for (stmts.start..stmts.end) |stmtPtrPtr| {
-                const stmtPtr = ast.extra.items[stmtPtrPtr];
+                const stmtPtr = ast.extra[stmtPtrPtr];
                 try self.resolveStatement(stmtPtr, false);
             }
         },
         .Conditional => {
-            const condition = ast.extra.items[statement.value];
+            const condition = ast.extra[statement.value];
             try self.resolveExpression(condition);
 
-            const body = ast.extra.items[statement.value + 1];
+            const body = ast.extra[statement.value + 1];
             try self.resolveStatement(body, false);
 
-            const hasElse = ast.extra.items[statement.value + 2] == 1;
+            const hasElse = ast.extra[statement.value + 2] == 1;
             if (hasElse) {
-                const elseBody = ast.extra.items[statement.value + 3];
+                const elseBody = ast.extra[statement.value + 3];
                 try self.resolveStatement(elseBody, false);
             }
         },
         .Switch => {
-            const item = ast.extra.items[statement.value];
+            const item = ast.extra[statement.value];
             try self.resolveExpression(item);
 
             const cases = defines.Range{
-                .start = ast.extra.items[statement.value + 1],
-                .end = ast.extra.items[statement.value + 2],
+                .start = ast.extra[statement.value + 1],
+                .end = ast.extra[statement.value + 2],
             };
 
             var case: u32 = cases.start;
             while (case < cases.end) : (case += 3) {
-                const pattern = ast.extra.items[case];
+                const pattern = ast.extra[case];
 
                 if (pattern != 0) {
                     try self.resolveExpression(pattern);
@@ -310,9 +345,9 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
 
                 const previous = self.currentScope;
                 defer self.currentScope = previous;
-                self.currentScope = previous;
+                self.currentScope = caseScope;
 
-                const capture = ast.extra.items[case + 1];
+                const capture = ast.extra[case + 1];
                 if (capture != 0) {
                     const decl = try self.decls.addOne(allocator);
                     self.decls.set(decl, .{
@@ -322,6 +357,8 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                         .token = capture,
                         .node = item,
                         .index = 0,
+                        .type = 0,
+                        .topLevel = false,
                     });
 
                     const lexeme = tokens.get(capture).lexeme(self.context, self.dataIndex());
@@ -329,62 +366,62 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                         catch return error.AllocatorFailure;
                 }
 
-                const body = ast.extra.items[case + 2];
+                const body = ast.extra[case + 2];
                 try self.resolveStatement(body, false);
             }
         },
         .While => {
-            const condition = ast.extra.items[statement.value];
+            const condition = ast.extra[statement.value];
             try self.resolveExpression(condition);
 
-            const body = ast.extra.items[statement.value + 1];
+            const body = ast.extra[statement.value + 1];
             try self.resolveStatement(body, false);
         },
         .Mark => {
             const marks = defines.Range{
-                .start = ast.extra.items[statement.value],
-                .end = ast.extra.items[statement.value + 1],
+                .start = ast.extra[statement.value],
+                .end = ast.extra[statement.value + 1],
             };
 
             for (marks.start..marks.end) |mark| {
-                try self.resolveExpression(ast.extra.items[mark]);
+                try self.resolveExpression(ast.extra[mark]);
             }
 
-            const marked = ast.extra.items[statement.value + 2];
+            const marked = ast.extra[statement.value + 2];
             try self.resolveStatement(marked, topLevel);
         },
         .VariableDefinition => {
             const signatures = defines.Range{
-                .start = ast.extra.items[statement.value],
-                .end = ast.extra.items[statement.value + 1],
+                .start = ast.extra[statement.value],
+                .end = ast.extra[statement.value + 1],
             };
 
-            const initializer = ast.extra.items[statement.value + 2];
+            const initializer = ast.extra[statement.value + 2];
 
-            try self.resolveExpression(initializer);
+            for (signatures.start..signatures.end, 0..) |signaturePtrPtr, index| {
+                const signature = ast.signatures.get(ast.extra[signaturePtrPtr]);
+                std.debug.print("Resolving signature {s}\n", .{
+                    tokens.get(signature.name).lexeme(self.context, self.dataIndex())
+                });
 
-            if (topLevel) {
-                return;
-            }
+                if (signature.type != 0) {
+                    try self.resolveExpression(signature.type);
+                }
 
-            for (signatures.start..signatures.end) |signaturePtrPtr| {
-                //if (try self.resolveSignature(ast.extra.items[signaturePtrPtr], @as(u32, @intCast(signaturePtrPtr)) - signatures.start, .Variable, .Block)) {
-                //    const lexeme = tokens.get(ast.signatures.get(ast.extra.items[signaturePtrPtr]).name).lexeme(self.context, self.dataIndex());
-                //    self.report("Given symbol '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
-                //    return error.DuplicateSymbol;
-                //}
-                const index = @as(u32, @intCast(signaturePtrPtr)) - signatures.start;
-                const signature = ast.signatures.get(ast.extra.items[signaturePtrPtr]);
-                try self.resolveExpression(signature.type);
+                if (topLevel) {
+                    continue;
+                }
 
                 const decl = try self.decls.addOne(allocator);
                 self.decls.set(decl, .{
                     .kind = .Variable,
                     .scope = self.currentScope,
                     .public = signature.public,
-                    .index = index,
+                    .index = @intCast(index),
                     .token = signature.name,
                     .node = initializer,
+                    .type = signature.type,
+                    .topLevel = topLevel,
                 });
 
                 const name = tokens.get(signature.name).lexeme(self.context, self.dataIndex());
@@ -398,13 +435,16 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
 
                 isPresent.value_ptr.* = decl;
             }
+
+            std.debug.print("Resolving initializer {d}\n", .{initializer});
+            try self.resolveExpression(initializer);
         },
         .Import => {
-            const modulename = self.getModuleName(ast.extra.items[statement.value]);
+            const modulename = self.getModuleName(ast.extra[statement.value]);
             const moduleID = self.modules.get(modulename);
-            const isAlias = ast.extra.items[statement.value + 1] == 1;
+            const isAlias = ast.extra[statement.value + 1] == 1;
             const alias =
-                if (isAlias) ast.extra.items[statement.value + 2]
+                if (isAlias) ast.extra[statement.value + 2]
                 else 0;
 
             const decl = try self.decls.addOne(allocator);
@@ -413,8 +453,10 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                 .scope = self.currentScope,
                 .public = false,
                 .index = 0,
-                .token = if (isAlias) alias else ast.extra.items[statement.value + 1],
+                .token = if (isAlias) alias else ast.extra[statement.value + 1],
                 .node = moduleID,
+                .type = 0,
+                .topLevel = true,
             });
 
             const lexeme =
@@ -447,39 +489,43 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
 
     const expr = ast.expressions.get(exprPtr);
     switch (expr.type) {
-        .ValueType, .Identifier => {
+        .Identifier => {
             const identifier = expr.value;
             self.lastToken = identifier;
 
-            self.resolved.putNoClobber(allocator, .{ .file = self.dataIndex(), .expr = exprPtr }, try self.look(identifier))
-                    catch return error.AllocatorFailure;
+            const decl = try self.look(identifier);
+
+            std.debug.print("Resolving {d}\n", .{identifier});
+            self.resolved.putNoClobber(allocator, .{ .file = self.dataIndex(), .expr = exprPtr },
+                decl,
+            ) catch return error.AllocatorFailure;
         },
         .Indexing, .Assignment => {
-            const lhs = ast.extra.items[expr.value];
+            const lhs = ast.extra[expr.value];
             try self.resolveExpression(lhs);
 
-            const rhs = ast.extra.items[expr.value + 1];
+            const rhs = ast.extra[expr.value + 1];
             try self.resolveExpression(rhs);
         },
         .Slicing => {
-            const ptr = ast.extra.items[expr.value];
+            const ptr = ast.extra[expr.value];
             try self.resolveExpression(ptr);
 
-            const rangeStart = ast.extra.items[expr.value + 1];
+            const rangeStart = ast.extra[expr.value + 1];
             try self.resolveExpression(rangeStart);
 
-            const rangeEnd = ast.extra.items[expr.value + 2];
+            const rangeEnd = ast.extra[expr.value + 2];
             try self.resolveExpression(rangeEnd);
         },
         .Binary => {
-            const lhs = ast.extra.items[expr.value];
+            const lhs = ast.extra[expr.value];
             try self.resolveExpression(lhs);
 
-            const rhs = ast.extra.items[expr.value + 2];
+            const rhs = ast.extra[expr.value + 2];
             try self.resolveExpression(rhs);
         },
         .Unary => {
-            const rhs = ast.extra.items[expr.value + 1];
+            const rhs = ast.extra[expr.value + 1];
             try self.resolveExpression(rhs);
         },
         .StructDefinition => {
@@ -495,20 +541,20 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             self.currentScope = body;
 
             const defs = defines.Range{
-                .start = ast.extra.items[expr.value + 2],
-                .end = ast.extra.items[expr.value + 3],
+                .start = ast.extra[expr.value + 2],
+                .end = ast.extra[expr.value + 3],
             };
 
             try self.handleScopeDefs(defs);
 
             const fields = defines.Range{
-                .start = ast.extra.items[expr.value],
-                .end = ast.extra.items[expr.value + 1],
+                .start = ast.extra[expr.value],
+                .end = ast.extra[expr.value + 1],
             };
 
             for (fields.start..fields.end) |fieldPtrPtr| {
-                if (try self.resolveSignature(ast.extra.items[fieldPtrPtr], @as(u32, @intCast(fieldPtrPtr)) - fields.start, .Field, .Struct)) {
-                    const lexeme = tokens.get(ast.signatures.get(ast.extra.items[fieldPtrPtr]).name).lexeme(self.context, self.dataIndex());
+                if (try self.resolveSignature(ast.extra[fieldPtrPtr], @as(u32, @intCast(fieldPtrPtr)) - fields.start, .Field, .Struct)) {
+                    const lexeme = tokens.get(ast.signatures.get(ast.extra[fieldPtrPtr]).name).lexeme(self.context, self.dataIndex());
                     self.report("Given field '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
                     return error.DuplicateSymbol;
                 }
@@ -527,20 +573,20 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             self.currentScope = body;
 
             const defs = defines.Range{
-                .start = ast.extra.items[expr.value + 2],
-                .end = ast.extra.items[expr.value + 3],
+                .start = ast.extra[expr.value + 2],
+                .end = ast.extra[expr.value + 3],
             };
 
             try self.handleScopeDefs(defs);
 
             const fields = defines.Range{
-                .start = ast.extra.items[expr.value],
-                .end = ast.extra.items[expr.value + 1],
+                .start = ast.extra[expr.value],
+                .end = ast.extra[expr.value + 1],
             };
 
             for (fields.start..fields.end) |fieldPtrPtr| {
-                if (try self.resolveSignature(ast.extra.items[fieldPtrPtr], @as(u32, @intCast(fieldPtrPtr)) - fields.start, .Field, .Enum)) {
-                    const lexeme = tokens.get(ast.signatures.get(ast.extra.items[fieldPtrPtr]).name).lexeme(self.context, self.dataIndex());
+                if (try self.resolveSignature(ast.extra[fieldPtrPtr], @as(u32, @intCast(fieldPtrPtr)) - fields.start, .Field, .Enum)) {
+                    const lexeme = tokens.get(ast.signatures.get(ast.extra[fieldPtrPtr]).name).lexeme(self.context, self.dataIndex());
                     self.report("Given field '{s}' is already present in the enum body.", .{lexeme});
                     return error.DuplicateSymbol;
                 }
@@ -559,11 +605,11 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             self.currentScope = body;
 
             var offset: u32 = 1;
-            const tagged = ast.extra.items[expr.value] == 1;
+            const tagged = ast.extra[expr.value] == 1;
             if (tagged) {
-                const explicit = ast.extra.items[expr.value + 1] == 1;
+                const explicit = ast.extra[expr.value + 1] == 1;
                 if (explicit) {
-                    const tag = ast.extra.items[expr.value + 2];
+                    const tag = ast.extra[expr.value + 2];
                     try self.resolveExpression(tag);
                 }
 
@@ -571,20 +617,20 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             }
 
             const defs = defines.Range{
-                .start = ast.extra.items[expr.value + offset + 2],
-                .end = ast.extra.items[expr.value + offset + 3],
+                .start = ast.extra[expr.value + offset + 2],
+                .end = ast.extra[expr.value + offset + 3],
             };
 
             try self.handleScopeDefs(defs);
 
             const fields = defines.Range{
-                .start = ast.extra.items[expr.value + offset],
-                .end = ast.extra.items[expr.value + offset + 1],
+                .start = ast.extra[expr.value + offset],
+                .end = ast.extra[expr.value + offset + 1],
             };
 
             for (fields.start..fields.end) |fieldPtrPtr| {
-                if (try self.resolveSignature(ast.extra.items[fieldPtrPtr], @as(u32, @intCast(fieldPtrPtr)) - fields.start, .Field, .Union)) {
-                    const lexeme = tokens.get(ast.signatures.get(ast.extra.items[fieldPtrPtr]).name).lexeme(self.context, self.dataIndex());
+                if (try self.resolveSignature(ast.extra[fieldPtrPtr], @as(u32, @intCast(fieldPtrPtr)) - fields.start, .Field, .Union)) {
+                    const lexeme = tokens.get(ast.signatures.get(ast.extra[fieldPtrPtr]).name).lexeme(self.context, self.dataIndex());
                     self.report("Given field '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
                     return error.DuplicateSymbol;
                 }
@@ -592,8 +638,8 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
         },
         .FunctionDefinition => {
             const params = defines.Range{
-                .start = ast.extra.items[expr.value],
-                .end = ast.extra.items[expr.value + 1],
+                .start = ast.extra[expr.value],
+                .end = ast.extra[expr.value + 1],
             };
 
             const function = try self.scopes.addOne(allocator);
@@ -608,36 +654,36 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             self.currentScope = function;
 
             for (params.start..params.end) |paramPtrPtr| {
-                const lexeme = tokens.get(ast.signatures.get(ast.extra.items[paramPtrPtr]).name).lexeme(self.context, self.dataIndex());
-                if (try self.resolveSignature(ast.extra.items[paramPtrPtr], @as(u32, @intCast(paramPtrPtr)) - params.start, .Parameter, .Block)) {
+                const lexeme = tokens.get(ast.signatures.get(ast.extra[paramPtrPtr]).name).lexeme(self.context, self.dataIndex());
+                if (try self.resolveSignature(ast.extra[paramPtrPtr], @as(u32, @intCast(paramPtrPtr)) - params.start, .Parameter, .Block)) {
                     self.report("Duplicate parameter name '{s}'.", .{lexeme});
                     return error.DuplicateSymbol;
                 }
             }
 
-            const returns = ast.extra.items[expr.value + 2];
+            const returns = ast.extra[expr.value + 2];
             try self.resolveExpression(returns);
 
-            const body = ast.extra.items[expr.value + 3];
+            const body = ast.extra[expr.value + 3];
             try self.resolveStatement(body, false);
         },
         .Mark => {
             const marks = defines.Range{
-                .start = ast.extra.items[expr.value],
-                .end = ast.extra.items[expr.value + 1],
+                .start = ast.extra[expr.value],
+                .end = ast.extra[expr.value + 1],
             };
 
             for (marks.start..marks.end) |mark| {
-                try self.resolveExpression(ast.extra.items[mark]);
+                try self.resolveExpression(ast.extra[mark]);
             }
 
-            const marked = ast.extra.items[expr.value + 2];
+            const marked = ast.extra[expr.value + 2];
             try self.resolveExpression(marked);
         },
         .Lambda => {
             const captures = defines.Range{
-                .start = ast.extra.items[expr.value],
-                .end = ast.extra.items[expr.value + 1],
+                .start = ast.extra[expr.value],
+                .end = ast.extra[expr.value + 1],
             };
 
             const lambda = try self.scopes.addOne(allocator);
@@ -652,7 +698,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             self.currentScope = lambda;
 
             for (captures.start..captures.end) |capturePtrPtr| {
-                const name = ast.extra.items[capturePtrPtr];
+                const name = ast.extra[capturePtrPtr];
                 const lexeme = tokens.get(name).lexeme(self.context, self.dataIndex());
 
                 const decl = try self.decls.addOne(allocator);
@@ -663,6 +709,8 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                     .index = @as(u32, @intCast(capturePtrPtr)) - captures.start,
                     .token = name,
                     .node = name,
+                    .type = 0,
+                    .topLevel = false,
                 });
 
                 const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
@@ -677,34 +725,34 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             }
         },
         .Call => {
-            const function = ast.extra.items[expr.value];
+            const function = ast.extra[expr.value];
             try self.resolveExpression(function);
 
-            const args = ast.extra.items[expr.value + 1];
+            const args = ast.extra[expr.value + 1];
             try self.resolveExpression(args);
         },
         .Conditional => {
-            const condition = ast.extra.items[expr.value];
+            const condition = ast.extra[expr.value];
             try self.resolveExpression(condition);
 
-            const body = ast.extra.items[expr.value + 1];
+            const body = ast.extra[expr.value + 1];
             try self.resolveExpression(body);
 
-            const elseBody = ast.extra.items[expr.value + 2];
+            const elseBody = ast.extra[expr.value + 2];
             try self.resolveExpression(elseBody);
         },
         .Switch => {
-            const item = ast.extra.items[expr.value];
+            const item = ast.extra[expr.value];
             try self.resolveExpression(item);
 
             const cases = defines.Range{
-                .start = ast.extra.items[expr.value + 1],
-                .end = ast.extra.items[expr.value + 2],
+                .start = ast.extra[expr.value + 1],
+                .end = ast.extra[expr.value + 2],
             };
 
             var case: u32 = cases.start;
             while (case < cases.end) : (case += 3) {
-                const pattern = ast.extra.items[case];
+                const pattern = ast.extra[case];
 
                 if (pattern != 0) {
                     try self.resolveExpression(pattern);
@@ -719,9 +767,9 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
 
                 const previous = self.currentScope;
                 defer self.currentScope = previous;
-                self.currentScope = previous;
+                self.currentScope = caseScope;
 
-                const capture = ast.extra.items[case + 1];
+                const capture = ast.extra[case + 1];
                 if (capture != 0) {
                     const decl = try self.decls.addOne(allocator);
                     self.decls.set(decl, .{
@@ -731,6 +779,8 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                         .token = capture,
                         .node = item,
                         .index = 0,
+                        .type = 0,
+                        .topLevel = false,
                     });
 
                     const lexeme = tokens.get(capture).lexeme(self.context, self.dataIndex());
@@ -738,37 +788,37 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                         catch return error.AllocatorFailure;
                 }
 
-                const body = ast.extra.items[case + 2];
+                const body = ast.extra[case + 2];
                 try self.resolveExpression(body);
             }
         },
         .Cast => {
-            const typeExpr = ast.extra.items[expr.value + 1];
+            const typeExpr = ast.extra[expr.value + 1];
             try self.resolveExpression(typeExpr);
 
-            const lhs = ast.extra.items[expr.value];
+            const lhs = ast.extra[expr.value];
             try self.resolveExpression(lhs);
         },
         .MutableType, .PointerType, .SliceType => try self.resolveExpression(expr.value),
         .ArrayType => {
-            const size = ast.extra.items[expr.value];
+            const size = ast.extra[expr.value];
             try self.resolveExpression(size);
 
-            const inner = ast.extra.items[expr.value + 1];
+            const inner = ast.extra[expr.value + 1];
             try self.resolveExpression(inner);
         },
         .FunctionType => {
-            const args = ast.extra.items[expr.value];
+            const args = ast.extra[expr.value];
             try self.resolveExpression(args);
 
-            const returns = ast.extra.items[expr.value + 1];
+            const returns = ast.extra[expr.value + 1];
             try self.resolveExpression(returns);
         },
         .Scoping => {
             var root = exprPtr;
             var chainLen: u32 = 0;
             while (ast.expressions.items(.type)[root] == .Scoping) {
-                root = ast.extra.items[ast.expressions.items(.value)[root]];
+                root = ast.extra[ast.expressions.items(.value)[root]];
                 chainLen += 1;
             }
 
@@ -788,12 +838,12 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                 var cur = exprPtr;
                 var steps: u32 = 0;
                 while (steps < chainLen - prefixDepth) : (steps += 1) {
-                    cur = ast.extra.items[ast.expressions.items(.value)[cur]];
+                    cur = ast.extra[ast.expressions.items(.value)[cur]];
                 }
 
                 const endToken =
                     if (prefixDepth == 0) rootTokenPtr
-                    else ast.extra.items[ast.expressions.items(.value)[cur] + 1];
+                    else ast.extra[ast.expressions.items(.value)[cur] + 1];
 
                 const nameEnd = tokens.items(.end)[endToken];
                 const moduleName = self.context.getFile(self.dataIndex())[nameStart..nameEnd];
@@ -815,6 +865,8 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                     .index = 0,
                     .token = rootTokenPtr,
                     .node = moduleIdx,
+                    .type = 0,
+                    .topLevel = false,
                 });
                 currentDecl = d;
             } else {
@@ -829,11 +881,11 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                 var cur = exprPtr;
                 var steps: u32 = 0;
                 while (steps < depth) {
-                    cur = ast.extra.items[ast.expressions.items(.value)[cur]];
+                    cur = ast.extra[ast.expressions.items(.value)[cur]];
                     steps += 1;
                 }
 
-                const member = ast.extra.items[ast.expressions.items(.value)[cur] + 1];
+                const member = ast.extra[ast.expressions.items(.value)[cur] + 1];
 
                 if (self.decls.items(.kind)[currentDecl] == .Namespace) {
                     const targetScope = self.decls.items(.node)[currentDecl];
@@ -846,15 +898,15 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
         },
         .ExpressionList => {
             const expressions = defines.Range{
-                .start = ast.extra.items[expr.value],
-                .end = ast.extra.items[expr.value + 1],
+                .start = ast.extra[expr.value],
+                .end = ast.extra[expr.value + 1],
             };
 
             for (expressions.start..expressions.end) |expressionPtrPtr| {
-                try self.resolveExpression(ast.extra.items[expressionPtrPtr]);
+                try self.resolveExpression(ast.extra[expressionPtrPtr]);
             }
         },
-        .Dot => try self.resolveExpression(ast.extra.items[expr.value]),
+        .Dot => try self.resolveExpression(ast.extra[expr.value]),
         else => {},
     }
 }
@@ -863,7 +915,6 @@ fn resolveSignature(self: *Resolver, signaturePtr: defines.SignaturePtr, index: 
     const allocator = self.arena.allocator();
     const ast = self.context.getAST(self.dataIndex());
     const tokens = self.context.getTokens(self.dataIndex());
-
 
     switch (signatureType) {
         .Field, .Parameter => |t| {
@@ -898,6 +949,8 @@ fn resolveSignature(self: *Resolver, signaturePtr: defines.SignaturePtr, index: 
                     .index = index,
                     .token = field.name,
                     .node = field.type,
+                    .type = field.type,
+                    .topLevel = false,
                 });
 
                 const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
@@ -921,15 +974,15 @@ fn prepassScope(self: *Resolver, declarations: defines.Range) Error!void {
     const tokens = self.context.getTokens(self.dataIndex());
 
     for (declarations.start..declarations.end) |declarationPtrPtr| {
-        const expr = ast.statements.items(.value)[ast.extra.items[declarationPtrPtr]];
+        const expr = ast.statements.items(.value)[ast.extra[declarationPtrPtr]];
 
         const signatures = defines.Range{
-            .start = ast.extra.items[expr],
-            .end = ast.extra.items[expr + 1],
+            .start = ast.extra[expr],
+            .end = ast.extra[expr + 1],
         };
         
-        for (signatures.start..signatures.end) |signaturePtrPtr| {
-            const field = ast.signatures.items(.name)[ast.extra.items[signaturePtrPtr]];
+        for (signatures.start..signatures.end, 0..) |signaturePtrPtr, i| {
+            const field = ast.signatures.items(.name)[ast.extra[signaturePtrPtr]];
             self.lastToken = field;
             const lexeme = tokens.get(field).lexeme(self.context, self.dataIndex());
 
@@ -938,9 +991,11 @@ fn prepassScope(self: *Resolver, declarations: defines.Range) Error!void {
                 .kind = .Variable,
                 .scope = self.currentScope,
                 .public = false,
-                .index = 0,
-                .token = 0,
-                .node = 0,
+                .index = @intCast(i),
+                .token = field,
+                .node = ast.extra[expr + 2],
+                .type = ast.signatures.items(.type)[ast.extra[signaturePtrPtr]],
+                .topLevel = true,
             });
 
             const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
@@ -962,16 +1017,16 @@ fn handleScopeDefs(self: *Resolver, declarations: defines.Range) Error!void {
     try self.prepassScope(declarations);
 
     for (declarations.start..declarations.end) |declPtrPtr| {
-        const def = ast.statements.items(.value)[ast.extra.items[declPtrPtr]];
+        const def = ast.statements.items(.value)[ast.extra[declPtrPtr]];
 
         const signatures = defines.Range{
-            .start = ast.extra.items[def],
-            .end = ast.extra.items[def + 1],
+            .start = ast.extra[def],
+            .end = ast.extra[def + 1],
         };
-        const initializer = ast.extra.items[def + 2];
+        const initializer = ast.extra[def + 2];
 
-        for (signatures.start..signatures.end) |signaturePtrPtr| {
-            const signaturePtr = ast.extra.items[signaturePtrPtr];
+        for (signatures.start..signatures.end, 0..) |signaturePtrPtr, i| {
+            const signaturePtr = ast.extra[signaturePtrPtr];
             const field = ast.signatures.get(signaturePtr);
             self.lastToken = field.name;
 
@@ -986,7 +1041,9 @@ fn handleScopeDefs(self: *Resolver, declarations: defines.Range) Error!void {
                 .public = field.public,
                 .token = field.name,
                 .node = initializer,
-                .index = @as(u32, @intCast(signaturePtrPtr)) - signatures.start,
+                .index = @intCast(i),
+                .type = field.type,
+                .topLevel = true,
             });
         }
 
@@ -1060,26 +1117,40 @@ fn getModuleName(self: *Resolver, module: defines.ExpressionPtr) []const u8 {
     }
 
     const exprPtr = ast.expressions.items(.value)[module];
-    var expr = ast.extra.items[exprPtr];
+    var expr = ast.extra[exprPtr];
 
     while (ast.expressions.items(.type)[expr] != .Identifier) {
-        expr = ast.extra.items[ast.expressions.items(.value)[expr]];
+        expr = ast.extra[ast.expressions.items(.value)[expr]];
     }
 
     self.lastToken = ast.expressions.items(.value)[expr];
-    const member = ast.extra.items[exprPtr + 1];
+    const member = ast.extra[exprPtr + 1];
     const end = tokens.items(.end)[member];
     const start = tokens.items(.start)[self.lastToken];
 
     return self.context.getFile(self.dataIndex())[start..end];
 }
 
-const builtins = [_][]const u8 {
+pub const builtins = [_][]const u8 {
     "u32", "i32", "u8", "i8", "bool",
-    "float", "void", "type", "any", "noreturn",
+    "float", "void", "type", "noreturn",
+    "enum_literal", "comptime_int", "comptime_float",
+    "any",
 
     "undefined", "typeInfo", "hasField", "compileError",
     "bitSizeOf", "unreachable", "enumStr", "typeOf",
     "field", "fieldIndex", "hasDef", "definitionIndex",
     "this", "sizeOf", "comptimeAlloc", "bitSet",
 };
+
+pub fn BuiltinIndex(comptime builtin: []const u8) u32 {
+    var index: u32 = 0;
+    for (builtins) |b| {
+        defer index += 1;
+        if (std.mem.eql(u8, b, builtin)) {
+            return index;
+        }
+    }
+
+    unreachable;
+}

@@ -1,13 +1,7 @@
 /*import std;
 
-let cPtr: *fn type -> type = fn |T| #(@c) *T;
-let toSlice = fn (T: type, ptr: *T, len: u32) -> []T {
-    return ptr[0..len];
-};
-
 let main = fn () -> Main {
-    let cStylePtr: cPtr(u32) = undefined;
-    let cSlice = toSlice(u32, cStylePtr, 32);
+    let cStylePtr: [@c]u8 = undefined;
 
     return Main(@Ok);
 };
@@ -15,4 +9,7 @@ let main = fn () -> Main {
 let Main = std::Result(void, std::ErrorCode);
 */
 
-let main = @Test;
+let b = i32;
+let a = c;
+let main = a;
+let c: b = u32;

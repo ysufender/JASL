@@ -54,4 +54,8 @@ pub const CompilerError = error {
     InvalidEnumeration,
     TypeMismatch,
     DependencyCycle,
+    TypeNameTooLong,
+    ComptimeNotPossible,
+    IntegerOverflow,
+    ShouldBeImpossible,
 };

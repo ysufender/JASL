@@ -194,7 +194,7 @@ pub fn overwriteAST(self: *Context, astPtr: defines.ASTPtr, ast: Parser.AST) Com
     self.counts.modules += 1;
     self.counts.expressions += ast.expressions.len;
     self.counts.statements += ast.statements.len;
-    self.counts.extras += @intCast(ast.extra.items.len);
+    self.counts.extras += @intCast(ast.extra.len);
 
     self.counts.integer += ast.stats.integer;
     self.counts.float += ast.stats.float;

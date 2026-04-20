@@ -2,6 +2,7 @@ const std = @import("std");
 const common = @import("../core/common.zig");
 const defines = @import("../core/defines.zig");
 const collections = @import("../util/collections.zig");
+const functional = @import("../util/functional.zig");
 const Types = @import("type.zig");
 
 const Comptime = @import("comptime.zig");
@@ -14,16 +15,16 @@ const Error = common.CompilerError;
 const Context = common.CompilerContext;
 const Arena = std.heap.ArenaAllocator;
 const Allocator = std.mem.Allocator;
-const ResolutionKey = defines.ResolutionKey;
 
+const BuiltinIndex = Resolver.BuiltinIndex;
 const deepCopy = collections.deepCopy;
 const assert = std.debug.assert;
 
 pub const TypeTable = MultiArrayList(TypeInfo);
-pub const TypeMap = defines.LookupMap(TypeInfo, TypeID);
-pub const ResolutionMap = defines.LookupMap(defines.DeclPtr, defines.Range);
-pub const MetadataMap = defines.LookupMap(Element, []const defines.ExpressionPtr);
-const LookupMap = defines.LookupMap(defines.DeclPtr, TypecheckStatus);
+pub const TypeMap = collections.HashMap(TypeInfo, defines.Range);
+pub const ResolutionMap = collections.HashMap(defines.DeclPtr, defines.Range);
+pub const MetadataMap = collections.HashMap(Element, []const defines.ExpressionPtr);
+const LookupMap = collections.HashMap(defines.DeclPtr, TypecheckStatus);
 
 const TypecheckStatus = struct {
     status: enum {
@@ -64,33 +65,46 @@ pub const Constants = struct {
     pub const Bool = std.ArrayList(bool);
     pub const Aggregate = std.ArrayList([]const Constant);
 
+    pub const Slice = struct {
+        all: List.Slice,
+        ints: Integer.Slice,
+        floats: Float.Slice,
+        strings: String.Slice,
+        bools: Bool.Slice,
+        aggs: Aggregate.Slice,
+    };
+
     all: List,
     ints: Integer,
     floats: Float,
     strings: String,
     bools: Bool,
     aggs: Aggregate,
+
+    pub fn slice(self: *const Constants) Slice {
+        return .{
+            .all = self.all.slice(),
+            .ints = self.ints.items,
+            .floats = self.floats.items,
+            .strings = self.strings.items,
+            .bools = self.bools.items,
+            .aggs = self.aggs.items,
+        };
+    }
 };
 
 pub const Resolution = struct {
     types: TypeTable.Slice,
     resolutionMap: ResolutionMap,
-    constants: Constants,
+    extra: std.ArrayList(TypeID).Slice,
+    constants: Constants.Slice,
 
-    pub fn tryGet(self: *const Resolution, key: ResolutionKey) ?TypeID {
-        return self.resolutionMap.get(key);
+    pub fn get(self: *const Resolution, key: defines.DeclPtr) defines.Range {
+        return self.resolutionMap.get(key).?;
     }
 
-    pub fn get(self: *const Resolution, key: ResolutionKey) TypeID {
-        return self.tryGet(key).?;
-    }
-
-    pub fn tryGetType(self: *const Resolution, key: ResolutionKey) ?TypeInfo {
-        return self.types.get(self.tryGet(key) orelse return null);
-    }
-
-    pub fn getType(self: *const Resolution, key: ResolutionKey) TypeInfo {
-        return self.tryGetType(key).?;
+    pub fn getTypeAt(self: *const Resolution, key: defines.DeclPtr, index: u32) TypeID {
+        return self.extra[self.resolutionMap.get(key).?.at(index)];
     }
 };
 
@@ -127,9 +141,9 @@ pub fn init(
 
     const counts = context.counts;
     const total = counts.integer + counts.float + counts.string + counts.bool;
-    const typeCount = counts.types * 3 + @as(u32, @intCast(builtins.len));
+    const typeCount = counts.types * 3 + @as(u32, @intCast(Comptime.builtins.len));
 
-    var typeTable = try TypeTable.init(allocator, typeCount + @as(u32, @intCast(builtins.len)));
+    var typeTable = try TypeTable.init(allocator, typeCount + @as(u32, @intCast(Comptime.builtins.len)));
     var extra = std.ArrayList(TypeID).initCapacity(allocator, typeCount) catch return error.AllocatorFailure;
     var reso = ResolutionMap.empty;
     var typeMap = TypeMap.empty;
@@ -137,13 +151,16 @@ pub fn init(
     var lookup = LookupMap.empty;
 
     reso.ensureTotalCapacity(allocator, symbolTable.declarations.len) catch return error.AllocatorFailure;
-    typeMap.ensureTotalCapacity(allocator, typeCount + @as(u32, @intCast(builtins.len))) catch return error.AllocatorFailure;
+    typeMap.ensureTotalCapacity(allocator, typeCount + @as(u32, @intCast(Comptime.builtins.len))) catch return error.AllocatorFailure;
     lookup.ensureTotalCapacity(allocator, symbolTable.declarations.len) catch return error.AllocatorFailure;
     metadata.ensureTotalCapacity(allocator, counts.meta * 3) catch return error.AllocatorFailure;
 
-    inline for (builtins, 0..) |builtin, id| {
+    inline for (Comptime.builtins, 0..) |builtin, id| {
         typeTable.appendAssumeCapacity(std.meta.activeTag(builtin.info), @field(builtin.info, @tagName(std.meta.activeTag(builtin.info))));
-        typeMap.putAssumeCapacityNoClobber(.{ .name = builtin.info, .scope = 0 }, @intCast(id));
+        typeMap.putAssumeCapacityNoClobber(builtin.info, .{
+            .start = @intCast(id),
+            .end = @intCast(id + 1)
+        });
         extra.appendAssumeCapacity(id);
     }
 
@@ -185,258 +202,212 @@ pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
     self.executer = try Comptime.init(self, allocator);
 
     const mainType = try self.typecheckDecl(self.symbols.lookup.get(.{ .scope = 1, .name = "main" }).?);
-    if (mainType.len() != 1 or self.extra.items[mainType.start] != Builtin.Type("entry_point").start) {
+    if (
+        mainType.len() != 1
+        or
+        mainType.at(0) != comptime Comptime.Builtin.Type("entry_point").at(0)
+    ) {
         self.report("Unexpected type of entry point 'main'. Expected '*fn void -> i32', received '{s}'", .{
-            try self.typeName(allocator, self.extra.items[mainType.start]),
+            self.typeNameMany(allocator, mainType),
         });
         return error.TypeMismatch;
     }
 
-    return .{
-        .types = (self.typeTable.slice()), 
-        .resolutionMap = (self.reso),
-        .constants = (self.constants),
-    };
+    return collections.deepCopy(Resolution{
+        .types = self.typeTable.slice(), 
+        .resolutionMap = self.reso,
+        .constants = self.constants.slice(),
+        .extra = self.extra.items,
+    }, allocator);
 }
 
-pub fn typecheckStatement(self: *Typechecker, statementPtr: defines.StatementPtr) Error!defines.Range {
-    const allocator = self.arena.allocator();
-    const ast = self.context.getAST(self.currentFile);
-    const tokens = self.context.getTokens(self.currentFile);
+pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) Error!defines.Range {
+    std.debug.print("Typechecking {s}\n", .{
+        self.context.getTokens(self.currentFile).get(decl.token).lexeme(self.context, self.currentFile)
+    });
 
-    const statement = ast.statements.get(statementPtr);
-    return ret: switch (statement.type) {
-        .VariableDefinition => {
-            const exprPtr = ast.extra.items[statement.value + 2];
-            const initializer = try self.typecheckExpression(exprPtr, null);
+    std.debug.print("Initializer is: {d}\n", .{decl.node});
 
-            const signatures = defines.Range{
-                .start = ast.extra.items[statement.value],
-                .end = ast.extra.items[statement.value + 1],
-            };
+    const varType = try self.expectType(decl.type);
+    const initializer = try self.typecheckExpression(decl.node, varType);
 
-            if (signatures.len() != initializer.len()) {
-                self.report(
-                    "Expression count mismatch in variable definition."
-                    ++ "\n\tExpected {d} expressions, received {d}.", .{
-                        signatures.len(),
-                        initializer.len() 
-                });
-                break :ret error.IllegalSyntax;
-            }
-
-            const scratchStart = self.scratch.items.len;
-            for (signatures.start..signatures.end) |signaturePtrPtr| {
-                const index = @as(u32, @intCast(signaturePtrPtr)) - signatures.start;
-                const signaturePtr = ast.extra.items[signaturePtrPtr];
-                self.lastToken = ast.signatures.items(.name)[signaturePtr];
-                const declTypePtr: defines.ExpressionPtr = ast.signatures.items(.type)[signaturePtr];
-                const declTypeRange = try self.typecheckExpression(declTypePtr, comptime Builtin.Type("type"));
-
-                switch (declTypeRange.len()) {
-                    1 => {
-                        const declType: TypeID = declTypeRange.start;
-                        const initializerType: TypeID = initializer.at(index);
-
-                        if (!self.suitableSingle(declType, initializerType)) {
-                            self.report("Mismatching initializer type for '{s}'. Expected '{s}', received '{s}'.", .{
-                                tokens.get(self.lastToken).lexeme(self.context, self.currentFile),
-                                try self.typeName(allocator, declType),
-                                try self.typeName(allocator, initializerType),
-                            });
-                            return error.TypeMismatch;
-                        }
-
-                        self.scratch.append(allocator, self.assign(declType, initializerType, true)) catch return error.AllocatorFailure;
-                    },
-                    0 => {
-                        self.report("Untyped declarations are not supported.", .{});
-                        break :ret error.IllegalSyntax;
-                    },
-                    else => {
-                        self.report("Multi-typed declarations are not supported.", .{});
-                        break :ret error.IllegalSyntax;
-                    },
-                }
-            } 
-
-            const types = try self.commitScratch(scratchStart);
-            return types;
-        },
-        else => {
-            self.report("Typechecking is not implemented for {s}", .{@tagName(statement.type)});
-            break :ret error.NotImplemented;
-        },
-    };
+    return
+        if (self.suitableSingle(varType.at(0), initializer.at(decl.index)))
+            self.infer(varType.at(0), initializer.at(0))
+        else  {
+            self.report(
+                "Mismatching initializer type in variable definition."
+                ++ " Expected '{s}', received '{s}'.", .{
+                self.typeName(self.arena.allocator(), varType.at(0)),
+                self.typeName(self.arena.allocator(), initializer.at(decl.index)),
+            });
+            return error.TypeMismatch;
+        };
 }
 
 pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.ExpressionPtr, maybeExpected: ?defines.Range) Error!defines.Range {
-    const allocator = self.arena.allocator();
     const ast = self.context.getAST(self.currentFile);
-    const tokens = self.context.getTokens(self.currentFile);
+    _ = maybeExpected;
 
     const expr = ast.expressions.get(expressionPtr);
-    return ret: switch (expr.type) {
-        .Literal => switch (tokens.items(.type)[expr.value]) {
-            .Integer => comptime Builtin.Type("comptime_int"),
-            .Float => comptime Builtin.Type("comptime_float"),
-            .False, .True => comptime Builtin.Type("bool"),
-            .String => comptime Builtin.Type("string"),
-            .EnumLiteral => {
-                if (maybeExpected) |expected| {
-                    if (expected.len() > 1) {
-                        self.report("Unexpected enum literal.", .{});
-                    }
-
-                    switch (self.typeTable.tag()[expected.start]) {
-                        .Enum => {
-                            const literal = tokens.get(expr.value).lexeme(self.context, self.currentFile)[1..];
-                            const fields: Types.Enum = self.typeTable.get(.Enum, expected.start);
-
-                            for (fields.fields) |field| {
-                                if (std.mem.eql(u8, field, literal)) {
-                                    break :ret expected;
-                                }
-                            }
-
-                            self.report("Enum type {s} does not contain a field named {s}.", .{try self.typeName(allocator, expected.start), literal[1..]});
-                            break :ret error.InvalidEnumeration;
-                        },
-                        else => {
-                            self.report("Expected {s}, received enum literal instead.", .{try self.typeName(allocator, expected.start)});
-                            break :ret error.TypeMismatch;
-                        }
-                    }
-                }
-                else {
-                    self.report("Unable to infer result type of enum literal.", .{});
-                    break :ret error.MissingTypeSpecifier;
-                }
-            },
-            else => unreachable,
+    return switch (expr.type) {
+        .Identifier => {
+            self.lastToken = expr.value;
+            const decl = self.symbols.findDecl(.{ .file = self.currentFile, .expr = expressionPtr });
+            return self.typecheckDecl(decl);
         },
-        .ValueType =>
-            if (expr.value == 0) comptime Builtin.Type("any")
-            else break :ret self.typecheckDecl(self.symbols.get(.{ .file = self.currentFile, .expr = expressionPtr })),
-        .ExpressionList => {
-            const expressions = defines.Range{
-                .start = ast.extra.items[expr.value],
-                .end = ast.extra.items[expr.value + 1],
-            };
-
-            for (expressions.start..expressions.end) |exprPtrPtr| {
-                const exprType = try self.typecheckExpression(ast.extra.items[exprPtrPtr], maybeExpected);
-                _ = exprType;
-            }
-
-            break :ret std.mem.zeroes(defines.Range);
-        },
-        .Identifier => 
-            if (self.symbols.resolutionMap.get(.{ .file = self.currentFile, .expr = expressionPtr })) |decl|
-                try self.typecheckDecl(decl)
-            else unreachable,
-        else => {
-            self.report("Typechecking is not implemented for {s}", .{@tagName(expr.type)});
-            break :ret error.NotImplemented;
-        },
+        else => |t| {
+            self.report("{s} is not implemented.", .{@tagName(t)});
+            return error.NotImplemented;
+        }
     };
 }
 
 pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr) Error!defines.Range {
     const allocator = self.arena.allocator();
 
-    const isPresent = self.lookup.getOrPut(allocator, .{ .scope = self.currentFile, .name = declPtr }) catch return error.AllocatorFailure;
+    const ast = self.context.getAST(self.currentFile);
+    const tokens = self.context.getTokens(ast.tokens);
+    _ = tokens;
 
-    return if (isPresent.found_existing) ret: switch (isPresent.value_ptr.status) {
-        .InProgress => {
-            self.report("Dependency cycle detected.", .{});
-            break :ret error.DependencyCycle;
-        },
-        .Checked => return isPresent.value_ptr.types,
-        else => unreachable,
+    const decl = self.symbols.getDecl(declPtr);
+
+    const isPresent = self.lookup.getOrPut(allocator, declPtr) catch return error.AllocatorFailure;
+
+    if (isPresent.found_existing) {
+        switch (isPresent.value_ptr.status) {
+            .Checked => return isPresent.value_ptr.types,
+            .InProgress => {
+                self.report("Dependency cycle detected.", .{});
+                return error.DependencyCycle;
+            },
+            else => unreachable,
+        }
     }
-    else ret: {
-            isPresent.value_ptr.* = .{
-                .status = .InProgress,
-                .types = std.mem.zeroes(defines.Range),
-            };
 
-            const decl = self.symbols.declarations.get(declPtr);
-            const declType = blk: switch (decl.kind) {
-                .Variable => {
-                    self.lastToken = decl.token;
-                    break :blk try self.typecheckStatement(decl.node);
-                },
-                .Builtin => {
-                    break :ret if (decl.index <= 8) defines.Range{ .start = decl.index, .end = decl.index + 1 }
-                    else error.NotImplemented;
-                },
-                else => {
-                    self.report("Typechecking is not implemented for {s}", .{@tagName(decl.kind)});
-                    break :ret error.NotImplemented;
-                },
-            };
-
-            isPresent.value_ptr.* = .{
-                .status = .Checked,
-                .types = declType,
-            };
-
-            break :ret declType;
+    isPresent.value_ptr.* = .{
+        .status = .InProgress,
+        .types = std.mem.zeroes(defines.Range),
     };
+
+    if (decl.kind != .Builtin) {
+        self.lastToken = decl.token;
+    }
+
+    const types = switch (decl.kind) {
+        .Builtin =>
+                if (Comptime.Builtin.isBuiltinType(decl.node)) comptime Comptime.Builtin.Type("type")
+                else {
+                    self.report("{s} is not implemented for {s}.", .{@tagName(decl.kind), Comptime.Builtin.TypeName(decl.index)});
+                    return error.NotImplemented;
+                },
+        .Variable => try self.typecheckVariable(&decl),
+        else => {
+            self.report("{s} is not implemented.", .{@tagName(decl.kind)});
+            return error.NotImplemented;
+        },
+    };
+
+    isPresent.value_ptr.* = .{
+        .status = .Checked,
+        .types = types,
+    };
+
+    return types;
 }
 
-fn report(self: *const Typechecker, comptime fmt: []const u8, args: anytype) void {
+pub fn registerType(self: *const Typechecker, newType: TypeInfo) Error!TypeID {
+    const isPresent = self.typeMap.getOrPut(self.arena.allocator(), newType)
+        catch return error.AllocatorFailure;
+    return isPresent.value_ptr.at(0);
+}
+
+pub fn report(self: *const Typechecker, comptime fmt: []const u8, args: anytype) void {
     common.log.err(fmt, args);
     const token = self.context.getTokens(self.currentFile).get(self.lastToken);
     const position = token.position(self.context, self.currentFile);
     common.log.err("\t{s} {d}:{d}\n", .{ self.context.getFileName(self.currentFile), position.line, position.column});
 }
 
-fn suitable(self: *const Typechecker, expected: defines.Range, got: defines.Range) bool {
-    _ = self;
+pub fn suitable(self: *const Typechecker, expected: defines.Range, got: defines.Range) bool {
+    self.assertSuitable(expected, got) catch return false;
+    return true;
+}
 
+pub fn suitableSingle(self: *const Typechecker, expected: TypeID, got: TypeID) bool {
+    self.assertSuitableSingle(expected, got) catch return false;
+    return true;
+}
+
+pub fn assertSuitable(self: *const Typechecker, this: defines.Range, that: defines.Range) Error!void {
     return
-        if (expected.len() != got.len()) false
-        else {
+        if (this.len() != that.len()) error.TypeMismatch 
+        else for (0..this.len()) |i| {
+            self.assertSuitableSingle(this.at(@intCast(i)), that.at(@intCast(i)));
         };
 }
 
-fn suitableSingle(self: *const Typechecker, expected: TypeID, got: TypeID) bool {
-    return switch (self.typeTable.tag()[got]) {
-        .Noreturn => true,
-        else => |_| switch (self.typeTable.tag()[expected]) {
-            .Any => true,
-            else => false,
+pub fn assertSuitableSingle(self: *const Typechecker, this: TypeID, that: TypeID) Error!void {
+    const thisType = self.typeTable.tag()[this];
+    const thatType = self.typeTable.tag()[that];
+
+    return switch (thatType) {
+        .Noreturn => { },
+        .Any => functional.throwIf(thisType == .Any, error.TypeMismatch),
+        else => switch (thisType) {
+            .Any => { },
+            else => functional.throwIf(thisType != thatType, error.TypeMismatch),
         },
     };
 }
 
-fn assignable(self: *const Typechecker, this: TypeID, that: TypeID) bool {
+pub fn assignable(self: *const Typechecker, this: TypeID, that: TypeID) bool {
     return
         if (!self.mutable(this)) false
-        else if (this == that) true
-        else switch (self.typeTable.tag()[this]) {
-            else => unreachable,
-        };
+        else self.suitableSingle(this, that);
 }
 
-fn assign(self: *const Typechecker, this: TypeID, that: TypeID, initialize: bool) TypeID {
-    assert(initialize or self.assignable(this, that));
+pub fn infer(self: *const Typechecker, this: TypeID, that: TypeID) Error!defines.Range {
+    try self.assertSuitableSingle(this, that);
 
-    return switch (self.typeTable.tag()[this]) {
-        .Any =>
-            if (self.typeTable.get(.Any, this) or initialize) that
-            else unreachable,
-        else => this,
+    const thisType = self.typeTable.tag()[this];
+    const thatType = self.typeTable.tag()[that];
+
+    const resType = switch (thatType) {
+        .Noreturn => that,
+        else => switch (thisType) {
+            .Any => that,
+            else => this,
+        },
+    };
+
+    return .{
+        .start = resType,
+        .end = resType + 1,
     };
 }
 
-fn mutable(self: *const Typechecker, typeID: TypeID) bool {
+pub fn expectType(self: *Typechecker, exprPtr: defines.ExpressionPtr) Error!defines.Range {
+    if (exprPtr == 0) {
+        return comptime Comptime.Builtin.Type("any");
+    }
+
+    return ret: switch (try self.executer.eval(exprPtr)) {
+        .Type => |typeID| .{
+            .start = typeID,
+            .end = typeID + 1,
+        },
+        else => |result| {
+            self.report("Expected a type expression, received '{s}'.", .{@tagName(std.meta.activeTag(result))});
+            break :ret error.TypeMismatch;
+        },
+    };
+}
+
+pub fn mutable(self: *const Typechecker, typeID: TypeID) bool {
     return switch (self.typeTable.tag()[typeID]) {
-        .ComptimeInt, .ComptimeFloat => false,
-        .Any => self.typeTable.get(.Float, typeID),
-        .Bool => self.typeTable.get(.Float, typeID),
+        .Any => self.typeTable.get(.Any, typeID),
+        .Bool => self.typeTable.get(.Bool, typeID),
         .Float => self.typeTable.get(.Float, typeID),
         .Struct => self.typeTable.get(.Struct, typeID).mutable,
         .Union => self.typeTable.get(.Union, typeID).mutable,
@@ -448,20 +419,39 @@ fn mutable(self: *const Typechecker, typeID: TypeID) bool {
     };
 }
 
-fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) Error![]const u8 {
+pub fn typeNameMany(self: *const Typechecker, allocator: Allocator, types: defines.Range) []const u8 {
+    return ret: switch (types.len()) {
+        0 => "void",
+        1 => self.typeName(allocator, self.extra.items[types.start]),
+        else => {
+            const res = allocator.alloc(u8, 64) catch break :ret "AllocatorFailure";
+            _ = std.fmt.bufPrint(res, "(", .{}) catch unreachable;
+            for (types.start..types.end) |typePtr| {
+                _ = std.fmt.bufPrint(res, "{s}{s}", .{
+                    self.typeName(allocator, self.extra.items[typePtr]),
+                    if (typePtr == types.end - 1) ")" else ", "
+                }) catch "TypeNameTooLong";
+            }
+
+            break :ret res;
+        },
+    };
+}
+
+pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) []const u8 {
     const typename = struct {
-        fn typename(this: *const Typechecker, comptime T: std.meta.FieldEnum(TypeInfo), alc: Allocator, tid: TypeID) Error![]const u8 {
+        fn typename(this: *const Typechecker, comptime T: std.meta.FieldEnum(TypeInfo), alc: Allocator, tid: TypeID) []const u8 {
             const t = this.typeTable.get(T, tid);
             
             const prefix = if (t.mutable) "" else "mut ";
 
-            const res = alc.alloc(u8, prefix.len + t.name.len) catch return error.AllocatorFailure;
+            const res = alc.alloc(u8, prefix.len + t.name.len) catch return "AllocatorFailure";
             return std.fmt.bufPrint(res, "{s}{s}", .{prefix, t.name}) catch unreachable;
         }
     }.typename;
 
     return
-        if (Builtin.isBuiltin(typeID)) Builtin.TypeName(typeID)
+        if (Comptime.Builtin.isBuiltinType(typeID)) Comptime.Builtin.TypeName(typeID)
         else ret: switch (self.typeTable.tag()[typeID]) {
             .Struct => typename(self, .Struct, allocator, typeID),
             .Union => typename(self, .Union, allocator, typeID),
@@ -469,7 +459,7 @@ fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) Erro
             .Function => typename(self, .Function, allocator, typeID),
             .Pointer => {
                 const ptr: Types.Pointer = self.typeTable.get(.Pointer, typeID);
-                const child = try self.typeName(allocator, ptr.child);
+                const child = self.typeName(allocator, ptr.child);
 
                 const prefix = switch (ptr.pointerType) {
                     .Slice => "[]",
@@ -477,16 +467,16 @@ fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) Erro
                     .C => "[@c]",
                 };
 
-                const res = allocator.alloc(u8, child.len + prefix.len) catch break :ret error.AllocatorFailure;
+                const res = allocator.alloc(u8, child.len + prefix.len) catch break :ret "AllocatorFailure";
                 break :ret std.fmt.bufPrint(res, "{s}{s}", .{prefix, child}) catch unreachable;
             },
             .Array => {
                 const arr: Types.Array = self.typeTable.get(.Array, typeID);
-                const child = try self.typeName(allocator, arr.child);
+                const child = self.typeName(allocator, arr.child);
 
                 const prefix = if (arr.mutable) "mut " else "";
 
-                const res = allocator.alloc(u8, child.len + prefix.len) catch break :ret error.AllocatorFailure;
+                const res = allocator.alloc(u8, child.len + prefix.len) catch break :ret "AllocatorFailure";
                 break :ret std.fmt.bufPrint(res, "{s}{s}", .{prefix, child}) catch unreachable;
             },
             else => unreachable,
@@ -508,74 +498,3 @@ fn commitScratch(self: *Typechecker, scratchStart: usize) common.CompilerError!d
     self.scratch.shrinkRetainingCapacity(@intCast(scratchStart));
     return span;
 }
-
-const Builtin = struct {
-    fn isBuiltin(typeID: TypeID) bool {
-        return typeID < builtins.len;
-    }
-
-    fn TypeName(btype: TypeID) []const u8 {
-        assert(btype < builtins.len);
-        return builtins[btype].name;
-    }
-
-    fn Type(btype: []const u8) defines.Range {
-        for (builtins, 0..) |item, i| {
-            if (std.mem.eql(u8, item.name, btype)) {
-                return .{
-                    .start = @intCast(i),
-                    .end = @intCast(i + 1),
-                };
-            }
-        }
-
-        unreachable;
-    }
-};
-
-const builtins = [_]struct {
-    name: []const u8,
-    info: TypeInfo,
-}{
-    // u32
-    .{ .name = "u32", .info = .{ .Integer = .{ .mutable = false, .size = 32, .signed = false, } } },
-    // i32
-    .{ .name = "i32", .info = .{ .Integer = .{ .mutable = false, .size = 32, .signed = true, } } },
-    // u8
-    .{ .name = "u8", .info = .{ .Integer = .{ .mutable = false, .size = 8, .signed = false, } } },
-    // i8
-    .{ .name = "i8", .info = .{ .Integer = .{ .mutable = false, .size = 8, .signed = true, } } },
-    // bool
-    .{ .name = "bool", .info = .{ .Bool = false } },
-    // flaot
-    .{ .name = "float", .info = .{ .Float = false } },
-    // void
-    .{ .name = "void", .info = .{ .Void = {}, } },
-    // type
-    .{ .name = "type", .info = .{ .Type = { }, } },
-    // any
-    .{ .name = "any", .info = .{ .Any = false } },
-
-    // mut u32
-    .{ .name = "mut u32", .info = .{ .Integer = .{ .mutable = true, .size = 32, .signed = false, } } },
-    // mut i32
-    .{ .name = "mut i32", .info = .{ .Integer = .{ .mutable = true, .size = 32, .signed = true, } } },
-    // mut u8
-    .{ .name = "mut u8", .info = .{ .Integer = .{ .mutable = true, .size = 8, .signed = false, } } },
-    // mut i8
-    .{ .name = "mut i8", .info = .{ .Integer = .{ .mutable = true, .size = 8, .signed = true, } } },
-    // mut bool
-    .{ .name = "mut bool", .info = .{ .Bool = true } },
-    // mut float
-    .{ .name = "mut float", .info = .{ .Float = true } },
-    // comptime int
-    .{ .name = "comptime_int", .info = .{ .ComptimeInt = { }, } },
-    // comptime float
-    .{ .name = "comptime_float", .info = .{ .ComptimeFloat = { }, } },
-    // string ([]u8)
-    .{ .name = "string", .info = .{ .Pointer = .{ .mutable = false, .child = 2, .pointerType = .Slice, }, } },
-    // mut any
-    .{ .name = "mut any", .info = .{ .Any = true } },
-    // entry point
-    .{ .name = "entry_point", .info = .{ .Function = .{ .mutable = false, .name = "root::main", .argTypes = &.{}, .returnTypes = &.{ 1 } } } },
-};

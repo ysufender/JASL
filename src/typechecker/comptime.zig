@@ -4,15 +4,17 @@ const defines = @import("../core/defines.zig");
 const collections = @import("../util/collections.zig");
 const Types = @import("type.zig");
 
+const assert = std.debug.assert;
+
 const Parser = @import("../parser/parser.zig");
 const Typechecker = @import("typechecker.zig");
-const ResolutionKey = defines.ResolutionKey;
+const Resolver = @import("resolver.zig");
 const Allocator = std.mem.Allocator;
 const Arena = std.heap.ArenaAllocator;
 const Error = common.CompilerError;
 
-const CacheEntryLookup = defines.LookupMap(defines.DeclPtr, CacheLookup);
-const CacheLookup = defines.LookupMap([]const Value, Value);
+const CacheEntry = collections.HashMap(Resolver.ResolutionKey, ValuePtr);
+const Memory = std.ArrayList(Value);
 
 const ValuePtr = u32;
 
@@ -24,9 +26,12 @@ pub const Value = union(enum) {
     Float: f32,
     String: []const u8,
     Bool: bool,
-    Enum: struct {
-        Type: Types.TypeID,
-        Value: u32,
+    Enum: union(enum) {
+        Literal: []const u8,
+        Type: struct {
+            Type: Types.TypeID,
+            Value: u32,
+        },
     },
     Union: struct {
         Type: Types.TypeID,
@@ -53,26 +58,174 @@ pub const Value = union(enum) {
 
 const Comptime = @This();
 
-cache: CacheEntryLookup,
+cache: CacheEntry,
 typechecker: *Typechecker,
 arena: Arena,
 gpa: Allocator,
+attempting: bool,
+memory: Memory,
 
 pub fn init(typechecker: *Typechecker, gpa: Allocator) Error!Comptime {
     var arena = Arena.init(gpa);
     const allocator = arena.allocator();
 
-    var cache = CacheEntryLookup.empty;
-    cache.ensureTotalCapacity(allocator, 256) catch return error.AllocatorFailure;
+    var cache = CacheEntry.empty;
+    cache.ensureTotalCapacity(allocator, typechecker.symbols.resolutionMap.count()) catch return error.AllocatorFailure;
 
     return .{
         .typechecker = typechecker,
         .gpa = gpa,
         .cache = cache,
+        .memory = Memory.initCapacity(allocator, 1024) catch return error.AllocatorFailure,
+        .attempting = false,
         .arena = arena,
     };
+}
+
+pub fn eval (self: *Comptime, exprPtr: defines.ExpressionPtr) Error!Value {
+    const typechecker = self.typechecker;
+    const file = typechecker.currentFile;
+    const ast = typechecker.context.getAST(self.typechecker.currentFile);
+
+    const key = Resolver.ResolutionKey{
+        .file = typechecker.currentFile,
+        .expr = exprPtr,
+    };
+
+    if (self.cache.get(key)) |cached| {
+        return self.memory.items[cached];
+    }
+
+    const expr = ast.expressions.get(exprPtr);
+    const value = switch (expr.type) {
+        .Identifier => try self.evalDecl(typechecker.symbols.findDecl(.{ .file = file, .expr = exprPtr })),
+        .Literal => try self.evalLiteral(&expr),
+        else => |t| {
+            self.report("{s} is not implemented.", .{@tagName(t)});
+            return error.NotImplemented;
+        },
+    };
+
+    const ptr = try self.memory.addOne(self.arena.allocator());
+    ptr.* = value;
+    self.cache.putNoClobber(self.arena.allocator(), key, @intCast(self.memory.items.len - 1))
+        catch return error.AllocatorFailure;
+    return value;
+}
+
+fn evalDecl(self: *Comptime, declPtr: defines.DeclPtr) Error!Value {
+    const decls = self.typechecker.symbols.declarations;
+    _ = try self.typechecker.typecheckDecl(declPtr);
+
+    const decl  = decls.get(declPtr);
+    return switch (decl.kind) {
+        .Builtin => self.evalBuiltin(&decl),
+        .Variable => self.eval(decl.node),
+        else => |t| {
+            self.report("{s} is not implemented.", .{@tagName(t)});
+            return error.NotImplemented;
+        },
+    };
+}
+
+fn evalBuiltin(self: *Comptime, decl: *const Resolver.Declaration) Error!Value {
+    return if (Builtin.isBuiltinType(decl.type)) .{
+        .Type = decl.type,
+    }
+    else {
+        self.report("{s} is not implemented.", .{Resolver.builtins[decl.type]});
+        return error.NotImplemented;
+    };
+}
+
+fn evalLiteral(self: *Comptime, expr: *const Parser.Expression) Error!Value {
+    const token = self.typechecker.context.getTokens(self.typechecker.currentFile).get(expr.value);
+    const lexeme = token.lexeme(self.typechecker.context, self.typechecker.currentFile);
+    return switch (token.type) {
+        .True, .False => .{ .Bool = token.type == .True },
+        .EnumLiteral => .{ .Enum = .{ .Literal = lexeme, }},
+        .Float => .{ .Float = std.fmt.parseFloat(f32, lexeme) catch unreachable },
+        .Integer => .{ .Int = std.fmt.parseInt(u32, lexeme, 10) catch |err| switch (err) {
+            error.Overflow => {
+                self.report("Given literal '{s}' is too big for comptime evaluation.", .{lexeme});
+                return error.IntegerOverflow;
+            },
+            else => unreachable,
+        }},
+        .String => .{ .String = lexeme },
+        else => unreachable,
+    };
+}
+
+fn report(self: *const Comptime, comptime fmt: []const u8, args: anytype) void {
+    return
+        if (self.attempting) {}
+        else  self.typechecker.report(fmt, args);
 }
 
 pub fn deinit(self: *Comptime) void {
     self.arena.deinit();
 }
+
+pub const Builtin = struct {
+    pub fn isBuiltinType(typeID: Types.TypeID) bool {
+        return typeID <= comptime Builtin.Type("any").at(0);
+    }
+
+    pub fn TypeName(btype: Types.TypeID) []const u8 {
+        assert(btype < builtins.len);
+        return builtins[btype].name;
+    }
+
+    pub fn Type(btype: []const u8) defines.Range {
+        for (builtins, 0..) |item, i| {
+            if (std.mem.eql(u8, item.name, btype)) {
+                return .{
+                    .start = @intCast(i),
+                    .end = @intCast(i + 1),
+                };
+            }
+        }
+
+        unreachable;
+    }
+};
+
+pub const builtins = [_]struct {
+    name: []const u8,
+    info: Types.TypeInfo,
+}{
+    // u32
+    .{ .name = "u32", .info = .{ .Integer = .{ .mutable = false, .size = 32, .signed = false, } } },
+    // i32
+    .{ .name = "i32", .info = .{ .Integer = .{ .mutable = false, .size = 32, .signed = true, } } },
+    // u8
+    .{ .name = "u8", .info = .{ .Integer = .{ .mutable = false, .size = 8, .signed = false, } } },
+    // i8
+    .{ .name = "i8", .info = .{ .Integer = .{ .mutable = false, .size = 8, .signed = true, } } },
+    // bool
+    .{ .name = "bool", .info = .{ .Bool = false } },
+    // flaot
+    .{ .name = "float", .info = .{ .Float = false } },
+    // void
+    .{ .name = "void", .info = .{ .Void = { }, } },
+    // type
+    .{ .name = "type", .info = .{ .Type = { }, } },
+    // noreturn
+    .{ .name = "noreturn", .info = .{ .Noreturn = { }, } },
+    // enum literal
+    .{ .name = "enum_literal", .info = .{ .EnumLiteral = { } } },
+    // comptime int
+    .{ .name = "comptime_int", .info = .{ .ComptimeInt = { }, } },
+    // comptime float
+    .{ .name = "comptime_float", .info = .{ .ComptimeFloat = { }, } },
+    // any
+    .{ .name = "any", .info = .{ .Any = false } },
+
+    // string ([]u8)
+    .{ .name = "string", .info = .{ .Pointer = .{ .mutable = false, .child = 2, .pointerType = .Slice, }, } },
+    // mut any
+    .{ .name = "mut any", .info = .{ .Any = true } },
+    // entry point
+    .{ .name = "entry_point", .info = .{ .Function = .{ .mutable = false, .name = "root::main", .argTypes = &.{}, .returnTypes = &.{ 1 } } } },
+};

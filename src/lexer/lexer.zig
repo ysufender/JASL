@@ -52,29 +52,35 @@ pub const Token = struct {
         .end = 0,
     };
 
-    pub fn toString(self: *const Token, gpa: std.mem.Allocator, file: defines.FilePtr) []const u8 {
-        const string = self.lexeme(file);
-        const length =  @tagName(self.type).len + lex.len + 4;
+    pub fn toString(self: *const Token, gpa: std.mem.Allocator, context: *const common.CompilerContext, file: defines.FilePtr) []const u8 {
+        const string = self.lexeme(context, file);
+        const length =  @tagName(self.type).len + string.len + 16;
+        const pos = self.position(context, file);
         const buffer = gpa.alloc(u8, length) catch return @errorName(error.AllocatorFailure);
-        return std.fmt.bufPrint(buffer, "<{s}: {s}>", .{@tagName(self.type), string}) catch unreachable;
+        return std.fmt.bufPrint(buffer, "<{s}: {s} at ({d}:{d})>", .{
+            @tagName(self.type),
+            string,
+            pos.line,
+            pos.column,
+        }) catch unreachable;
     }
 
-    pub fn lexeme(self: *const Token, context: *common.CompilerContext, file: defines.FilePtr) []const u8 {
+    pub fn lexeme(self: *const Token, context: *const common.CompilerContext, file: defines.FilePtr) []const u8 {
         assert(self.start <= self.end);
 
         return context.getFile(file)[self.start..self.end];
     }
 
-    pub fn position(self: *const Token, context: *common.CompilerContext, file: defines.FilePtr) Position {
+    pub fn position(self: *const Token, context: *const common.CompilerContext, file: defines.FilePtr) Position {
         var source = context.getFile(file)[0..self.start];
 
         var line: defines.Offset = 1;
         while (std.mem.indexOfScalar(u8, source, '\n')) |newline| {
-            line += 1;
             source = source[(newline + 1)..];
+            line += 1;
         }
 
-        const col: defines.Offset = @intCast(if (source.len > 0) source.len - 1 else 0);
+        const col: defines.Offset = @intCast(source.len + 1);
 
         return .{
             .line = line,
@@ -137,7 +143,7 @@ pub fn init(base: std.mem.Allocator, context: *common.CompilerContext, file: []c
     var tokens = try TokenList.init(arena.allocator(), len + 2);
 
     tokens.appendAssumeCapacity(.{
-        .type = .Semicolon,
+        .type = .Identifier,
         .start = fileHandle,
         .end = fileHandle,
     });
