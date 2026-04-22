@@ -192,17 +192,17 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
             }, decl) catch return error.AllocatorFailure;
         }
     }
-    
+
     return .{
-        .arena = arena,
         .context = context,
         .scopes = scopes,
         .lookup = lookup,
         .decls = decls,
         .resolved = reso,
         .modules = modules,
-        .currentScope = 0,
+        .currentScope = 1,
         .lastToken = 0,
+        .arena = arena,
     };
 }
 
@@ -398,21 +398,17 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
 
             const initializer = ast.extra[statement.value + 2];
 
-            for (signatures.start..signatures.end, 0..) |signaturePtrPtr, index| {
-                const signature = ast.signatures.get(ast.extra[signaturePtrPtr]);
-                std.debug.print("Resolving signature {s}\n", .{
-                    tokens.get(signature.name).lexeme(self.context, self.dataIndex())
-                });
+            for (0..signatures.len()) |index| {
+                const signature = ast.signatures.get(ast.extra[signatures.at(@intCast(index))]);
 
                 if (signature.type != 0) {
                     try self.resolveExpression(signature.type);
                 }
 
-                if (topLevel) {
-                    continue;
-                }
+                const decl =
+                    if (topLevel) try self.look(signature.name)
+                    else try self.decls.addOne(allocator);
 
-                const decl = try self.decls.addOne(allocator);
                 self.decls.set(decl, .{
                     .kind = .Variable,
                     .scope = self.currentScope,
@@ -423,6 +419,10 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                     .type = signature.type,
                     .topLevel = topLevel,
                 });
+
+                if (topLevel) {
+                    continue;
+                }
 
                 const name = tokens.get(signature.name).lexeme(self.context, self.dataIndex());
                 const isPresent = self.lookup.getOrPut(allocator, .{ .name = name, .scope = self.currentScope })
@@ -436,7 +436,6 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                 isPresent.value_ptr.* = decl;
             }
 
-            std.debug.print("Resolving initializer {d}\n", .{initializer});
             try self.resolveExpression(initializer);
         },
         .Import => {
@@ -493,12 +492,12 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             const identifier = expr.value;
             self.lastToken = identifier;
 
+            if (identifier == 0) return;
+
             const decl = try self.look(identifier);
 
-            std.debug.print("Resolving {d}\n", .{identifier});
-            self.resolved.putNoClobber(allocator, .{ .file = self.dataIndex(), .expr = exprPtr },
-                decl,
-            ) catch return error.AllocatorFailure;
+            self.resolved.putNoClobber(allocator, .{ .file = self.dataIndex(), .expr = exprPtr }, decl)
+                catch return error.AllocatorFailure;
         },
         .Indexing, .Assignment => {
             const lhs = ast.extra[expr.value];

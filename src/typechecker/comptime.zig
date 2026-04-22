@@ -38,21 +38,16 @@ pub const Value = union(enum) {
         Tag: u32,
         Value: ValuePtr,
     },
-
     Struct: struct {
         Type: Types.TypeID,
         Fields: []const ValuePtr,
     },
-
     Type: Types.TypeID,
     Pointer: struct {
-        Type: enum {
-            Slice,
-            Single,
-            C,
-        },
+        Type: Types.TypeID,
+        To: ValuePtr,
     },
-    Function: void,
+    Function: u32, // TODO: Funciton Ptrs
     Void: void,
 };
 
@@ -178,6 +173,18 @@ pub const Builtin = struct {
     }
 
     pub fn Type(btype: []const u8) defines.Range {
+        comptime {
+            var flag = false;
+            for (builtins) |item| {
+                if (std.mem.eql(u8, item.name, btype)) {
+                    flag = true;
+                }
+            }
+
+            if (!flag)
+                @compileError("Unknown type.");
+        }
+
         for (builtins, 0..) |item, i| {
             if (std.mem.eql(u8, item.name, btype)) {
                 return .{

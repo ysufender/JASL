@@ -159,37 +159,6 @@ pub fn getTokens(self: *const Context, tokens: defines.TokenPtr) *const Lexer.To
 pub fn registerAST(self: *Context, ast: Parser.AST) CompilerError!defines.ASTPtr {
     const ptr: defines.ASTPtr = @intCast(self.astMap.items.len);
     _ = self.astMap.addOne(self.arena.allocator()) catch return error.AllocatorFailure;
-    return self.overwriteAST(ptr, ast);
-}
-
-pub fn getAST(self: *const Context, ast: defines.ASTPtr) *const Parser.AST {
-    assert(ast < self.astMap.items.len);
-    return &self.astMap.items[ast];
-}
-
-/// Transfers the ownership of the given AST to the caller and expects the caller to overwrite
-/// it via Context.overwriteAST afterwards.
-pub fn getASTForOverwrite(self: *Context, allocator: std.mem.Allocator, ast: defines.ASTPtr) Parser.AST {
-    assert(ast < self.astMap.items.len);
-
-    self.counts.modules -= 1;
-    self.counts.expressions -= ast.expressions.len;
-    self.counts.statements -= ast.statements.len;
-    self.counts.extras -= @intCast(ast.extra.len);
-
-    self.counts.integer -= ast.stats.integer;
-    self.counts.float -= ast.stats.float;
-    self.counts.string -= ast.stats.string;
-    self.counts.bool -= ast.stats.bool;
-    self.counts.types -= ast.stats.types;
-
-    self.counts.meta -= ast.stats.meta;
-
-    return collections.deepCopy(self.astMap.items[ast], allocator);
-}
-
-pub fn overwriteAST(self: *Context, astPtr: defines.ASTPtr, ast: Parser.AST) CompilerError!defines.ASTPtr {
-    assert(astPtr < self.astMap.items.len);
 
     self.counts.modules += 1;
     self.counts.expressions += ast.expressions.len;
@@ -204,8 +173,14 @@ pub fn overwriteAST(self: *Context, astPtr: defines.ASTPtr, ast: Parser.AST) Com
 
     self.counts.meta += ast.stats.meta;
 
-    self.astMap.items[astPtr] = try collections.deepCopy(ast, self.arena.allocator());
-    return astPtr;
+    self.astMap.items[ptr] = try collections.deepCopy(ast, self.arena.allocator());
+
+    return ptr;
+}
+
+pub fn getAST(self: *const Context, ast: defines.ASTPtr) *const Parser.AST {
+    assert(ast < self.astMap.items.len);
+    return &self.astMap.items[ast];
 }
 
 pub fn registerModule(self: *Context, module: *const Prepass.Module) void {

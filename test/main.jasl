@@ -9,7 +9,6 @@ let main = fn () -> Main {
 let Main = std::Result(void, std::ErrorCode);
 */
 
-let b = i32;
-let a = c;
-let main = a;
 let c: b = u32;
+let main = c;
+let b = type;

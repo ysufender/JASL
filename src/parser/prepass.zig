@@ -72,8 +72,8 @@ pub const ModuleList = struct {
         return self.ids.get(name).?;
     }
 
-    pub fn getItem(self: *const ModuleList, name: []const u8, comptime field: std.meta.FieldEnum(Module)) *@FieldType(Module, @tagName(field)) {
-        return &self.modules.items(field)[self.ids.get(name).?];
+    pub fn getItem(self: *const ModuleList, name: []const u8, comptime field: std.meta.FieldEnum(Module)) @FieldType(Module, @tagName(field)) {
+        return self.modules.items(field)[self.ids.get(name).?];
     }
 
     pub fn dupe(self: *const ModuleList, allocator: std.mem.Allocator) Error!ModuleList {

@@ -191,7 +191,7 @@ pub fn init(
 }
 
 pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
-    self.currentFile = self.modules.getItem("root", .dataIndex).*;
+    self.currentFile = self.modules.getItem("root", .dataIndex);
     
     if (!self.modules.getItem("root", .symbolPtrs).contains("main")) {
         self.report("Couldn't find an entry point in the root module.", .{});
@@ -222,14 +222,10 @@ pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
 }
 
 pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) Error!defines.Range {
-    std.debug.print("Typechecking {s}\n", .{
-        self.context.getTokens(self.currentFile).get(decl.token).lexeme(self.context, self.currentFile)
-    });
-
-    std.debug.print("Initializer is: {d}\n", .{decl.node});
-
     const varType = try self.expectType(decl.type);
-    const initializer = try self.typecheckExpression(decl.node, varType);
+    const initializer =
+        if (decl.topLevel) try self.typecheckValue(try self.executer.eval(decl.node))
+        else try self.typecheckExpression(decl.node, varType);
 
     return
         if (self.suitableSingle(varType.at(0), initializer.at(decl.index)))
@@ -247,7 +243,9 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
 
 pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.ExpressionPtr, maybeExpected: ?defines.Range) Error!defines.Range {
     const ast = self.context.getAST(self.currentFile);
+    const tokens = self.context.getTokens(ast.tokens);
     _ = maybeExpected;
+    _ = tokens;
 
     const expr = ast.expressions.get(expressionPtr);
     return switch (expr.type) {
@@ -263,6 +261,40 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
     };
 }
 
+pub fn typecheckValue(_: *const Typechecker, val: Comptime.Value) Error!defines.Range {
+    return switch (val) {
+        .Int => comptime Comptime.Builtin.Type("comptime_int"),
+        .Float => comptime Comptime.Builtin.Type("comptime_float"),
+        .String => comptime Comptime.Builtin.Type("string"),
+        .Bool => comptime Comptime.Builtin.Type("bool"),
+        .Enum => |enumeration| switch (enumeration) {
+            .Literal => comptime Comptime.Builtin.Type("enum_literal"),
+            .Type => |enumType| .{
+                .start = enumType.Type,
+                .end = enumType.Type + 1,
+            },
+        },
+        .Union => |uni| .{
+            .start = uni.Type,
+            .end = uni.Type + 1,
+        },
+        .Struct => |str| .{
+            .start = str.Type,
+            .end = str.Type + 1,
+        },
+        .Type => comptime Comptime.Builtin.Type("type"),
+        .Pointer => |ptr| .{
+            .start = ptr.Type,
+            .end = ptr.Type + 1,
+        },
+        .Function => |func| .{
+            .start = func,
+            .end = func + 1,
+        },
+        .Void => comptime Comptime.Builtin.Type("void"),
+    };
+}
+
 pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr) Error!defines.Range {
     const allocator = self.arena.allocator();
 
@@ -270,7 +302,7 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr) Error!defines
     const tokens = self.context.getTokens(ast.tokens);
     _ = tokens;
 
-    const decl = self.symbols.getDecl(declPtr);
+    const decl = self.symbols.declarations.get(declPtr);
 
     const isPresent = self.lookup.getOrPut(allocator, declPtr) catch return error.AllocatorFailure;
 
