@@ -1,14 +1,2 @@
-/*import std;
-
-let main = fn () -> Main {
-    let cStylePtr: [@c]u8 = undefined;
-
-    return Main(@Ok);
-};
-
-let Main = std::Result(void, std::ErrorCode);
-*/
-
-let c: b = u32;
-let main = c;
-let b = []type;
+let main = a;
+let a: [15]u32 = undefined;

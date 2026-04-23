@@ -58,5 +58,6 @@ pub const CompilerError = error {
     ComptimeNotPossible,
     IntegerOverflow,
     UnexpectedNonTypeExpression,
+    InvalidSpecifier,
     ShouldBeImpossible,
 };

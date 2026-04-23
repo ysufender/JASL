@@ -467,7 +467,7 @@ fn report(self: *Lexer, comptime fmt: []const u8, args: anytype) void {
     const pos = errToken.position(self.context, self.file);
 
     common.log.err(fmt, args);
-    common.log.err("\t{s} {d}:{d}\n", .{self.context.getFileName(self.file), pos.line, pos.column});
+    common.log.err(("." ** 4) ++ " In {s} {d}:{d}", .{self.context.getFileName(self.file), pos.line, pos.column});
 }
 
 //

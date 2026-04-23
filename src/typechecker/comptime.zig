@@ -1,5 +1,3 @@
-// TODO: Execution stack for error reporting
-
 const std = @import("std");
 const common = @import("../core/common.zig");
 const defines = @import("../core/defines.zig");
@@ -51,6 +49,7 @@ pub const Value = union(enum) {
     },
     Function: u32, // TODO: Function Ptrs
     Void: void,
+    Undefined: Types.TypeID,
 };
 
 const Comptime = @This();
@@ -79,11 +78,11 @@ pub fn init(typechecker: *Typechecker, gpa: Allocator) Error!Comptime {
     };
 }
 
-pub fn attemptEval(self: *Comptime, exprPtr: defines.ExpressionPtr) Error!?Value {
-    return self.eval(exprPtr) catch null;
+pub fn attemptEval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?defines.Range) Error!?Value {
+    return self.eval(exprPtr, maybeExpected) catch null;
 }
 
-pub fn eval (self: *Comptime, exprPtr: defines.ExpressionPtr) Error!Value {
+pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?defines.Range) Error!Value {
     const typechecker = self.typechecker;
     const file = typechecker.currentFile;
     const ast = typechecker.context.getAST(self.typechecker.currentFile);
@@ -101,9 +100,11 @@ pub fn eval (self: *Comptime, exprPtr: defines.ExpressionPtr) Error!Value {
     const value = switch (expr.type) {
         .Identifier =>
             if (expr.value == 0) Value{ .Type = comptime Builtin.Type("any").at(0) }
-            else try self.evalDecl(typechecker.symbols.findDecl(.{ .file = file, .expr = exprPtr })),
+            else try self.evalDecl(typechecker.symbols.findDecl(.{ .file = file, .expr = exprPtr }), maybeExpected),
         .Literal => try self.evalLiteral(&expr),
         .PointerType => try self.evalPtrType(&expr),
+        .MutableType => try self.evalMutType(&expr),
+        .ArrayType => try self.evalArrType(&expr),
         else => {
             self.report("Unable to resolve comptime expression.", .{});
             return error.NotImplemented;
@@ -117,28 +118,38 @@ pub fn eval (self: *Comptime, exprPtr: defines.ExpressionPtr) Error!Value {
     return value;
 }
 
-fn evalDecl(self: *Comptime, declPtr: defines.DeclPtr) Error!Value {
+fn evalDecl(self: *Comptime, declPtr: defines.DeclPtr, maybeExpected: ?defines.Range) Error!Value {
     const decls = self.typechecker.symbols.declarations;
-    _ = try self.typechecker.typecheckDecl(declPtr);
+    _ = try self.typechecker.typecheckDecl(declPtr, maybeExpected);
 
     const decl  = decls.get(declPtr);
     return switch (decl.kind) {
-        .Builtin => self.evalBuiltin(&decl),
-        .Variable => self.eval(decl.node),
+        .Builtin => self.evalBuiltin(&decl, maybeExpected),
+        .Variable => self.eval(decl.node, maybeExpected),
         else => |t| {
-            self.report("{s} is not implemented.", .{@tagName(t)});
+            self.report("{s} declaration is not implemented.", .{@tagName(t)});
             return error.NotImplemented;
         },
     };
 }
 
-fn evalBuiltin(self: *Comptime, decl: *const Resolver.Declaration) Error!Value {
+fn evalBuiltin(self: *Comptime, decl: *const Resolver.Declaration, maybeExpected: ?defines.Range) Error!Value {
+    const BI = Resolver.BuiltinIndex;
+
     return if (Builtin.isBuiltinType(decl.type)) .{
         .Type = decl.type,
     }
-    else {
-        self.report("{s} is not implemented.", .{Resolver.builtins[decl.type]});
-        return error.NotImplemented;
+    else switch (decl.type) {
+        BI("undefined") =>
+            if (maybeExpected) |expected| .{ .Undefined = expected.at(0) }
+            else {
+                self.report("Unable to infer the type of undefined.", .{});
+                return error.MissingTypeSpecifier;
+            },
+        else => {
+            self.report("{s} builtin is not implemented.", .{Resolver.builtins[decl.type]});
+            return error.NotImplemented;
+        },
     };
 }
 
@@ -175,9 +186,54 @@ fn evalPtrType(self: *Comptime, expr: *const Parser.Expression) Error!Value {
     };
 }
 
+fn evalMutType(self: *Comptime, expr: *const Parser.Expression) Error!Value {
+    const inner = try self.expectType(expr.value);
+
+    if (self.typechecker.canBeMutable(inner.Type)) {
+        const typeInfo = self.typechecker.typeTable.get(inner.Type);
+        const typeID = try self.typechecker.registerType(self.typechecker.makeMutable(typeInfo));
+
+        return .{
+            .Type = typeID.at(0),
+        };
+    }
+    else {
+        self.report("Redundant 'mut' specifier on already mutable type '{s}'.", .{
+            self.typechecker.typeName(self.typechecker.arena.allocator(), inner.Type)
+        });
+        return error.InvalidSpecifier;
+    }
+}
+
+fn evalArrType(self: *Comptime, expr: *const Parser.Expression) Error!Value {
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+
+    const size = switch (try self.eval(ast.extra[expr.value], null)) {
+        .Int => |val| val,
+        else => |tag| {
+            self.report("Expected a 'comptime_int' value as size specifier. Got '{s}' instead.", .{@tagName(std.meta.activeTag(tag))});
+            return error.TypeMismatch;
+        },
+    };
+
+    const inner = try self.expectType(ast.extra[expr.value + 1]);
+
+    const newType = Types.TypeInfo{
+        .Array = .{
+            .len = size,
+            .mutable = false,
+            .child = inner.Type,
+        },
+    };
+
+    return .{
+        .Type = (try self.typechecker.registerType(newType)).at(0),
+    };
+}
+
 pub fn expectType(self: *Comptime, exprPtr: defines.ExpressionPtr) Error!Value {
     return .{
-        .Type = switch (try self.eval(exprPtr)) {
+        .Type = switch (try self.eval(exprPtr, null)) {
             .Type => |t| t,
             else => |otherwise| {
                 self.report("Expected a type expression, got '{s}' instead.", .{@tagName(otherwise)});
@@ -187,10 +243,10 @@ pub fn expectType(self: *Comptime, exprPtr: defines.ExpressionPtr) Error!Value {
     };
 }
 
-fn report(self: *const Comptime, comptime fmt: []const u8, args: anytype) void {
+fn report(self: *Comptime, comptime fmt: []const u8, args: anytype) void {
     return
         if (self.attempting) {}
-        else  self.typechecker.report("COMPTIME: " ++ fmt, args);
+        else self.typechecker.report("COMPTIME: " ++ fmt, args);
 }
 
 pub fn deinit(self: *Comptime) void {

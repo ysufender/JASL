@@ -1099,7 +1099,7 @@ fn report(self: *Resolver, comptime fmt: []const u8, args: anytype) void {
     common.log.err(fmt, args);
     const token = self.context.getTokens(self.dataIndex()).get(self.lastToken);
     const position = token.position(self.context, self.dataIndex());
-    common.log.err("\t{s} {d}:{d}\n", .{ self.context.getFileName(self.dataIndex()), position.line, position.column});
+    common.log.err(("." ** 4) ++ " In {s} {d}:{d}", .{ self.context.getFileName(self.dataIndex()), position.line, position.column});
 }
 
 fn dataIndex(self: *const Resolver) u32 {
@@ -1144,7 +1144,7 @@ pub const builtins = [_][]const u8 {
 
 pub fn BuiltinIndex(comptime builtin: []const u8) u32 {
     var index: u32 = 0;
-    for (builtins) |b| {
+    inline for (builtins) |b| {
         defer index += 1;
         if (std.mem.eql(u8, b, builtin)) {
             return index;

@@ -1,11 +1,14 @@
 const std = @import("std");
+const arraylist = @import("arraylist.zig");
+const stack = @import("stack.zig");
 
 const Error = @import("../core/common.zig").CompilerError;
 const Allocator = std.mem.Allocator;
 
-pub const MultiArrayList = @import("arraylist.zig").MultiArrayList;
-pub const ReverseStackArray = @import("arraylist.zig").ReverseStackArray;
-pub const StaticStack = @import("stack.zig").StaticStack;
+pub const MultiArrayList = arraylist.MultiArrayList;
+pub const ReverseStackArray = arraylist.ReverseStackArray;
+pub const StaticStack = stack.StaticStack;
+pub const StaticRingStack = stack.StaticRingStack;
 pub const HashMap = @import("hashmap.zig").HashMap;
 
 fn determine(comptime ptr: type) struct {

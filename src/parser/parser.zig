@@ -24,7 +24,7 @@ pub const Expression = struct {
     pub const Type = enum {
         Assignment,
         Binary,
-        Literal, // typechecked
+        Literal,
         Indexing,
         Slicing,
         Identifier,
@@ -1617,7 +1617,7 @@ fn report(self: *Parser, comptime fmt: []const u8, args: anytype) void {
     common.log.err(fmt, args);
     const token = self.tokens.get(self.previous());
     const position = token.position(self.context, self.file);
-    common.log.err("\t{s} {d}:{d}", .{ self.context.getFileName(self.file), position.line, position.column});
+    common.log.err(("." ** 4) ++ " In {s} {d}:{d}", .{ self.context.getFileName(self.file), position.line, position.column});
 }
 
 //

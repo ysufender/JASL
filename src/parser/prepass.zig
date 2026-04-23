@@ -401,10 +401,10 @@ fn report(self: *Prepass, comptime fmt: []const u8, args: anytype, file: u32, to
         const t_idx = token orelse 0;
         if (t_idx < self.context.getTokens(self.context.getAST(file).tokens).len) {
             const position = self.context.getTokens(self.context.getAST(file).tokens).get(t_idx).position(self.context, file);
-            common.log.err("\t{s} {d}:{d}\n", .{self.context.getFileName(file), position.line, position.column});
+            common.log.err(("." ** 4) ++ " In {s} {d}:{d}", .{self.context.getFileName(file), position.line, position.column});
             return;
         }
     }
     
-    common.log.err("\t{s} (no location available)\n", .{self.context.getFileName(file)});
+    common.log.err(("." ** 4) ++ " In {s} (no location available)", .{self.context.getFileName(file)});
 }
