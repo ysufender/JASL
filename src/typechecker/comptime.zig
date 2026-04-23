@@ -1,3 +1,5 @@
+// TODO: Execution stack for error reporting
+
 const std = @import("std");
 const common = @import("../core/common.zig");
 const defines = @import("../core/defines.zig");
@@ -13,7 +15,7 @@ const Allocator = std.mem.Allocator;
 const Arena = std.heap.ArenaAllocator;
 const Error = common.CompilerError;
 
-const CacheEntry = collections.HashMap(Resolver.ResolutionKey, ValuePtr);
+const Cache = collections.HashMap(Resolver.ResolutionKey, ValuePtr);
 const Memory = std.ArrayList(Value);
 
 const ValuePtr = u32;
@@ -47,13 +49,13 @@ pub const Value = union(enum) {
         Type: Types.TypeID,
         To: ValuePtr,
     },
-    Function: u32, // TODO: Funciton Ptrs
+    Function: u32, // TODO: Function Ptrs
     Void: void,
 };
 
 const Comptime = @This();
 
-cache: CacheEntry,
+cache: Cache,
 typechecker: *Typechecker,
 arena: Arena,
 gpa: Allocator,
@@ -64,7 +66,7 @@ pub fn init(typechecker: *Typechecker, gpa: Allocator) Error!Comptime {
     var arena = Arena.init(gpa);
     const allocator = arena.allocator();
 
-    var cache = CacheEntry.empty;
+    var cache = Cache.empty;
     cache.ensureTotalCapacity(allocator, typechecker.symbols.resolutionMap.count()) catch return error.AllocatorFailure;
 
     return .{
@@ -75,6 +77,10 @@ pub fn init(typechecker: *Typechecker, gpa: Allocator) Error!Comptime {
         .attempting = false,
         .arena = arena,
     };
+}
+
+pub fn attemptEval(self: *Comptime, exprPtr: defines.ExpressionPtr) Error!?Value {
+    return self.eval(exprPtr) catch null;
 }
 
 pub fn eval (self: *Comptime, exprPtr: defines.ExpressionPtr) Error!Value {
@@ -93,10 +99,13 @@ pub fn eval (self: *Comptime, exprPtr: defines.ExpressionPtr) Error!Value {
 
     const expr = ast.expressions.get(exprPtr);
     const value = switch (expr.type) {
-        .Identifier => try self.evalDecl(typechecker.symbols.findDecl(.{ .file = file, .expr = exprPtr })),
+        .Identifier =>
+            if (expr.value == 0) Value{ .Type = comptime Builtin.Type("any").at(0) }
+            else try self.evalDecl(typechecker.symbols.findDecl(.{ .file = file, .expr = exprPtr })),
         .Literal => try self.evalLiteral(&expr),
-        else => |t| {
-            self.report("{s} is not implemented.", .{@tagName(t)});
+        .PointerType => try self.evalPtrType(&expr),
+        else => {
+            self.report("Unable to resolve comptime expression.", .{});
             return error.NotImplemented;
         },
     };
@@ -152,10 +161,36 @@ fn evalLiteral(self: *Comptime, expr: *const Parser.Expression) Error!Value {
     };
 }
 
+fn evalPtrType(self: *Comptime, expr: *const Parser.Expression) Error!Value {
+    const inner = try self.expectType(expr.value);
+
+    return .{
+        .Type = (try self.typechecker.registerType(.{
+            .Pointer = .{
+                .pointerType = .Single,
+                .mutable = false,
+                .child = inner.Type
+            },
+        })).at(0),
+    };
+}
+
+pub fn expectType(self: *Comptime, exprPtr: defines.ExpressionPtr) Error!Value {
+    return .{
+        .Type = switch (try self.eval(exprPtr)) {
+            .Type => |t| t,
+            else => |otherwise| {
+                self.report("Expected a type expression, got '{s}' instead.", .{@tagName(otherwise)});
+                return error.UnexpectedNonTypeExpression;
+            },
+        },
+    };
+}
+
 fn report(self: *const Comptime, comptime fmt: []const u8, args: anytype) void {
     return
         if (self.attempting) {}
-        else  self.typechecker.report(fmt, args);
+        else  self.typechecker.report("COMPTIME: " ++ fmt, args);
 }
 
 pub fn deinit(self: *Comptime) void {

@@ -1,3 +1,5 @@
+// TODO: Execution stack for error reporting
+
 const std = @import("std");
 const common = @import("../core/common.zig");
 const defines = @import("../core/defines.zig");
@@ -156,7 +158,7 @@ pub fn init(
     metadata.ensureTotalCapacity(allocator, counts.meta * 3) catch return error.AllocatorFailure;
 
     inline for (Comptime.builtins, 0..) |builtin, id| {
-        typeTable.appendAssumeCapacity(std.meta.activeTag(builtin.info), @field(builtin.info, @tagName(std.meta.activeTag(builtin.info))));
+        typeTable.appendAssumeCapacity(std.meta.activeTag(builtin.info), builtin.info);
         typeMap.putAssumeCapacityNoClobber(builtin.info, .{
             .start = @intCast(id),
             .end = @intCast(id + 1)
@@ -224,18 +226,25 @@ pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
 pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) Error!defines.Range {
     const varType = try self.expectType(decl.type);
     const initializer =
-        if (decl.topLevel) try self.typecheckValue(try self.executer.eval(decl.node))
-        else try self.typecheckExpression(decl.node, varType);
+        if (decl.topLevel)
+            try self.typecheckValue(try self.executer.eval(decl.node))
+        else if (try self.executer.attemptEval(decl.node)) |success|
+            try self.typecheckValue(success)
+        else
+            try self.typecheckExpression(decl.node, varType);
+
+    const expected = self.extra.items[varType.at(0)];
+    const got = self.extra.items[initializer.at(0)];
 
     return
-        if (self.suitableSingle(varType.at(0), initializer.at(decl.index)))
-            self.infer(varType.at(0), initializer.at(0))
+        if (self.suitableSingle(expected, got))
+            self.infer(expected, got)
         else  {
             self.report(
                 "Mismatching initializer type in variable definition."
                 ++ " Expected '{s}', received '{s}'.", .{
-                self.typeName(self.arena.allocator(), varType.at(0)),
-                self.typeName(self.arena.allocator(), initializer.at(decl.index)),
+                self.typeName(self.arena.allocator(), expected),
+                self.typeName(self.arena.allocator(), got),
             });
             return error.TypeMismatch;
         };
@@ -254,6 +263,7 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
             const decl = self.symbols.findDecl(.{ .file = self.currentFile, .expr = expressionPtr });
             return self.typecheckDecl(decl);
         },
+        .PointerType => self.expectType(expr.value),
         else => |t| {
             self.report("{s} is not implemented.", .{@tagName(t)});
             return error.NotImplemented;
@@ -348,10 +358,32 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr) Error!defines
     return types;
 }
 
-pub fn registerType(self: *const Typechecker, newType: TypeInfo) Error!TypeID {
+pub fn registerType(self: *Typechecker, newType: TypeInfo) Error!defines.Range {
     const isPresent = self.typeMap.getOrPut(self.arena.allocator(), newType)
         catch return error.AllocatorFailure;
-    return isPresent.value_ptr.at(0);
+
+    if (!isPresent.found_existing) {
+        const typeID = try self.typeTable.addOne(self.arena.allocator());
+        const start: u32 = @intCast(self.extra.items.len);
+        self.extra.append(self.arena.allocator(), typeID)
+            catch return error.AllocatorFailure;
+        isPresent.value_ptr.* = .{
+            .start = start,
+            .end = start + 1,
+        };
+
+        switch (newType) {
+            .Struct => self.typeTable.set(typeID, .Struct, newType),
+            .Union => self.typeTable.set(typeID, .Union, newType),
+            .Enum => self.typeTable.set(typeID, .Enum, newType),
+            .Pointer => self.typeTable.set(typeID, .Pointer, newType),
+            .Function => self.typeTable.set(typeID, .Function, newType),
+            .Array => self.typeTable.set(typeID, .Array, newType),
+            else => unreachable,
+        }
+    }
+
+    return isPresent.value_ptr.*;
 }
 
 pub fn report(self: *const Typechecker, comptime fmt: []const u8, args: anytype) void {
@@ -420,20 +452,12 @@ pub fn infer(self: *const Typechecker, this: TypeID, that: TypeID) Error!defines
 }
 
 pub fn expectType(self: *Typechecker, exprPtr: defines.ExpressionPtr) Error!defines.Range {
-    if (exprPtr == 0) {
-        return comptime Comptime.Builtin.Type("any");
-    }
-
-    return ret: switch (try self.executer.eval(exprPtr)) {
-        .Type => |typeID| .{
-            .start = typeID,
-            .end = typeID + 1,
-        },
-        else => |result| {
-            self.report("Expected a type expression, received '{s}'.", .{@tagName(std.meta.activeTag(result))});
-            break :ret error.TypeMismatch;
-        },
-    };
+    return
+        if (self.executer.expectType(exprPtr)) |val| .{
+            .start = val.Type,
+            .end = val.Type + 1,
+        } 
+        else |err| err;
 }
 
 pub fn mutable(self: *const Typechecker, typeID: TypeID) bool {

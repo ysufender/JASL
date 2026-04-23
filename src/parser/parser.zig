@@ -220,7 +220,10 @@ pub fn parse(self: *Parser) common.CompilerError!defines.ASTPtr {
     var lastErr: common.CompilerError = undefined;
 
     // any type expression
-    self.expressionMap.appendAssumeCapacity(std.mem.zeroes(Expression));
+    self.expressionMap.appendAssumeCapacity(.{
+        .type = .Identifier,
+        .value = 0,
+    });
 
     while (!self.isAtEnd()) {
         if (self.statement()) |index| {

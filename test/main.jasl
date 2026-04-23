@@ -11,4 +11,4 @@ let Main = std::Result(void, std::ErrorCode);
 
 let c: b = u32;
 let main = c;
-let b = type;
+let b = []type;

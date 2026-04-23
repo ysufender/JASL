@@ -15,7 +15,7 @@ pub const TypeInfo = union(enum) {
     Void: void,
 
     Pointer: Pointer,
-    Function: Function,
+    Function: Function, // is a pointer
     Noreturn: void,
     Any: bool, // mutability bool
     Type: void,

@@ -221,7 +221,7 @@ fn UnionMultiArrayList(comptime T: type) type {
             self.appendAssumeCapacity(field, element);
         }
 
-        pub fn appendAssumeCapacity(self: *Self, comptime field: Field, element: @FieldType(T, @tagName(field))) void {
+        pub fn appendAssumeCapacity(self: *Self, comptime field: Field, element: T) void {
             defer self.len += 1;
             self.set(self.len, field, element);
         }
@@ -240,10 +240,10 @@ fn UnionMultiArrayList(comptime T: type) type {
             return @field(self.inner, tagName)[index];
         }
 
-        pub fn set(self: *Self, index: u32, comptime field: Field, value: @FieldType(T, @tagName(field))) void {
+        pub fn set(self: *Self, index: u32, comptime field: Field, value: T) void {
             const tagName = @tagName(field);
             self.inner.tag[index] = field;
-            @field(self.inner, tagName)[index] = value;
+            @field(self.inner, tagName)[index] = @field(value, @tagName(field));
         }
 
         pub fn capacity(self: *Self) u32 {

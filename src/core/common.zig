@@ -57,5 +57,6 @@ pub const CompilerError = error {
     TypeNameTooLong,
     ComptimeNotPossible,
     IntegerOverflow,
+    UnexpectedNonTypeExpression,
     ShouldBeImpossible,
 };
