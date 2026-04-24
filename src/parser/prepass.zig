@@ -244,11 +244,14 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
                 try self.prepassImpl(self.context.getAST(imported), module);
             },
             .VariableDefinition => {
-                const sigsStart = ast.extra[statement.value];
-                const sigsEnd = ast.extra[statement.value + 1];
+                const sigs = defines.Range{
+                    .start = ast.extra[statement.value],
+                    .end = ast.extra[statement.value + 1],
+                };
 
-                for (sigsStart..sigsEnd) |ptr| {
-                    const sig = ast.signatures.get(ast.extra[@intCast(ptr)]);
+                for (0..sigs.len()) |index| {
+                    const ptr = sigs.at(@intCast(index));
+                    const sig = ast.signatures.get(ast.extra[ptr]);
                     const sigName = tokens.get(sig.name).lexeme(self.context, file.dataIndex);
 
                     const idx = file.symbols.addOne(allocator) catch {
@@ -262,7 +265,7 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
                         break :case;
                     };
 
-                    file.symbolPtrs.put(allocator, sigName, idx) catch {
+                    const res = file.symbolPtrs.getOrPut(allocator, sigName) catch {
                         self.report(
                             "Couldn't add symbol {s} to module map. System is out of memory.",
                             .{sigName},
@@ -273,11 +276,23 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
                         break :case;
                     };
 
+                    if (res.found_existing) {
+                        self.report("Given symbol '{s}' collides with the previous definition of '{s}'.",
+                            .{sigName, sigName},
+                            file.dataIndex,
+                            sig.name,
+                        );
+                        fail = true;
+                        break :case;
+                    }
+
+                    res.value_ptr.* = idx;
+
                     file.symbols.set(idx, .{
                         .public = sig.public,
                         .name = sig.name,
                         .value = stmt,
-                        .index = @as(u32, @intCast(ptr)) - sigsStart,
+                        .index = @intCast(index),
                         .type = sig.type,
                     });
                 }

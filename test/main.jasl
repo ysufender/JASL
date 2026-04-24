@@ -1,2 +1,9 @@
-let main = a;
-let a: [15]u32 = undefined;
+let enumt = union(enum) {
+    field1: void,
+    field2: void,
+};
+let hello = union(enum) {
+    field1: void,
+    field2: void,
+};
+let main: type = enumt;

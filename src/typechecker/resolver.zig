@@ -186,7 +186,7 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
                 .topLevel = true,
             });
 
-            lookup.put(allocator, .{
+            lookup.putNoClobber(allocator, .{
                 .scope = scope,
                 .name = name,
             }, decl) catch return error.AllocatorFailure;
@@ -798,7 +798,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             const lhs = ast.extra[expr.value];
             try self.resolveExpression(lhs);
         },
-        .MutableType, .PointerType, .SliceType => try self.resolveExpression(expr.value),
+        .MutableType, .PointerType, .SliceType, .CPointerType => try self.resolveExpression(expr.value),
         .ArrayType => {
             const size = ast.extra[expr.value];
             try self.resolveExpression(size);

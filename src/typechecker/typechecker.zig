@@ -276,7 +276,7 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
     };
 }
 
-pub fn typecheckValue(_: *const Typechecker, val: Comptime.Value) Error!defines.Range {
+pub fn typecheckValue(self: *Typechecker, val: Comptime.Value) Error!defines.Range {
     return switch (val) {
         .Int => comptime Comptime.Builtin.Type("comptime_int"),
         .Float => comptime Comptime.Builtin.Type("comptime_float"),
@@ -310,6 +310,10 @@ pub fn typecheckValue(_: *const Typechecker, val: Comptime.Value) Error!defines.
         .Undefined => |undef| .{
             .start = undef,
             .end = undef + 1,
+        },
+        .Slice => {
+            self.report("Tuple style multi-types are not supported.", .{});
+            return error.IllegalSyntax;
         },
     };
 }
@@ -445,7 +449,7 @@ pub fn assertSuitable(self: *const Typechecker, this: defines.Range, that: defin
     return
         if (this.len() != that.len()) error.TypeMismatch 
         else for (0..this.len()) |i| {
-            self.assertSuitableSingle(this.at(@intCast(i)), that.at(@intCast(i)));
+            try self.assertSuitableSingle(this.at(@intCast(i)), that.at(@intCast(i)));
         };
 }
 
@@ -504,7 +508,10 @@ pub fn mutable(self: *const Typechecker, typeID: TypeID) bool {
         .Bool => |b| b,
         .Float => |fl| fl,
         .Struct => |str| str.mutable,
-        .Union => |uni| uni.mutable,
+        .Union => |uni| switch (uni) {
+            .Tagged => |tagged| tagged.mutable,
+            .Plain => |plain| plain.mutable,
+        },
         .Enum => |enu| enu.mutable,
         .Integer => |int| int.mutable,
         .Pointer => |ptr| ptr.mutable,
@@ -537,12 +544,27 @@ pub fn makeMutable(_: *const Typechecker, info: TypeInfo) TypeInfo {
                 .definitions = str.definitions,
             },
         },
-        .Union => |uni| .{
-            .Union = .{
-                .mutable = true,
-                .name = uni.name,
-                .fields = uni.fields,
-                .definitions = uni.definitions,
+        .Union => |uni| switch (uni) {
+            .Tagged => |tagged| .{
+                .Union = .{
+                    .Tagged = .{
+                        .mutable = true,
+                        .tag = tagged.tag,
+                        .name = tagged.name,
+                        .fields = tagged.fields,
+                        .definitions = tagged.definitions,
+                    },
+                },
+            },
+            .Plain => |plain| .{
+                .Union = .{
+                    .Plain = .{
+                        .mutable = true,
+                        .name = plain.name,
+                        .fields = plain.fields,
+                        .definitions = plain.definitions,
+                    },
+                },
             },
         },
         .Enum => |enu| .{
@@ -557,7 +579,7 @@ pub fn makeMutable(_: *const Typechecker, info: TypeInfo) TypeInfo {
             .Pointer = .{
                 .mutable = true,
                 .child = ptr.child,
-                .pointerType = ptr.pointerType,
+                .size = ptr.size,
             }
         },
         .Array => |arr| .{
@@ -570,7 +592,6 @@ pub fn makeMutable(_: *const Typechecker, info: TypeInfo) TypeInfo {
         .Function => |func| .{
             .Function = .{
                 .mutable = true,
-                .name = func.name,
                 .argTypes = func.argTypes,
                 .returnTypes = func.returnTypes,
             },
@@ -608,13 +629,15 @@ pub fn typeNameMany(self: *const Typechecker, allocator: Allocator, types: defin
 pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) []const u8 {
     const typename = struct {
         fn typename(this: *const Typechecker, alc: Allocator, tid: TypeID) []const u8 {
-            const prefix = if (this.mutable(tid)) "" else "mut ";
+            const prefix = if (this.mutable(tid)) "mut " else "";
 
             const name = switch (this.typeTable.get(tid)) {
                 .Struct => |str| str.name,
-                .Union => |uni| uni.name,
+                .Union => |uni| switch (uni) {
+                    .Tagged => |tagged| tagged.name,
+                    .Plain => |plain| plain.name,
+                },
                 .Enum => |enu| enu.name,
-                .Function => |func| func.name,
                 else => unreachable,
             };
 
@@ -630,7 +653,7 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
                 const ptr: Types.Pointer = self.typeTable.get(typeID).Pointer;
                 const child = self.typeName(allocator, ptr.child);
 
-                const prefix = switch (ptr.pointerType) {
+                const prefix = switch (ptr.size) {
                     .Slice => "[]",
                     .Single => "*",
                     .C => "[@c]",
@@ -644,11 +667,41 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
                 const child = self.typeName(allocator, arr.child);
 
                 const prefix = if (arr.mutable) "mut " else "";
+                const size = std.fmt.allocPrint(allocator, "[{d}]", .{arr.len})
+                    catch return "AllocatorFailure";
 
-                const res = allocator.alloc(u8, child.len + prefix.len) catch break :ret "AllocatorFailure";
-                break :ret std.fmt.bufPrint(res, "{s}{s}", .{prefix, child}) catch unreachable;
+                const res = allocator.alloc(u8, child.len + prefix.len + size.len) catch break :ret "AllocatorFailure";
+                break :ret std.fmt.bufPrint(res, "{s}{s}{s}", .{prefix, size, child}) catch unreachable;
             },
-            .Struct, .Union, .Enum, .Function => typename(self, allocator, typeID),
+            .Struct, .Union, .Enum => typename(self, allocator, typeID),
+            .Function => |func| {
+                var res: []const u8 = if (func.mutable) "mut *fn (" else "*fn (";
+
+                for (func.argTypes, 0..) |argTypeID, i| {
+                    res = std.fmt.allocPrint(allocator, "{s}{s}{s}", .{
+                        res,
+                        self.typeName(allocator, argTypeID),
+                        if (i == func.argTypes.len - 1) ")" else ", ",
+                    }) catch return "AllocatorFailure";
+                }
+
+                res = std.fmt.allocPrint(allocator, "{s} -> {s}", .{
+                    res,
+                    if (func.returnTypes.len == 1) "" else "("
+                }) catch return "AllocatorFailure";
+
+                for (func.returnTypes, 0..) |retTypeID, i| {
+                    res = std.fmt.allocPrint(allocator, "{s}{s}{s}", .{
+                        res,
+                        self.typeName(allocator, retTypeID),
+                        if (func.returnTypes.len == 1) ""
+                        else if (i == func.returnTypes.len - 1) ")"
+                        else ", "
+                    }) catch return "AllocatorFailure";
+                }
+
+                break :ret res;
+            },
             .EnumLiteral => "enum_literal",
             .ComptimeFloat => "comptime_float",
             .ComptimeInt => "comptime_int",

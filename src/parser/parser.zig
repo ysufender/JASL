@@ -1264,7 +1264,11 @@ fn unionDefinition(self: *Parser) ExpressionResult {
     if (self.match(&.{.LParen})) {
         tagged = 1;
         if (!self.match(&.{.Enum})) {
-            tag = try self.ifExpression();
+            // TODO: Add custom tag support
+            // tag = try self.ifExpression();
+            self.report("Manually tagged unions are not (yet) supported.", .{});
+            _ = &tag;
+            return error.NotImplemented;
         }
         _ = try self.consume(.RParen, error.MissingParenthesis, "Expected closing parenthesis.");
     }
@@ -1320,6 +1324,7 @@ fn unionDefinition(self: *Parser) ExpressionResult {
         self.extra.append(self.allocator(), if (tag) |_| 1 else 0) catch return error.AllocatorFailure;
         if (tag) |t| {
             self.extra.append(self.allocator(), t) catch return error.AllocatorFailure;
+            unreachable;
         }
     }
     self.extra.append(self.allocator(), variables.start) catch return error.AllocatorFailure;
@@ -1338,21 +1343,34 @@ fn unionDefinition(self: *Parser) ExpressionResult {
 
 fn typeExpression(self: *Parser) ExpressionResult {
     switch (self.tokens.items(.type)[self.advance()]) {
-        .Star => {
-            const res = try self.typeExpression();
+        .Star =>
+            if (self.match(&.{.Fn})) {
+                const args = try self.ifExpression();
 
-            switch (self.expressionMap.items(.type)[res]) {
-                .FunctionType => return res,
-                else => { },
+                _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
+                const returns = try self.ifExpression();
+
+                const start: defines.OpaquePtr = @intCast(self.extra.items.len);
+                self.extra.append(self.allocator(), args) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;
+
+                const expr = try self.alloc(Expression);
+                self.expressionMap.set(expr, .{
+                    .type = .FunctionType,
+                    .value = start,
+                });
+                return expr;
             }
+            else {
+                const res = try self.typeExpression();
 
-            const expr = try self.alloc(Expression);
-            self.expressionMap.set(expr, .{
-                .type = .PointerType,
-                .value = res,
-            });
-            return expr;
-        },
+                const expr = try self.alloc(Expression);
+                self.expressionMap.set(expr, .{
+                    .type = .PointerType,
+                    .value = res,
+                });
+                return expr;
+            },
         .LBracket => {
             return if (self.match(&.{.RBracket})) result: {
                 const rest = try self.typeExpression();
@@ -1401,23 +1419,6 @@ fn typeExpression(self: *Parser) ExpressionResult {
 
                 break :result expr;
             };
-        },
-        .Fn => {
-            const args = try self.ifExpression();
-
-            _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
-            const returns = try self.ifExpression();
-
-            const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-            self.extra.append(self.allocator(), args) catch return error.AllocatorFailure;
-            self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;
-
-            const expr = try self.alloc(Expression);
-            self.expressionMap.set(expr, .{
-                .type = .FunctionType,
-                .value = start,
-            });
-            return expr;
         },
         .Mut => {
             const res = try self.typeExpression();

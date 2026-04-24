@@ -36,7 +36,16 @@ pub const Struct = struct {
     definitions: []const FieldInfo,
 };
 
-pub const Union = Struct;
+pub const Union = union(enum) {
+    Tagged: struct {
+        tag: TypeID,
+        mutable: bool,
+        name: []const u8,
+        fields: []const FieldInfo,
+        definitions: []const FieldInfo,
+    },
+    Plain: Struct,
+};
 
 pub const Enum = struct {
     mutable: bool,
@@ -48,7 +57,7 @@ pub const Enum = struct {
 pub const Pointer = struct {
     mutable: bool,
     child: TypeID,
-    pointerType: enum {
+    size: enum {
         Slice,
         Single,
         C,
@@ -63,7 +72,6 @@ pub const Array = struct {
 
 pub const Function = struct {
     mutable: bool,
-    name: []const u8,
     argTypes: []const TypeID,
     returnTypes: []const TypeID,
 };

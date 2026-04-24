@@ -61,7 +61,7 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     _ = typechecked;
 
     context.stats();
-    if (true) {
+    if (false) {
         var miterator = modules.modules.iterator();
         _ = miterator.next();
         while (miterator.next()) |mod| {
