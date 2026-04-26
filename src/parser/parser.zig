@@ -1,5 +1,4 @@
 // TODO: remove all temp arraylists, use scratch
-// TODO: assert certain semantic checks as well (like only calls on defer)
 
 const std = @import("std");
 const common = @import("../core/common.zig");
@@ -1136,8 +1135,7 @@ fn structDefinition(self: *Parser) ExpressionResult {
     _ = try self.consume(.LBrace, error.MissingBrace, "Expected struct body.");
 
     // Check unionDefinition for details.
-    // TODO: Fix this.
-    // TODO: Maybe two loops using scratch would be better...
+    // TODO: Fix this. Maybe two loops using scratch would be better...
     var fieldList = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
     var definitions = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
 
@@ -1265,7 +1263,6 @@ fn unionDefinition(self: *Parser) ExpressionResult {
         tagged = 1;
         if (!self.match(&.{.Enum})) {
             // TODO: Add custom tag support
-            // tag = try self.ifExpression();
             self.report("Manually tagged unions are not (yet) supported.", .{});
             _ = &tag;
             return error.NotImplemented;

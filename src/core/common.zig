@@ -37,7 +37,6 @@ pub const CompilerError = error {
     MissingStatement,
     MultipleErrors,
     ThreadingError,
-    Unimplemented,
     IllegalSyntax,
     PathNameTooLong,
     OutOfMemory,
@@ -59,5 +58,7 @@ pub const CompilerError = error {
     IntegerOverflow,
     UnexpectedNonTypeExpression,
     InvalidSpecifier,
+    TypecheckingFailure,
+    MemoryViolation,
     ShouldBeImpossible,
 };

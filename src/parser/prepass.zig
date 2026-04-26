@@ -13,11 +13,12 @@ const Error = common.CompilerError;
 /// symbols.
 pub const Module = struct {
     pub const Symbol = struct {
-        public: bool,
         name: defines.TokenPtr,
         value: defines.StatementPtr,
-        index: u32,
         type: defines.ExpressionPtr,
+        index: u32,
+        meta: u32,
+        public: bool,
     };
 
     /// namespace of the module
@@ -294,6 +295,7 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
                         .value = stmt,
                         .index = @intCast(index),
                         .type = sig.type,
+                        .meta = sigs.len(),
                     });
                 }
             },

@@ -5,6 +5,7 @@ const collections = @import("../util/collections.zig");
 const functional = @import("../util/functional.zig");
 const Types = @import("type.zig");
 
+const Parser = @import("../parser/parser.zig");
 const Comptime = @import("comptime.zig");
 const Resolver = @import("resolver.zig");
 const ModuleList = @import("../parser/prepass.zig").ModuleList;
@@ -232,16 +233,26 @@ pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
 pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) Error!defines.Range {
     const varType = try self.expectType(decl.type);
     const initializer =
-        if (decl.topLevel)
+        if (
+            decl.topLevel or
+            varType.at(0) == comptime Comptime.Builtin.Type("type").at(0)
+        )
             try self.typecheckValue(try self.executer.eval(decl.node, varType))
-        else if (try self.executer.attemptEval(decl.node, varType)) |success|
-            try self.typecheckValue(success)
         else
             try self.typecheckExpression(decl.node, varType);
 
-    const expected = self.extra.items[varType.at(0)];
-    const got = self.extra.items[initializer.at(0)];
+    if (initializer.len() != decl.meta) {
+        self.report(
+            "Mismatching initializer counts in variable definition."
+            ++ " Expected '{d}', received '{d}'", .{decl.meta, initializer.len()}
+        );
+        return error.TypeMismatch;
+    }
 
+    const expected = self.extra.items[varType.at(0)];
+    const got = self.extra.items[initializer.at(decl.index)];
+
+    // TODO: type renaming on binding
     return
         if (self.suitableSingle(expected, got))
             self.infer(expected, got)
@@ -261,6 +272,10 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
     const tokens = self.context.getTokens(ast.tokens);
     _ = tokens;
 
+    if (self.executer.attemptEval(expressionPtr, maybeExpected)) |result| {
+        return self.typecheckValue(result);
+    }
+
     const expr = ast.expressions.get(expressionPtr);
     return switch (expr.type) {
         .Identifier => {
@@ -268,10 +283,10 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
             const decl = self.symbols.findDecl(.{ .file = self.currentFile, .expr = expressionPtr });
             return self.typecheckDecl(decl, maybeExpected);
         },
-        .PointerType => self.expectType(expr.value),
+        .Indexing => self.typecheckIndexing(expr.value),
         else => |t| {
-            self.report("{s} is not implemented.", .{@tagName(t)});
-            return error.NotImplemented;
+            self.report("Unable to typecheck expression '{s}'.", .{@tagName(t)});
+            return error.TypecheckingFailure;
         }
     };
 }
@@ -318,6 +333,12 @@ pub fn typecheckValue(self: *Typechecker, val: Comptime.Value) Error!defines.Ran
     };
 }
 
+pub fn typecheckIndexing(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!defines.Range {
+    _ = self;
+    _ = extraPtr;
+    unreachable;
+}
+
 pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected: ?defines.Range) Error!defines.Range {
     const allocator = self.arena.allocator();
 
@@ -332,9 +353,11 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
         switch (isPresent.value_ptr.status) {
             .Checked => return isPresent.value_ptr.types,
             .InProgress => {
-                self.report("Dependency cycle detected. '{s}' depends on itself.", .{
-                    tokens.get(decl.token).lexeme(self.context, self.currentFile),
-                });
+                if (!self.executer.flags.isSet(Comptime.Flags.flag(.CanCycle))) {
+                    self.report("Dependency cycle detected. '{s}' depends on itself.", .{
+                        tokens.get(decl.token).lexeme(self.context, self.currentFile),
+                    });
+                }
                 return error.DependencyCycle;
             },
             else => unreachable,
@@ -653,14 +676,15 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
                 const ptr: Types.Pointer = self.typeTable.get(typeID).Pointer;
                 const child = self.typeName(allocator, ptr.child);
 
+                const mut = if (ptr.mutable) "mut " else "";
                 const prefix = switch (ptr.size) {
                     .Slice => "[]",
                     .Single => "*",
                     .C => "[@c]",
                 };
 
-                const res = allocator.alloc(u8, child.len + prefix.len) catch break :ret "AllocatorFailure";
-                break :ret std.fmt.bufPrint(res, "{s}{s}", .{prefix, child}) catch unreachable;
+                const res = allocator.alloc(u8, child.len + prefix.len + mut.len) catch break :ret "AllocatorFailure";
+                break :ret std.fmt.bufPrint(res, "{s}{s}{s}", .{mut, prefix, child}) catch unreachable;
             },
             .Array => {
                 const arr: Types.Array = self.typeTable.get(typeID).Array;
@@ -705,6 +729,12 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
             .EnumLiteral => "enum_literal",
             .ComptimeFloat => "comptime_float",
             .ComptimeInt => "comptime_int",
+            .Type => "type",
+            .Any => "any",
+            .Bool => "bool",
+            .Float => "float",
+            .Noreturn => "noreturn",
+            .Void => "void",
             .Integer => |int| {
                 const mut = if (int.mutable) "mut " else "";
                 const sign = if (int.signed) "i" else "u"; 
@@ -717,7 +747,6 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
                 const res = allocator.alloc(u8, sign.len + size.len + mut.len) catch return "AllocatorFailure";
                 break :ret std.fmt.bufPrint(res, "{s}{s}{s}", .{mut, sign, size}) catch unreachable;
             },
-            else => unreachable,
         };
 }
 

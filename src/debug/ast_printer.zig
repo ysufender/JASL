@@ -67,22 +67,22 @@ const PrintContext = struct {
             },
 
             .Return => {
-                self.write("Return\n");
+                self.write("Return ");
                 self.printExpr(@intCast(val), depth + 1);
             },
 
             .Discard => {
-                self.write("Discard\n");
+                self.write("Discard ");
                 self.printExpr(@intCast(val), depth + 1);
             },
 
             .Expression => {
-                self.write("ExprStmt\n");
+                self.write("ExprStmt ");
                 self.printExpr(@intCast(val), depth + 1);
             },
 
             .Defer => {
-                self.write("Defer\n");
+                self.write("Defer ");
                 self.printExpr(@intCast(val), depth + 1);
             },
 
@@ -92,12 +92,12 @@ const PrintContext = struct {
                 const expr_idx  = ex[val + 2];
                 const is_pub = sig_end > sig_start and
                     self.ast.signatures.items(.public)[ex[sig_start]];
-                self.print("Let{s}\n", .{if (is_pub) " pub" else ""});
+                self.print("Let{s} (\n", .{if (is_pub) " pub" else ""});
                 for (ex[sig_start..sig_end]) |raw_sig| {
                     self.printSig(@intCast(raw_sig), depth + 1);
                 }
-                self.indent(depth + 1);
-                self.write("=\n");
+                self.indent(depth);
+                self.write(") = ");
                 self.printExpr(@intCast(expr_idx), depth + 2);
             },
 
@@ -105,66 +105,65 @@ const PrintContext = struct {
                 const cond     = ex[val];
                 const body     = ex[val + 1];
                 const has_else = ex[val + 2];
-                self.write("If\n");
+                self.write("If ");
                 self.indent(depth + 1);
-                self.write("cond:\n");
                 self.printExpr(@intCast(cond), depth + 2);
                 self.indent(depth + 1);
-                self.write("then:\n");
+                self.write("then ");
                 self.printStmt(@intCast(body), depth + 2);
                 if (has_else != 0) {
                     self.indent(depth + 1);
-                    self.write("else:\n");
+                    self.write(" else ");
                     self.printStmt(@intCast(ex[val + 3]), depth + 2);
                 }
             },
 
             .While => {
-                self.write("While\n");
+                self.write("While ");
                 self.indent(depth + 1);
-                self.write("cond:\n");
                 self.printExpr(@intCast(ex[val]), depth + 2);
                 self.indent(depth + 1);
-                self.write("body:\n");
+                self.write("do ");
                 self.printStmt(@intCast(ex[val + 1]), depth + 2);
             },
 
             .Switch => {
-                self.write("Switch\n");
+                self.write("Switch ");
                 self.indent(depth + 1);
-                self.write("subject:\n");
                 self.printExpr(@intCast(ex[val]), depth + 2);
                 self.printCases(ex, ex[val + 1], ex[val + 2], depth, true);
             },
 
-            .Break    => self.write("Break\n"),
-            .Continue => self.write("Continue\n"),
+            .Break    => self.write("Break "),
+            .Continue => self.write("Continue "),
 
             .Import => {
                 const module    = ex[val];
                 const has_alias = ex[val + 1];
-                self.write("Import\n");
+                self.write("Import ");
                 self.printExpr(@intCast(module), depth + 1);
                 if (has_alias != 0) {
                     self.indent(depth + 1);
-                    self.print("as {s}\n", .{self.tokenLexeme(@intCast(ex[val + 2]))});
+                    self.print("as {s}", .{self.tokenLexeme(@intCast(ex[val + 2]))});
                 }
             },
 
             .InlineAssembly => {
-                self.print("Asm {s}\n", .{self.tokenLexeme(val)});
+                self.print("Asm {s} ", .{self.tokenLexeme(val)});
             },
 
             .Mark => {
-                self.write("Mark(\n");
+                self.write("Mark(");
                 for (ex[ex[val]..ex[val + 1]]) |hint| {
                     self.printExpr(@intCast(hint), depth + 1);
                 }
                 self.indent(depth);
-                self.write(")\n");
+                self.write(")");
                 self.printStmt(@intCast(ex[val + 2]), depth);
             },
         }
+
+        self.write("\n");
     }
 
     fn printExpr(self: *PrintContext, ei: defines.ExpressionPtr, depth: u32) void {
@@ -173,104 +172,91 @@ const PrintContext = struct {
         const val   = exprs.items(.value)[ei];
         const ex    = self.ast.extra;
 
-        self.indent(depth);
         switch (etype) {
             .Literal => {
-                self.print("Literal({s})\n", .{self.tokenLexeme(val)});
+                self.print("Literal({s})", .{self.tokenLexeme(val)});
             },
 
             .Identifier => {
-                self.print("Ident({s})\n", .{self.tokenLexeme(val)});
+                self.print("Ident({s})", .{self.tokenLexeme(val)});
             },
 
             .Binary => {
-                self.print("Binary({s})\n", .{opSymbol(@intCast(ex[val + 1]))});
+                self.print("Binary({s}) ", .{opSymbol(@intCast(ex[val + 1]))});
                 self.printExpr(@intCast(ex[val]),     depth + 1);
                 self.printExpr(@intCast(ex[val + 2]), depth + 1);
             },
 
             .Unary => {
-                self.print("Unary({s})\n", .{opSymbol(@intCast(ex[val]))});
+                self.print("Unary({s}) ", .{opSymbol(@intCast(ex[val]))});
                 self.printExpr(@intCast(ex[val + 1]), depth + 1);
             },
 
             .Assignment => {
-                self.write("Assign\n");
+                self.write("Assign ");
                 self.printExpr(@intCast(ex[val]),     depth + 1);
                 self.printExpr(@intCast(ex[val + 1]), depth + 1);
             },
 
             .Call => {
-                self.write("Call\n");
-                self.indent(depth + 1);
-                self.write("callee:\n");
+                self.write("Call ");
+                self.write("callee: ");
                 self.printExpr(@intCast(ex[val]), depth + 2);
-                self.indent(depth + 1);
-                self.write("args:\n");
+                self.write("args: ");
                 self.printExpr(@intCast(ex[val + 1]), depth + 2);
             },
 
             .ExpressionList => {
-                self.write("List\n");
+                self.write("List ");
                 for (ex[ex[val]..ex[val + 1]]) |child| {
                     self.printExpr(@intCast(child), depth + 1);
                 }
             },
 
             .Dot => {
-                self.print("Dot(.{s})\n", .{self.tokenLexeme(@intCast(ex[val + 1]))});
+                self.print("Dot({s}) ", .{self.tokenLexeme(@intCast(ex[val + 1]))});
                 self.printExpr(@intCast(ex[val]), depth + 1);
             },
 
             .Scoping => {
-                self.print("Scope(::{s})\n", .{self.tokenLexeme(@intCast(ex[val + 1]))});
+                self.print("Scope({s}) ", .{self.tokenLexeme(@intCast(ex[val + 1]))});
                 self.printExpr(@intCast(ex[val]), depth + 1);
             },
 
             .Indexing => {
-                self.write("Index\n");
+                self.write("Index ");
                 self.printExpr(@intCast(ex[val]), depth + 1);
-                self.indent(depth + 1);
-                self.write("at:\n");
+                self.write(" at: ");
                 self.printExpr(@intCast(ex[val + 1]), depth + 2);
             },
 
             .Slicing => {
-                self.write("Slice\n");
+                self.write("Slice ");
                 self.printExpr(@intCast(ex[val]), depth + 1);
-                self.indent(depth + 1);
-                self.write("from:\n");
+                self.write("from: ");
                 self.printExpr(@intCast(ex[val + 1]), depth + 2);
-                self.indent(depth + 1);
-                self.write("to:\n");
+                self.write("to: ");
                 self.printExpr(@intCast(ex[val + 2]), depth + 2);
             },
 
             .Cast => {
-                self.write("Cast\n");
+                self.write("Cast ");
                 self.printExpr(@intCast(ex[val]), depth + 1);
-                self.indent(depth + 1);
-                self.write("to:\n");
+                self.write("to: ");
                 self.printExpr(@intCast(ex[val + 1]), depth + 2);
             },
 
             .Conditional => {
-                self.write("IfExpr\n");
-                self.indent(depth + 1);
-                self.write("cond:\n");
+                self.write("IfExpr ");
                 self.printExpr(@intCast(ex[val]),     depth + 2);
-                self.indent(depth + 1);
-                self.write("then:\n");
+                self.write(" then ");
                 self.printExpr(@intCast(ex[val + 1]), depth + 2);
-                self.indent(depth + 1);
-                self.write("else:\n");
+                self.write(" else ");
                 self.printExpr(@intCast(ex[val + 2]), depth + 2);
             },
 
             .Switch => {
-                self.write("SwitchExpr\n");
-                self.indent(depth + 1);
-                self.write("subject:\n");
+                self.write("SwitchExpr ");
                 self.printExpr(@intCast(ex[val]), depth + 2);
                 self.printCases(ex, ex[val + 1], ex[val + 2], depth, false);
             },
@@ -280,31 +266,27 @@ const PrintContext = struct {
                 const param_end   = ex[val + 1];
                 const ret         = ex[val + 2];
                 const body        = ex[val + 3];
-                self.write("FnDef\n");
+                self.write("FnDef (\n");
                 for (ex[param_start..param_end]) |raw_sig| {
                     self.indent(depth + 1);
-                    self.write("param:\n");
                     self.printSig(@intCast(raw_sig), depth + 2);
                 }
                 self.indent(depth + 1);
-                self.write("returns:\n");
+                self.write(" -> ");
                 self.printExpr(@intCast(ret), depth + 2);
-                self.indent(depth + 1);
-                self.write("body:\n");
+                self.write("{\n");
                 self.printStmt(@intCast(body), depth + 2);
+                self.write("}");
             },
 
             .Lambda => {
                 const capture_start = ex[val];
                 const capture_end   = ex[val + 1];
                 const body          = ex[val + 2];
-                self.write("Lambda\n");
+                self.write("Lambda ");
                 for (ex[capture_start..capture_end]) |tok| {
-                    self.indent(depth + 1);
-                    self.print("capture: {s}\n", .{self.tokenLexeme(@intCast(tok))});
+                    self.print("capture: {s} ", .{self.tokenLexeme(@intCast(tok))});
                 }
-                self.indent(depth + 1);
-                self.write("body:\n");
                 self.printExpr(@intCast(body), depth + 2);
             },
 
@@ -321,7 +303,7 @@ const PrintContext = struct {
                     self.printStmt(@intCast(raw_stmt), depth + 1);
                 }
                 self.indent(depth);
-                self.write("}\n");
+                self.write("}");
             },
 
             .EnumDefinition => {
@@ -338,7 +320,7 @@ const PrintContext = struct {
                     self.printStmt(@intCast(raw_stmt), depth + 1);
                 }
                 self.indent(depth);
-                self.write("}\n");
+                self.write("}");
             },
 
             .UnionDefinition => {
@@ -370,7 +352,7 @@ const PrintContext = struct {
                     self.printStmt(@intCast(raw_stmt), depth + 1);
                 }
                 self.indent(depth);
-                self.write("}\n");
+                self.write("}");
             },
 
             .PointerType  => { self.write("*");     self.printExpr(val, depth); },
@@ -380,50 +362,42 @@ const PrintContext = struct {
 
             .ArrayType => {
                 const size_ei = ex[val];
-                const size_et = self.ast.expressions.items(.type)[size_ei];
-                const size_ev = self.ast.expressions.items(.value)[size_ei];
                 self.write("[");
-                if (size_et == .Literal or size_et == .Identifier) {
-                    self.print("{s}", .{self.tokenLexeme(size_ev)});
-                } else {
-                    self.print("#{d}", .{size_ei});
-                }
+                self.printExpr(size_ei, depth + 1);
                 self.write("]");
                 self.printExpr(@intCast(ex[val + 1]), depth);
             },
 
             .FunctionType => {
-                self.write("fn ");
+                self.write("*fn ");
                 self.printExpr(@intCast(ex[val]),     depth);
                 self.indent(depth);
-                self.write("-> ");
+                self.write(" -> ");
                 self.printExpr(@intCast(ex[val + 1]), depth);
             },
 
             .Mark => {
-                self.write("Mark(\n");
+                self.write("Mark(");
                 for (ex[ex[val]..ex[val + 1]]) |hint| {
                     self.printExpr(@intCast(hint), depth + 1);
+                    self.write(" ");
                 }
                 self.indent(depth);
-                self.write(")\n");
+                self.write(")");
                 self.printExpr(@intCast(ex[val + 2]), depth);
             },
         }
     }
 
-    fn printSig(self: *PrintContext, si: defines.OpaquePtr, depth: u32) void {
+    fn printSig(self: *PrintContext, si: defines.SignaturePtr, depth: u32) void {
         const sigs = self.ast.signatures;
         const sig  = sigs.get(si);
         self.indent(depth);
         if (sig.public) self.write("pub ");
         self.print("{s}", .{self.tokenLexeme(sig.name)});
-        if (sig.type != 0) {
-            self.write(": ");
-            self.printExpr(sig.type, 0);
-        } else {
-            self.write("\n");
-        }
+        self.write(": ");
+        self.printExpr(sig.type, 0);
+        self.write("\n");
     }
 
     fn printCases(
@@ -443,14 +417,14 @@ const PrintContext = struct {
             if (case_expr == 0) {
                 self.write("else");
             } else {
-                self.write("case:\n");
+                self.write("case: ");
                 self.printExpr(@intCast(case_expr), depth + 2);
                 self.indent(depth + 1);
             }
             if (capture != 0) {
                 self.print(" |{s}|", .{self.tokenLexeme(@intCast(capture))});
             }
-            self.write(" ->\n");
+            self.write(" -> ");
             if (is_stmt) {
                 self.printStmt(@intCast(case_body), depth + 2);
             } else {

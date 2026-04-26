@@ -1,5 +1,3 @@
-// TODO: Add Incomplete resolutions for Typechecker to populate.
-
 const std = @import("std");
 const common = @import("../core/common.zig");
 const defines = @import("../core/defines.zig");
@@ -48,13 +46,14 @@ pub const Declaration = struct {
     };
 
     scope: defines.ScopePtr,
-    kind: Kind,
-    public: bool,
     index: defines.Offset,
     token: defines.TokenPtr,
     node: defines.StatementPtr,
     type: defines.ExpressionPtr,
+    meta: u32,
     topLevel: bool,
+    kind: Kind,
+    public: bool,
 };
 
 pub const ResolutionKey = struct {
@@ -152,6 +151,7 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
             .node = @intCast(i),
             .type = @intCast(i),
             .topLevel = true,
+            .meta = 1,
         });
 
         lookup.putNoClobber(allocator, .{ .name = b, .scope = builtin }, decl)
@@ -184,6 +184,7 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
                 .node = symbol.value,
                 .type = symbol.type,
                 .topLevel = true,
+                .meta = symbol.meta,
             });
 
             lookup.putNoClobber(allocator, .{
@@ -359,6 +360,7 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                         .index = 0,
                         .type = 0,
                         .topLevel = false,
+                        .meta = 1,
                     });
 
                     const lexeme = tokens.get(capture).lexeme(self.context, self.dataIndex());
@@ -418,6 +420,7 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                     .node = initializer,
                     .type = signature.type,
                     .topLevel = topLevel,
+                    .meta = signatures.len(),
                 });
 
                 if (topLevel) {
@@ -456,6 +459,7 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                 .node = moduleID,
                 .type = 0,
                 .topLevel = true,
+                .meta = 1,
             });
 
             const lexeme =
@@ -710,6 +714,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                     .node = name,
                     .type = 0,
                     .topLevel = false,
+                    .meta = 1,
                 });
 
                 const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
@@ -780,6 +785,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                         .index = 0,
                         .type = 0,
                         .topLevel = false,
+                        .meta = 1,
                     });
 
                     const lexeme = tokens.get(capture).lexeme(self.context, self.dataIndex());
@@ -866,6 +872,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                     .node = moduleIdx,
                     .type = 0,
                     .topLevel = false,
+                    .meta = 1,
                 });
                 currentDecl = d;
             } else {
@@ -950,6 +957,7 @@ fn resolveSignature(self: *Resolver, signaturePtr: defines.SignaturePtr, index: 
                     .node = field.type,
                     .type = field.type,
                     .topLevel = false,
+                    .meta = 1,
                 });
 
                 const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
@@ -980,7 +988,8 @@ fn prepassScope(self: *Resolver, declarations: defines.Range) Error!void {
             .end = ast.extra[expr + 1],
         };
         
-        for (signatures.start..signatures.end, 0..) |signaturePtrPtr, i| {
+        for (0..signatures.len()) |index| {
+            const signaturePtrPtr = signatures.at(@intCast(index));
             const field = ast.signatures.items(.name)[ast.extra[signaturePtrPtr]];
             self.lastToken = field;
             const lexeme = tokens.get(field).lexeme(self.context, self.dataIndex());
@@ -990,11 +999,12 @@ fn prepassScope(self: *Resolver, declarations: defines.Range) Error!void {
                 .kind = .Variable,
                 .scope = self.currentScope,
                 .public = false,
-                .index = @intCast(i),
+                .index = @intCast(index),
                 .token = field,
                 .node = ast.extra[expr + 2],
                 .type = ast.signatures.items(.type)[ast.extra[signaturePtrPtr]],
                 .topLevel = true,
+                .meta = signatures.len(),
             });
 
             const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
@@ -1024,7 +1034,8 @@ fn handleScopeDefs(self: *Resolver, declarations: defines.Range) Error!void {
         };
         const initializer = ast.extra[def + 2];
 
-        for (signatures.start..signatures.end, 0..) |signaturePtrPtr, i| {
+        for (0..signatures.len()) |index| {
+            const signaturePtrPtr = signatures.at(@intCast(index));
             const signaturePtr = ast.extra[signaturePtrPtr];
             const field = ast.signatures.get(signaturePtr);
             self.lastToken = field.name;
@@ -1040,9 +1051,10 @@ fn handleScopeDefs(self: *Resolver, declarations: defines.Range) Error!void {
                 .public = field.public,
                 .token = field.name,
                 .node = initializer,
-                .index = @intCast(i),
+                .index = @intCast(index),
                 .type = field.type,
                 .topLevel = true,
+                .meta = signatures.len(),
             });
         }
 
