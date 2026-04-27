@@ -1,3 +1,6 @@
+const std = @import("std");
+
+// @CompilerOnly 
 pub const TypeID = u32;
 
 pub const TypeInfo = union(enum) {
@@ -27,6 +30,15 @@ pub const FieldInfo = struct {
     public: bool,
     name: []const u8,
     valueType: TypeID,
+
+    // @CompilerOnly 
+    pub fn eql(this: *const FieldInfo, that: FieldInfo) bool {
+        return
+            this.public == that.public
+            and std.mem.eql(u8, this.name, that.name)
+            and this.valueType == that.valueType;
+        // TODO: Structural FieldInfo.valueType check instead.
+    }
 };
 
 pub const Struct = struct {
@@ -78,6 +90,39 @@ pub const Function = struct {
 
 pub const Integer = struct {
     mutable: bool,
-    size: u8,
+    size: u6,
     signed: bool,
+
+    // @CompilerOnly 
+    pub const Range = struct { 
+        min: i64,
+        max: i64,
+    };
+
+    // @CompilerOnly 
+    pub fn range(self: Integer) Range {
+        const max =
+            if (self.size == 0) 0
+            else (@as(i64, 1) << (self.size - @intFromBool(self.signed))) - 1;
+
+        const min =
+            if (!self.signed) 0
+            else if (self.size == 0) 0
+            else -(@as(i64, 1) << (self.size - 1));
+
+        return .{
+            .min = min,
+            .max = max,
+        };
+    }
+
+    // @CompilerOnly 
+    pub fn canContain(self: Integer, other: Integer) bool {
+        const selfRange = self.range();
+        const otherRange = other.range();
+
+        return
+            selfRange.min <= otherRange.min
+            and selfRange.max >= otherRange.max;
+    }
 };

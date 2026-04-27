@@ -458,6 +458,148 @@ fn dumpCallStack(self: *Typechecker) void {
     }
 }
 
+pub fn assertCastable(self: *const Typechecker, from: TypeID, to: TypeID) Error!void {
+    const fmax = std.math.floatMax;
+    const fmin = struct{fn fmin(comptime T: type) T { return -fmax(T); }}.fmin;
+
+    const fromType = self.typeTable.get(from);
+    const toType = self.typeTable.get(to);
+
+    if (!self.mutable(from) and self.mutable(to)) {
+        return error.MutabilityViolation;
+    }
+
+    switch (fromType) {
+        .Enum, .Union, .Struct => try self.assertStructurallyIdentical(from, to),
+        .Bool => switch (toType) {
+            .Integer => |int| try functional.throwIf(int.size <= 0, error.SizeMismatch),
+            else => return error.IncompatibleTypes,
+        },
+        .Integer => |fromInt| switch (toType) {
+            .Integer => |toInt| try functional.throwIf(!toInt.canContain(fromInt), error.SizeMismatch),
+            .Float => try functional.throwIf(
+                fmax(f32) < @as(f32, @floatFromInt(fromInt.range().max))
+                or fmin(f32) > @as(f32, @floatFromInt(fromInt.range().min)),
+                error.SizeMismatch,
+            ),
+            else => return error.IncompatibleTypes,
+        },
+        .Float => switch (toType) {
+            .Float => { },
+            .Integer => |toInt| try functional.throwIf(
+                fmax(f32) > @as(f32, @floatFromInt(toInt.range().max))
+                or fmin(f32) < @as(f32, @floatFromInt(toInt.range().min)),
+                error.SizeMismatch,
+            ),
+            else => return error.IncompatibleTypes,
+        },
+        .Pointer => |fromPtr| switch (toType) {
+            .Pointer => |toPtr| try self.assertSuitablePtr(fromPtr, toPtr),
+            else => return error.IncompatibleTypes,
+        },
+        .Function => switch (toType) {
+            .Function => { },
+            else => return error.IncompatibleTypes,
+        },
+        .Any, .Type, .ComptimeFloat,
+        .ComptimeInt, .EnumLiteral,
+        .Noreturn, .Array, .Void => return error.UncastableTypes,
+    }
+}
+
+pub fn castable(self: *const Typechecker, from: TypeID, to: TypeID) bool {
+    self.assertCastable(from, to) catch return false;
+    return true;
+}
+
+pub fn assertSuitablePtr(self: *const Typechecker, this: Types.Pointer, that: Types.Pointer) Error!void {
+    switch (this.size) {
+        .Slice => try functional.throwIf(self.sizeOf(this.child) != self.sizeOf(that.child), error.MismatchingSliceChildType),
+        .Single => try functional.throwIf(that.size == .Slice, error.PointerSizeMismatch),
+        .C => try functional.throwIf(that.size == .Slice, error.PointerSizeMismatch),
+    }
+
+    try functional.throwIf(!self.mutable(this.child) and self.mutable(that.child), error.MutabilityViolation);
+}
+
+/// Does no mutability check
+pub fn assertStructurallyIdentical(self: *const Typechecker, this: TypeID, that: TypeID) Error!void {
+    const fromType = self.typeTable.get(this);
+    const toType = self.typeTable.get(that);
+
+    if (std.meta.activeTag(fromType) != std.meta.activeTag(toType)) {
+        return error.IncompatibleTypes;
+    }
+
+    switch (fromType) {
+        .Struct => |fromStruct| {
+            if (fromStruct.fields.len != toType.Struct.fields.len) {
+                return error.StructuralMismatch;
+            }
+
+            for (fromStruct.fields, toType.Struct.fields) |fromField, toField| {
+                if (!fromField.eql(toField)) {
+                    return error.StructuralMismatch;
+                }
+            }
+        },
+        .Union => |fromUnion| {
+            const toUnion = toType.Union;
+            if (std.meta.activeTag(fromUnion) != std.meta.activeTag(toUnion)) {
+                return error.StructuralMismatch;
+            }
+
+            switch (fromUnion) {
+                .Tagged => |fromTagged| {
+                    const toTagged = toUnion.Tagged;
+
+                    if (fromTagged.fields.len != toTagged.fields.len) {
+                        return error.StructuralMismatch;
+                    }
+
+                    for (fromTagged.fields, toTagged.fields) |fromField, toField| {
+                        if (!fromField.eql(toField)) {
+                            return error.StructuralMismatch;
+                        }
+                    }
+                },
+                .Plain => |fromPlain| {
+                    const toPlain = toUnion.Plain;
+
+                    if (fromPlain.fields.len != toPlain.fields.len) {
+                        return error.StructuralMismatch;
+                    }
+
+                    for (fromPlain.fields, toPlain.fields) |fromField, toField| {
+                        if (!fromField.eql(toField)) {
+                            return error.StructuralMismatch;
+                        }
+                    }
+                }
+            }
+        },
+        .Enum => |fromEnum| {
+            const toEnum = toType.Enum;
+
+            if (fromEnum.fields.len != toEnum.fields.len) {
+                return error.StructuralMismatch;
+            }
+
+            for (fromEnum.fields, toEnum.fields) |fromField, toField| {
+                if (!std.mem.eql(u8, fromField, toField)) {
+                    return error.StructuralMismatch;
+                }
+            }
+        },
+        else => return error.ShouldBeImpossible,
+    }
+}
+
+pub fn structurallyIdentical(self: *const Typechecker, this: TypeID, that: TypeID) bool {
+    self.assertStructurallyIdentical(this, that) catch return false;
+    return true;
+}
+
 pub fn suitable(self: *const Typechecker, expected: defines.Range, got: defines.Range) bool {
     self.assertSuitable(expected, got) catch return false;
     return true;
@@ -627,6 +769,44 @@ pub fn makeMutable(_: *const Typechecker, info: TypeInfo) TypeInfo {
             },
         },
         else => unreachable,
+    };
+}
+
+/// In bytes
+pub fn sizeOf(self: *const Typechecker, of: TypeID) u32 {
+    return ret: switch (self.typeTable.get(of)) {
+        .Pointer => @sizeOf(*void),
+        .Function => @sizeOf(@TypeOf(&sizeOf)),
+        .Enum => @sizeOf(u32),
+        .Float, .ComptimeFloat => @sizeOf(f32),
+        .Integer => |int| int.size,
+        .Bool => @sizeOf(bool),
+        .Void, .Noreturn, .EnumLiteral, .Type, .Any => 0,
+        .Array => |arr| arr.len * self.sizeOf(arr.child),
+        .ComptimeInt => @sizeOf(i64),
+        .Struct => |str| {
+            var size: u32 = 0;
+            for (str.fields) |field| {
+                size += self.sizeOf(field.valueType);
+            }
+
+            return size;
+        },
+        .Union => |uni| {
+            const fields = switch (uni) {
+                .Tagged => |t| t.fields,
+                .Plain => |p| p.fields,
+            };
+            var size: u32 = 0;
+            for (fields) |field| {
+                size = @max(size, self.sizeOf(field.valueType));
+            }
+
+            break :ret switch (uni) {
+                .Tagged => size + @sizeOf(u32),
+                .Plain => size,
+            };
+        },
     };
 }
 

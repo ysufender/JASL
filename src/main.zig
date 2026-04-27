@@ -16,14 +16,30 @@ pub fn main() !void {
     const allocator = perfAllc.performanceAllocator;
 
     innerMain(allocator) catch |err| {
+        switch (err) {
+            error.ShouldBeImpossible => common.log.err(
+                "This is a compiler bug, a part of impossible branch has been reached."
+                ++ " Please inform the authors about it.", .{ }
+            ),
+            error.NotImplemented => common.log.err(
+                "The compiler has hit an unfinished part of the codebase, stay tuned.", .{ }
+            ),
+            else => { }, 
+        }
+
         if (!@import("builtin").strip_debug_info) {
             if (@errorReturnTrace()) |trace| {
                 std.debug.dumpStackTrace(trace.*);
             }
         }
 
-        return common.log.err("Compiler exited with code {d} <{s}>", .{@intFromError(err), @errorName(err)});
+        return common.log.err(
+            "Compiler exited with code {d} <{s}>", .{
+            @intFromError(err),
+            @errorName(err)
+        });
     };
+
     common.log.info("Compiler exited successfully.", .{});
 }
 

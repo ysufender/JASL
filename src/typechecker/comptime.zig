@@ -23,6 +23,7 @@ const ValuePtr = u32;
 pub const Flags = enum(u3) {
     Attempting = 0,
     CanCycle = 1,
+    RValue = 2,
 
     pub fn flag(flagToGet: Flags) u3 {
         return @intFromEnum(flagToGet);
@@ -33,7 +34,7 @@ pub const Flags = enum(u3) {
 // with possibly flattened fields for performance
 // and memory usage
 pub const Value = union(enum) {
-    Int: u32,
+    Int: i64,
     Float: f32,
     String: []const u8,
     Bool: bool,
@@ -61,6 +62,7 @@ pub const Value = union(enum) {
     Slice: struct {
         const Self = @This();
 
+        Type: Types.TypeID, 
         Size: u32,
         To: ValuePtr,
 
@@ -103,8 +105,8 @@ pub fn init(typechecker: *Typechecker, gpa: Allocator) Error!Comptime {
 }
 
 pub fn attemptEval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?defines.Range) ?Value {
-    self.flags.set(Flags.flag(.Attempting));
-    defer self.flags.unset(Flags.flag(.Attempting));
+    const prev = self.setFlag(.Attempting, true);
+    defer _ = self.setFlag(.Attempting, prev);
     return self.eval(exprPtr, maybeExpected) catch null;
 }
 
@@ -137,6 +139,7 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?def
         .EnumDefinition => try self.evalEnumType(expr.value),
         .StructDefinition => try self.evalStructType(expr.value),
         .UnionDefinition => try self.evalUnionType(expr.value),
+        .Cast => try self.evalCast(expr.value),
         .Indexing => try self.evalIndexing(expr.value),
         else => {
             self.report("Unable to resolve comptime expression.", .{});
@@ -216,14 +219,14 @@ fn evalPtrType(
     comptime ptrType: @FieldType(Types.Pointer, "size"),
     innerType: defines.ExpressionPtr
 ) Error!Value {
-    self.flags.set(Flags.flag(.CanCycle));
+    const prev = self.setFlag(.CanCycle, true);
+    defer _ = self.setFlag(.CanCycle, prev);
     const inner = self.expectType(innerType) catch |err| switch (err) {
         error.DependencyCycle => Value{
             .Type = comptime Builtin.Type("incomplete").at(0),
         },
         else => return err,
     };
-    self.flags.unset(Flags.flag(.CanCycle));
 
     const newType = Types.TypeInfo{
         .Pointer = .{
@@ -478,14 +481,84 @@ fn evalUnionType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
     return .{ .Type = typeID.at(0) };
 }
 
-fn evalIndexing(self: *Comptime, extraPtr: defines.OpaquePtr, isLhs: bool) Error!Value {
+fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+
+    const lhs = try self.eval(ast.extra[extraPtr], null);
+    const targetType = (try self.expectType(ast.extra[extraPtr + 1])).Type;
+
+    const lhsType = try self.typechecker.typecheckValue(lhs);
+
+    if (lhsType.len() != 1) {
+        self.report("Multi-value type casting is not supported (yet).", .{});
+        return error.NotImplemented;
+    }
+
+    self.typechecker.assertCastable(lhsType.at(0), targetType) catch |err| {
+        switch (err) {
+            error.IncompatibleTypes => {
+                self.report("Given type '{s}' can't be cast to '{s}'.", .{
+                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
+                    self.typechecker.typeName(self.arena.allocator(), targetType),
+                });
+            },
+            error.SizeMismatch => {
+                self.report("'{s}' can't safely contain all possible values of '{s}'.", .{
+                    self.typechecker.typeName(self.arena.allocator(), targetType),
+                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
+                });
+            },
+            error.MutabilityViolation => {
+                self.report("Cast from '{s}' to '{s}' ignores mutability specifiers.", .{
+                    self.typechecker.typeName(self.arena.allocator(), targetType),
+                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
+                });
+            },
+            error.PointerSizeMismatch => {
+                self.report("Illegal cast from unknown sized '{s}' to sized '{s}'.", .{
+                    self.typechecker.typeName(self.arena.allocator(), targetType),
+                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
+                });
+            },
+            error.UncastableTypes => {
+                self.report("Given type '{s}' is not castable.", .{
+                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
+                });
+            },
+            error.StructuralMismatch => {
+                self.report("Given types '{s}' and '{s}' are not structurally identical.", .{
+                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
+                    self.typechecker.typeName(self.arena.allocator(), targetType),
+                });
+            },
+            error.MismatchingSliceChildType => {
+                self.report("Cast from slice type '{s}' to '{s}' will alter the length of the slice.", .{
+                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
+                    self.typechecker.typeName(self.arena.allocator(), targetType),
+                });
+            },
+            else => return error.ShouldBeImpossible,
+        }
+
+        return err;
+    };
+
+    return error.NotImplemented;
+}
+
+fn evalIndexing(
+    self: *Comptime,
+    extraPtr: defines.OpaquePtr,
+) Error!Value {
+    const lValue = !self.getFlag(.RValue);
+
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
     const slice = try self.eval(ast.extra[extraPtr], null);
     blk: switch (slice) {
         .Slice => { },
-        .Undefined and !isLhs => {
-            if (isLhs) {
+        .Undefined => {
+            if (lValue) {
                 break :blk;
             }
 
@@ -513,7 +586,33 @@ fn evalIndexing(self: *Comptime, extraPtr: defines.OpaquePtr, isLhs: bool) Error
         },
     }
 
-    return self.memory.items[slice.Slice.at(index.Int)];
+    if (slice.Slice.Size <= index.Int) {
+        self.report("Index out of bounds. Size: {d}, Index: {d}.", .{
+            slice.Slice.Size,
+            index.Int,
+        });
+        return error.IndexOutOfBounds;
+    }
+
+    return
+        if (lValue) self.memory.items[slice.Slice.at(@intCast(index.Int))]
+        else ret: {
+            const ptrType = Types.TypeInfo{
+                .Pointer = .{
+                    .mutable = true,
+                    .child = self.typechecker.typeTable.get(slice.Slice.Type).Pointer.child,
+                    .size = .Single,
+                },
+            };
+            const ptrTypeID = (try self.typechecker.registerType(ptrType)).at(0);
+
+            break :ret .{
+                .Pointer = .{
+                    .Type = ptrTypeID,
+                    .To = slice.Slice.at(@intCast(index.Int)),
+                },
+            };
+        };
 }
 
 fn evalMutType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
@@ -539,7 +638,17 @@ fn evalArrType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
     const size = switch (try self.eval(ast.extra[extraPtr], null)) {
-        .Int => |val| val,
+        .Int => |val|
+            if (val <= std.math.maxInt(u32)) val
+            else {
+                self.report(
+                    "Given value '{d}' exceeds the maximum supported array size of "
+                    ++ "{d}.", .{
+                        val,
+                        std.math.maxInt(u32),
+                    });
+                return error.SizeViolation;
+            },
         else => |tag| {
             self.report("Expected a 'comptime_int' value as size specifier. Got '{s}' instead.", .{@tagName(std.meta.activeTag(tag))});
             return error.TypeMismatch;
@@ -550,7 +659,7 @@ fn evalArrType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
 
     const newType = Types.TypeInfo{
         .Array = .{
-            .len = size,
+            .len = @intCast(size),
             .mutable = false,
             .child = inner.Type,
         },
@@ -676,6 +785,15 @@ fn report(self: *Comptime, comptime fmt: []const u8, args: anytype) void {
     return
         if (self.flags.isSet(Flags.flag(.Attempting))) {}
         else self.typechecker.report("COMPTIME: " ++ fmt, args);
+}
+
+fn setFlag(self: *Comptime, comptime flag: Flags, bit: bool) bool {
+    defer self.flags.setValue(Flags.flag(flag), bit);
+    return self.flags.isSet(Flags.flag(flag));
+}
+
+fn getFlag(self: *Comptime, comptime flag: Flags) bool {
+    return self.flags.isSet(Flags.flag(flag));
 }
 
 pub fn deinit(self: *Comptime) void {

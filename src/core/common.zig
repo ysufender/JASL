@@ -60,5 +60,13 @@ pub const CompilerError = error {
     InvalidSpecifier,
     TypecheckingFailure,
     MemoryViolation,
+    SizeViolation,
+    SizeMismatch,
+    IncompatibleTypes,
+    MutabilityViolation,
+    PointerSizeMismatch,
+    UncastableTypes,
+    StructuralMismatch,
+    MismatchingSliceChildType,
     ShouldBeImpossible,
 };

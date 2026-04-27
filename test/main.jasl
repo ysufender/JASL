@@ -1,3 +1,3 @@
-let enumt: []u8 = ();
+let enumt: []type = undefined;
 
-let main: *fn void -> i32 = enumt[0];
+let main: *fn void -> i32 = enumt as []void;
