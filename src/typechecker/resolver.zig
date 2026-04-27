@@ -798,11 +798,8 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             }
         },
         .Cast => {
-            const typeExpr = ast.extra[expr.value + 1];
-            try self.resolveExpression(typeExpr);
-
-            const lhs = ast.extra[expr.value];
-            try self.resolveExpression(lhs);
+            const inner = ast.extra[expr.value];
+            try self.resolveExpression(inner);
         },
         .MutableType, .PointerType, .SliceType, .CPointerType => try self.resolveExpression(expr.value),
         .ArrayType => {

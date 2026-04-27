@@ -113,7 +113,7 @@ const keywords = std.StaticStringMap(TokenType).initComptime(&.{
     .{ "break", .Break },
     .{ "continue", .Continue },
     .{ "switch", .Switch },
-    .{ "as", .Cast },
+    .{ "cast", .Cast },
     .{ "#", .Mark },
     .{ "_", .Discard },
 });

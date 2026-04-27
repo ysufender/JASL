@@ -65,8 +65,8 @@ pub const CompilerError = error {
     IncompatibleTypes,
     MutabilityViolation,
     PointerSizeMismatch,
-    UncastableTypes,
     StructuralMismatch,
     MismatchingSliceChildType,
+    InferenceError,
     ShouldBeImpossible,
 };

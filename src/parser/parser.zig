@@ -589,7 +589,10 @@ fn import(self: *Parser) StatementResult {
     }
 
     const maybeAlias =
-        if (self.match(&.{.Cast})) self.advance()
+        if (
+            self.match(&.{.Identifier})
+            and std.mem.eql(u8, self.tokens.get(self.previous()).lexeme(self.context, self.file), "as")
+        ) self.advance()
         else null;
     _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
@@ -846,16 +849,14 @@ fn cast(self: *Parser) ExpressionResult {
     var expr = try self.postfix();
 
     while (self.match(&.{.Cast})) {
+        _ = try self.consume(.LParen, error.MissingParenthesis, "Expected an open parenthesis.");
         const typeExpr = try self.ifExpression();
-
-        const start: u32 = @intCast(self.extra.items.len);
-        self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), typeExpr) catch return error.AllocatorFailure;
+        _ = try self.consume(.RParen, error.MissingParenthesis, "Expected an enclosing parenthesis.");
 
         const newExpr = try self.alloc(Expression);
         self.expressionMap.set(newExpr, .{
             .type = .Cast,
-            .value = start,
+            .value = typeExpr,
         });
 
         expr = newExpr;

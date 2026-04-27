@@ -284,6 +284,7 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
             return self.typecheckDecl(decl, maybeExpected);
         },
         .Indexing => self.typecheckIndexing(expr.value),
+        .Cast => self.typecheckCasting(expr.value, maybeExpected),
         else => |t| {
             self.report("Unable to typecheck expression '{s}'.", .{@tagName(t)});
             return error.TypecheckingFailure;
@@ -336,7 +337,14 @@ pub fn typecheckValue(self: *Typechecker, val: Comptime.Value) Error!defines.Ran
 pub fn typecheckIndexing(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!defines.Range {
     _ = self;
     _ = extraPtr;
-    unreachable;
+    return error.NotImplemented;
+}
+
+pub fn typecheckCasting(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?defines.Range) Error!defines.Range {
+    _ = self;
+    _ = extraPtr;
+    _ = maybeExpected;
+    return error.NotImplemented;
 }
 
 pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected: ?defines.Range) Error!defines.Range {
@@ -465,8 +473,16 @@ pub fn assertCastable(self: *const Typechecker, from: TypeID, to: TypeID) Error!
     const fromType = self.typeTable.get(from);
     const toType = self.typeTable.get(to);
 
+    if (to == comptime Comptime.Builtin.Type("any")) {
+        return;
+    }
+
     if (!self.mutable(from) and self.mutable(to)) {
         return error.MutabilityViolation;
+    }
+
+    if (to == comptime Comptime.Builtin.Type("mut any")) {
+        return;
     }
 
     switch (fromType) {
@@ -503,7 +519,7 @@ pub fn assertCastable(self: *const Typechecker, from: TypeID, to: TypeID) Error!
         },
         .Any, .Type, .ComptimeFloat,
         .ComptimeInt, .EnumLiteral,
-        .Noreturn, .Array, .Void => return error.UncastableTypes,
+        .Noreturn, .Array, .Void => return error.IncompatibleTypes,
     }
 }
 

@@ -139,7 +139,7 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?def
         .EnumDefinition => try self.evalEnumType(expr.value),
         .StructDefinition => try self.evalStructType(expr.value),
         .UnionDefinition => try self.evalUnionType(expr.value),
-        .Cast => try self.evalCast(expr.value),
+        .Cast => try self.evalCast(expr.value, maybeExpected),
         .Indexing => try self.evalIndexing(expr.value),
         else => {
             self.report("Unable to resolve comptime expression.", .{});
@@ -481,62 +481,49 @@ fn evalUnionType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
     return .{ .Type = typeID.at(0) };
 }
 
-fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
+fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?defines.Range) Error!Value {
+    // TODO: Turn casting into a builtin instead, and add 'as(type, expr)' to
+    // the builtins as well.
+    const targetTypeRange =
+        if (maybeExpected) |target| target
+        else {
+            self.report("Couldn't infer target type for casting.", .{});
+            return error.InferenceError;
+        };
+
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
     const lhs = try self.eval(ast.extra[extraPtr], null);
-    const targetType = (try self.expectType(ast.extra[extraPtr + 1])).Type;
+    const lhsTypeRange = try self.typechecker.typecheckValue(lhs);
 
-    const lhsType = try self.typechecker.typecheckValue(lhs);
-
-    if (lhsType.len() != 1) {
+    if (lhsTypeRange.len() != 1 or targetTypeRange.len() != 1) {
         self.report("Multi-value type casting is not supported (yet).", .{});
         return error.NotImplemented;
     }
+    else if (lhsTypeRange.len() != targetTypeRange.len()) {
+        self.report("Type count mismatch, expected {d}, received {d} values.", .{
+            targetTypeRange.len(),
+            lhsTypeRange.len(),
+        });
+        return error.SizeMismatch;
+    }
 
-    self.typechecker.assertCastable(lhsType.at(0), targetType) catch |err| {
+    const targetType = targetTypeRange.at(0);
+    const lhsType = lhsTypeRange.at(0);
+
+    self.typechecker.assertCastable(lhsType, targetType) catch |err| {
+        const rargs = .{
+            self.typechecker.typeName(self.arena.allocator(), lhsType),
+            self.typechecker.typeName(self.arena.allocator(), targetType),
+        };
+
         switch (err) {
-            error.IncompatibleTypes => {
-                self.report("Given type '{s}' can't be cast to '{s}'.", .{
-                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
-                    self.typechecker.typeName(self.arena.allocator(), targetType),
-                });
-            },
-            error.SizeMismatch => {
-                self.report("'{s}' can't safely contain all possible values of '{s}'.", .{
-                    self.typechecker.typeName(self.arena.allocator(), targetType),
-                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
-                });
-            },
-            error.MutabilityViolation => {
-                self.report("Cast from '{s}' to '{s}' ignores mutability specifiers.", .{
-                    self.typechecker.typeName(self.arena.allocator(), targetType),
-                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
-                });
-            },
-            error.PointerSizeMismatch => {
-                self.report("Illegal cast from unknown sized '{s}' to sized '{s}'.", .{
-                    self.typechecker.typeName(self.arena.allocator(), targetType),
-                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
-                });
-            },
-            error.UncastableTypes => {
-                self.report("Given type '{s}' is not castable.", .{
-                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
-                });
-            },
-            error.StructuralMismatch => {
-                self.report("Given types '{s}' and '{s}' are not structurally identical.", .{
-                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
-                    self.typechecker.typeName(self.arena.allocator(), targetType),
-                });
-            },
-            error.MismatchingSliceChildType => {
-                self.report("Cast from slice type '{s}' to '{s}' will alter the length of the slice.", .{
-                    self.typechecker.typeNameMany(self.arena.allocator(), lhsType),
-                    self.typechecker.typeName(self.arena.allocator(), targetType),
-                });
-            },
+            error.IncompatibleTypes => self.report("Given type '{s}' can't be cast to '{s}'.", rargs),
+            error.SizeMismatch => self.report("Type '{s}' is too big for '{s}'.", rargs),
+            error.MutabilityViolation => self.report("Cast from '{s}' to '{s}' ignores mutability specifiers.", rargs),
+            error.PointerSizeMismatch => self.report("Illegal cast from unknown sized '{s}' to sized '{s}'.", rargs),
+            error.StructuralMismatch => self.report("Given types '{s}' and '{s}' are not structurally identical.", rargs),
+            error.MismatchingSliceChildType => self.report("Cast from slice type '{s}' to '{s}' will alter the length of the slice.", rargs),
             else => return error.ShouldBeImpossible,
         }
 
