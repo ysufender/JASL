@@ -37,7 +37,6 @@ pub const Expression = struct {
         Call,
         Conditional,
         Switch,
-        Cast,
         MutableType,
         CPointerType,
         PointerType,
@@ -842,27 +841,7 @@ fn unary(self: *Parser) ExpressionResult {
         return expr;
     }
 
-    return self.cast();
-}
-
-fn cast(self: *Parser) ExpressionResult {
-    var expr = try self.postfix();
-
-    while (self.match(&.{.Cast})) {
-        _ = try self.consume(.LParen, error.MissingParenthesis, "Expected an open parenthesis.");
-        const typeExpr = try self.ifExpression();
-        _ = try self.consume(.RParen, error.MissingParenthesis, "Expected an enclosing parenthesis.");
-
-        const newExpr = try self.alloc(Expression);
-        self.expressionMap.set(newExpr, .{
-            .type = .Cast,
-            .value = typeExpr,
-        });
-
-        expr = newExpr;
-    }
-
-    return expr;
+    return self.postfix();
 }
 
 fn postfix(self: *Parser) ExpressionResult {

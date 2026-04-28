@@ -68,5 +68,10 @@ pub const CompilerError = error {
     StructuralMismatch,
     MismatchingSliceChildType,
     InferenceError,
+    DuplicateCommandLineInput,
+    RedundantTypeForwarding,
+    ArgumentCountMismatch,
+    RedundantCast,
+    CastOfUndefinedValue,
     ShouldBeImpossible,
 };

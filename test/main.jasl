@@ -1,3 +1,9 @@
-let enumt: []type = undefined;
+let test: struct {
+    someField: i32,
+} = undefined;
 
-let main: *fn void -> i32 = enumt as []void;
+let test2: struct {
+    someField: i32,
+} = undefined;
+
+let main = as(typeOf(test), cast(test));

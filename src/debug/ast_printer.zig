@@ -239,13 +239,6 @@ const PrintContext = struct {
                 self.printExpr(@intCast(ex[val + 2]), depth + 2);
             },
 
-            .Cast => {
-                self.write("Cast ");
-                self.printExpr(@intCast(ex[val]), depth + 1);
-                self.write("to: ");
-                self.printExpr(@intCast(ex[val + 1]), depth + 2);
-            },
-
             .Conditional => {
                 self.write("IfExpr ");
                 self.printExpr(@intCast(ex[val]),     depth + 2);

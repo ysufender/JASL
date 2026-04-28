@@ -65,7 +65,7 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     var prepass = try Prepass.init(&context, ast, allocator);
     const modules = try prepass.prepass(allocator);
 
-    if (context.settings.printAST) {
+    if (context.settings.hasFlag("--print-ast")) {
         debug.ASTPrinter.printAST(context.getAST(ast), &context);
     }
 

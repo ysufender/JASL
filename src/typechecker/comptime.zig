@@ -36,7 +36,6 @@ pub const Flags = enum(u3) {
 pub const Value = union(enum) {
     Int: i64,
     Float: f32,
-    String: []const u8,
     Bool: bool,
     Enum: union(enum) {
         Literal: []const u8,
@@ -71,7 +70,7 @@ pub const Value = union(enum) {
             return self.To + index;
         }
     },
-    Function: u32, // TODO: Function Ptrs, after typechecker ast of course.
+    Function: Types.TypeID, // TODO: Function Ptrs, after typechecker ast of course.
     Void: void,
     Undefined: Types.TypeID,
 };
@@ -139,11 +138,13 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?def
         .EnumDefinition => try self.evalEnumType(expr.value),
         .StructDefinition => try self.evalStructType(expr.value),
         .UnionDefinition => try self.evalUnionType(expr.value),
-        .Cast => try self.evalCast(expr.value, maybeExpected),
         .Indexing => try self.evalIndexing(expr.value),
-        else => {
-            self.report("Unable to resolve comptime expression.", .{});
-            return error.NotImplemented;
+        .Call => try self.evalCall(expr.value, maybeExpected),
+        else => |t| {
+            self.report("Unable to resolve comptime expression. ({s})", .{
+                @tagName(t)
+            });
+            return error.ComptimeNotPossible;
         },
     };
 
@@ -169,30 +170,50 @@ fn evalDecl(self: *Comptime, declPtr: defines.DeclPtr, maybeExpected: ?defines.R
     };
 }
 
+fn evalBuiltinCall(self: *Comptime, extraPtr: defines.ExpressionPtr, declPtr: defines.DeclPtr, maybeExpected: ?defines.Range) Error!Value {
+    const BI = Resolver.BuiltinIndex;
+
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+
+    return switch (declPtr) {
+        BI("cast") => self.evalCast(extraPtr, maybeExpected),
+        BI("as") => self.evalTypeForwarding(extraPtr, maybeExpected),
+        BI("typeOf") => .{
+            // TODO: Implement
+            .Type = (try self.typechecker.typecheckExpression(ast.extra[extraPtr], null)).at(0),
+        },
+        else => {
+            self.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[declPtr]});
+            return error.ComptimeNotPossible;
+        },
+    };
+}
+
 fn evalBuiltin(self: *Comptime, decl: *const Resolver.Declaration, maybeExpected: ?defines.Range) Error!Value {
     const BI = Resolver.BuiltinIndex;
 
-    return if (Builtin.isBuiltinType(decl.type)) .{
-        .Type = decl.type,
-    }
-    else switch (decl.type) {
-        BI("undefined") =>
-            if (maybeExpected) |expected|
-                if (self.typechecker.suitable(expected, comptime Builtin.Type("any")))
-                    self.constructUndefined(expected.at(0))
-                else  {
+    return
+        if (Builtin.isBuiltinType(decl.type)) .{
+            .Type = decl.type,
+        }
+        else switch (decl.type) {
+            BI("undefined") =>
+                if (maybeExpected) |expected|
+                    if (self.typechecker.suitable(expected, comptime Builtin.Type("any")))
+                        self.constructUndefined(expected.at(0))
+                    else  {
+                        self.report("Unable to infer the type of undefined value.", .{});
+                        return error.MissingTypeSpecifier;
+                    }
+                else {
                     self.report("Unable to infer the type of undefined value.", .{});
                     return error.MissingTypeSpecifier;
-                }
-            else {
-                self.report("Unable to infer the type of undefined value.", .{});
-                return error.MissingTypeSpecifier;
+                },
+            else => {
+                self.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[decl.type]});
+                return error.IllegalSyntax;
             },
-        else => {
-            self.report("{s} builtin is not implemented.", .{Resolver.builtins[decl.type]});
-            return error.NotImplemented;
-        },
-    };
+        };
 }
 
 fn evalLiteral(self: *Comptime, tokenPtr: defines.TokenPtr) Error!Value {
@@ -209,7 +230,13 @@ fn evalLiteral(self: *Comptime, tokenPtr: defines.TokenPtr) Error!Value {
             },
             else => unreachable,
         }},
-        .String => .{ .String = lexeme },
+        .String => .{
+            .Slice = .{
+                .Type = comptime Builtin.Type("string").at(0),
+                .Size = @intCast(lexeme.len),
+                .To = 0,
+            },
+        },
         else => unreachable,
     };
 }
@@ -482,38 +509,42 @@ fn evalUnionType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
 }
 
 fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?defines.Range) Error!Value {
-    // TODO: Turn casting into a builtin instead, and add 'as(type, expr)' to
-    // the builtins as well.
     const targetTypeRange =
         if (maybeExpected) |target| target
         else {
-            self.report("Couldn't infer target type for casting.", .{});
+            self.report("Casting requires a known target type.", .{});
             return error.InferenceError;
         };
 
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
-    const lhs = try self.eval(ast.extra[extraPtr], null);
-    const lhsTypeRange = try self.typechecker.typecheckValue(lhs);
+    const expressionList = ast.expressions.items(.value)[ast.extra[extraPtr + 1]];
+    const thingToCastRange = defines.Range{
+        .start = ast.extra[expressionList],
+        .end = ast.extra[expressionList + 1],
+    };
 
-    if (lhsTypeRange.len() != 1 or targetTypeRange.len() != 1) {
+    if (thingToCastRange.len() != 1 or targetTypeRange.len() != 1) {
         self.report("Multi-value type casting is not supported (yet).", .{});
         return error.NotImplemented;
     }
-    else if (lhsTypeRange.len() != targetTypeRange.len()) {
+    else if (thingToCastRange.len() != targetTypeRange.len()) {
         self.report("Type count mismatch, expected {d}, received {d} values.", .{
             targetTypeRange.len(),
-            lhsTypeRange.len(),
+            thingToCastRange.len(),
         });
         return error.SizeMismatch;
     }
 
-    const targetType = targetTypeRange.at(0);
-    const lhsType = lhsTypeRange.at(0);
+    const thingToCast = try self.eval(ast.extra[thingToCastRange.at(0)], null);
+    const thingToCastTypeRange = try self.typechecker.typecheckValue(thingToCast);
 
-    self.typechecker.assertCastable(lhsType, targetType) catch |err| {
+    const targetType = targetTypeRange.at(0);
+    const thingToCastType = thingToCastTypeRange.at(0);
+
+    self.typechecker.assertCastable(thingToCastType, targetType) catch |err| {
         const rargs = .{
-            self.typechecker.typeName(self.arena.allocator(), lhsType),
+            self.typechecker.typeName(self.arena.allocator(), thingToCastType),
             self.typechecker.typeName(self.arena.allocator(), targetType),
         };
 
@@ -524,12 +555,59 @@ fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?define
             error.PointerSizeMismatch => self.report("Illegal cast from unknown sized '{s}' to sized '{s}'.", rargs),
             error.StructuralMismatch => self.report("Given types '{s}' and '{s}' are not structurally identical.", rargs),
             error.MismatchingSliceChildType => self.report("Cast from slice type '{s}' to '{s}' will alter the length of the slice.", rargs),
+            error.InferenceError => self.report("Illegal cast from '{s}' to unknown type '{s}'.", rargs),
             else => return error.ShouldBeImpossible,
         }
 
         return err;
     };
 
+    return self.castValue(thingToCast, targetType);
+}
+
+fn evalTypeForwarding(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?defines.Range) Error!Value {
+    if (maybeExpected) |expected| {
+        if (
+            expected.len() > 1
+            and !self.typechecker.castable(comptime Builtin.Type("any").at(0), expected.at(0))
+        ) {
+            self.report("Reduntant type forwarding in already inferable context.", .{ });
+            return error.RedundantTypeForwarding;
+        }
+    }
+
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+
+    const expressionList = ast.expressions.items(.value)[ast.extra[extraPtr + 1]];
+    const args = defines.Range{
+        .start = ast.extra[expressionList],
+        .end = ast.extra[expressionList + 1],
+    };
+
+    if (args.len() != 2) {
+        self.report("Expected 2 arguments, received {d}.", .{
+            args.len(),
+        });
+        return error.ArgumentCountMismatch;
+    }
+
+    const typeToForward = (try self.expectType(ast.extra[args.at(0)])).Type;
+    return self.eval(ast.extra[args.at(1)], .{ .start = typeToForward, .end = typeToForward + 1 });
+}
+
+fn evalCall(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?defines.Range) Error!Value {
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+
+    if (ast.expressions.items(.type)[ast.extra[extraPtr]] == .Identifier) {
+        if (self.typechecker.symbols.resolutionMap.get(.{
+            .file = self.typechecker.currentFile,
+            .expr = ast.extra[extraPtr], 
+        })) |builtinPtr| {
+            return self.evalBuiltinCall(extraPtr, builtinPtr, maybeExpected);
+        }
+    }
+
+    self.report("Comptime function calls are not (yet) supported.", .{});
     return error.NotImplemented;
 }
 
@@ -768,9 +846,77 @@ fn handleScopeDecls(
     return defs.items;
 }
 
+fn castValue(self: *Comptime, value: Value, to: Types.TypeID) Error!Value {
+    return switch (value) {
+        .Pointer => |ptr| .{
+            .Pointer = .{
+                .Type = to,
+                .To = ptr.To,
+            },
+        },
+        .Function => value, // TODO: Proper functions after typechecker AST
+        .Float => |fromFloat| .{
+            .Int = @intFromFloat(fromFloat),
+        },
+        .Int => |fromInt| switch (self.typechecker.typeTable.get(to)) {
+            .Integer => value,
+            else => .{ .Float = @floatFromInt(fromInt) },
+        },
+        .Bool => |fromBool| .{
+            .Int = @intFromBool(fromBool),
+        },
+        .Enum => |fromEnum| .{
+            .Enum = .{
+                .Type = .{
+                    .Type = to,
+                    .Value = fromEnum.Type.Value,
+                },
+            },
+        },
+        .Struct => |fromStruct| .{
+            .Struct = .{
+                .Type = to,
+                .Fields = fromStruct.Fields,
+            },
+        },
+        .Union => |fromUni| Value{
+            .Union = .{
+                .Type = to,
+                .Tag = fromUni.Tag,
+                .Value = fromUni.Value,
+            },
+        },
+        .Slice => |slice| switch (self.typechecker.typeTable.get(to).Pointer.size) {
+            .Single, .C => |size| .{
+                .Pointer = .{
+                    .Type = self.typechecker.typeMap.get(Types.TypeInfo{
+                        .Pointer = .{
+                            .mutable = self.typechecker.mutable(slice.Type), 
+                            .size = size,
+                            .child = self.typechecker.typeTable.get(slice.Type).Pointer.child,
+                        },
+                    }).?.at(0),
+                    .To = slice.To,
+                },
+            },
+            .Slice => .{
+                .Slice = .{
+                    .Size = slice.Size,
+                    .To = slice.To,
+                    .Type = to,
+                },
+            },
+        },
+        .Undefined => |undef| .{
+            .Undefined = undef, 
+        },
+        else => error.ShouldBeImpossible,
+    };
+}
+
 fn report(self: *Comptime, comptime fmt: []const u8, args: anytype) void {
     return
-        if (self.flags.isSet(Flags.flag(.Attempting))) {}
+        if (self.getFlag(.Attempting)) {}
         else self.typechecker.report("COMPTIME: " ++ fmt, args);
 }
 

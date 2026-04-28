@@ -1,5 +1,6 @@
 const std = @import("std");
 const common = @import("common.zig");
+const hashmap = @import("../util/hashmap.zig");
 
 const collections = @import("../util/collections.zig");
 
@@ -57,13 +58,21 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
     var workingDir: []const u8 = undefined;
     var includeDirs = NMap.empty;
     var maxErr: u32 = 10;
-    var printAST = false;
+    var settings = common.CompilerSettings{
+        .flags = .empty,
+        .workingDir = "",
+        .includeDirs = &.{},
+        .inputFile = "",
+        .maxErr = 0,
+    };
+
+    settings.flags.ensureTotalCapacity(allocator, 128) catch return error.AllocatorFailure;
 
     includeDirs.ensureTotalCapacity(allocator, 512) catch return error.AllocatorFailure;
 
     while (args.next()) |flag| {
         switch (hash(flag)) {
-            .PrintAST => printAST = true,
+            .PrintAST => try settings.setFlag(flag),
             .Help => printHelp(),
             .Version => printHeader(),
             .Working => {
@@ -136,7 +145,7 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
                 allocator
             ),
             .maxErr = maxErr,
-            .printAST = printAST,
+            .flags = settings.flags,
         }
         else {
             common.log.err("jaslc expects an input file.", .{});

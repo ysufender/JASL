@@ -284,7 +284,6 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
             return self.typecheckDecl(decl, maybeExpected);
         },
         .Indexing => self.typecheckIndexing(expr.value),
-        .Cast => self.typecheckCasting(expr.value, maybeExpected),
         else => |t| {
             self.report("Unable to typecheck expression '{s}'.", .{@tagName(t)});
             return error.TypecheckingFailure;
@@ -292,11 +291,10 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
     };
 }
 
-pub fn typecheckValue(self: *Typechecker, val: Comptime.Value) Error!defines.Range {
+pub fn typecheckValue(_: *const Typechecker, val: Comptime.Value) Error!defines.Range {
     return switch (val) {
         .Int => comptime Comptime.Builtin.Type("comptime_int"),
         .Float => comptime Comptime.Builtin.Type("comptime_float"),
-        .String => comptime Comptime.Builtin.Type("string"),
         .Bool => comptime Comptime.Builtin.Type("bool"),
         .Enum => |enumeration| switch (enumeration) {
             .Literal => comptime Comptime.Builtin.Type("enum_literal"),
@@ -327,9 +325,9 @@ pub fn typecheckValue(self: *Typechecker, val: Comptime.Value) Error!defines.Ran
             .start = undef,
             .end = undef + 1,
         },
-        .Slice => {
-            self.report("Tuple style multi-types are not supported.", .{});
-            return error.IllegalSyntax;
+        .Slice => |slice| .{
+            .start = slice.Type,
+            .end = slice.Type + 1,
         },
     };
 }
@@ -396,7 +394,7 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
                         return error.MissingTypeSpecifier;
                     },
                 else => {
-                    self.report("{s} is not implemented for {s}.", .{@tagName(decl.kind), Resolver.builtins[decl.type]});
+                    self.report("Builtin '{s}' is not implemented.", .{Resolver.builtins[decl.type]});
                     return error.NotImplemented;
                 },
             },
@@ -466,23 +464,28 @@ fn dumpCallStack(self: *Typechecker) void {
     }
 }
 
-pub fn assertCastable(self: *const Typechecker, from: TypeID, to: TypeID) Error!void {
+pub fn assertCastable(self: *Typechecker, from: TypeID, to: TypeID) Error!void {
     const fmax = std.math.floatMax;
     const fmin = struct{fn fmin(comptime T: type) T { return -fmax(T); }}.fmin;
 
     const fromType = self.typeTable.get(from);
     const toType = self.typeTable.get(to);
 
-    if (to == comptime Comptime.Builtin.Type("any")) {
-        return;
+    if (from == to) {
+        self.report("Unnecessary cast from type '{s}' to itself.", .{
+            self.typeName(self.arena.allocator(), from),
+        });
+        return error.RedundantCast;
+    }
+
+    switch (to) {
+        Comptime.Builtin.Type("any").at(0),
+        Comptime.Builtin.Type("mut any").at(0) => return error.InferenceError,
+        else => { },
     }
 
     if (!self.mutable(from) and self.mutable(to)) {
         return error.MutabilityViolation;
-    }
-
-    if (to == comptime Comptime.Builtin.Type("mut any")) {
-        return;
     }
 
     switch (fromType) {
@@ -501,7 +504,6 @@ pub fn assertCastable(self: *const Typechecker, from: TypeID, to: TypeID) Error!
             else => return error.IncompatibleTypes,
         },
         .Float => switch (toType) {
-            .Float => { },
             .Integer => |toInt| try functional.throwIf(
                 fmax(f32) > @as(f32, @floatFromInt(toInt.range().max))
                 or fmin(f32) < @as(f32, @floatFromInt(toInt.range().min)),
@@ -510,7 +512,7 @@ pub fn assertCastable(self: *const Typechecker, from: TypeID, to: TypeID) Error!
             else => return error.IncompatibleTypes,
         },
         .Pointer => |fromPtr| switch (toType) {
-            .Pointer => |toPtr| try self.assertSuitablePtr(fromPtr, toPtr),
+            .Pointer => |toPtr| try self.assertCastablePtr(fromPtr, toPtr),
             else => return error.IncompatibleTypes,
         },
         .Function => switch (toType) {
@@ -523,14 +525,14 @@ pub fn assertCastable(self: *const Typechecker, from: TypeID, to: TypeID) Error!
     }
 }
 
-pub fn castable(self: *const Typechecker, from: TypeID, to: TypeID) bool {
+pub fn castable(self: *Typechecker, from: TypeID, to: TypeID) bool {
     self.assertCastable(from, to) catch return false;
     return true;
 }
 
-pub fn assertSuitablePtr(self: *const Typechecker, this: Types.Pointer, that: Types.Pointer) Error!void {
+pub fn assertCastablePtr(self: *const Typechecker, this: Types.Pointer, that: Types.Pointer) Error!void {
     switch (this.size) {
-        .Slice => try functional.throwIf(self.sizeOf(this.child) != self.sizeOf(that.child), error.MismatchingSliceChildType),
+        .Slice => try functional.throwIf(that.size == .Slice and self.sizeOf(this.child) != self.sizeOf(that.child), error.MismatchingSliceChildType),
         .Single => try functional.throwIf(that.size == .Slice, error.PointerSizeMismatch),
         .C => try functional.throwIf(that.size == .Slice, error.PointerSizeMismatch),
     }

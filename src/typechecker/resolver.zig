@@ -797,10 +797,6 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                 try self.resolveExpression(body);
             }
         },
-        .Cast => {
-            const inner = ast.extra[expr.value];
-            try self.resolveExpression(inner);
-        },
         .MutableType, .PointerType, .SliceType, .CPointerType => try self.resolveExpression(expr.value),
         .ArrayType => {
             const size = ast.extra[expr.value];
@@ -1148,7 +1144,8 @@ pub const builtins = [_][]const u8 {
     "undefined", "typeInfo", "hasField", "compileError",
     "bitSizeOf", "unreachable", "enumStr", "typeOf",
     "field", "fieldIndex", "hasDef", "definitionIndex",
-    "this", "sizeOf", "comptimeAlloc", "bitSet",
+    "this", "sizeOf", "comptimeAlloc", "bitSet", "cast",
+    "as",
 };
 
 pub fn BuiltinIndex(comptime builtin: []const u8) u32 {

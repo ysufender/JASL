@@ -32,7 +32,7 @@ pub const TokenType = enum(u8) {
     Identifier,
     String, Integer, Float, False, True, EnumLiteral,
     Discard,
-    Cast, Range,
+    Range,
     EOF,
 };
 
@@ -113,7 +113,6 @@ const keywords = std.StaticStringMap(TokenType).initComptime(&.{
     .{ "break", .Break },
     .{ "continue", .Continue },
     .{ "switch", .Switch },
-    .{ "cast", .Cast },
     .{ "#", .Mark },
     .{ "_", .Discard },
 });
