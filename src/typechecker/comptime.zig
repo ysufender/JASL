@@ -541,7 +541,7 @@ fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?define
     }
 
     const thingToCast = try self.eval(ast.extra[thingToCastRange.at(0)], null);
-    const thingToCastTypeRange = try self.typechecker.typecheckValue(thingToCast);
+    const thingToCastTypeRange = try self.typechecker.typecheckValue(thingToCast, null);
 
     const targetType = targetTypeRange.at(0);
     const thingToCastType = thingToCastTypeRange.at(0);
@@ -599,7 +599,7 @@ fn evalTypeForwarding(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpecte
     const typeToForward = (try self.expectType(ast.extra[args.at(0)])).Type;
     const res = try self.eval(ast.extra[args.at(1)], .{ .start = typeToForward, .end = typeToForward + 1 });
 
-    if ((try self.typechecker.typecheckValue(res)).at(0) != typeToForward) {
+    if ((try self.typechecker.typecheckValue(res, null)).at(0) != typeToForward) {
         self.report("Expected en expression of type '{s}' here.", .{
             self.typechecker.typeName(self.arena.allocator(), typeToForward),
         });
@@ -632,21 +632,72 @@ fn evalExpressionList(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value 
 }
 
 fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?defines.Range) Error!Value {
-    if (
-        maybeExpected == null
-        or
-        maybeExpected.?.len() <= 0
-        or
-        switch (maybeExpected.?.at(0)) {
-            Builtin.Type("any").at(0), Builtin.Type("mut any").at(0) => true,
-            else => false,
+    const expected =
+        if (maybeExpected) |expected| switch (expected.at(0)) {
+            Builtin.Type("any").at(0), Builtin.Type("mut any").at(0) => {
+                self.report("Couldn't infer the type of lambda expression.", .{});
+                return error.InferenceError;
+            },
+            else => switch (self.typechecker.typeTable.get(expected.at(0))) {
+                .Function => |func| func,
+                else => {
+                    self.report("Expected '{s}', received lambda expression.", .{
+                        self.typechecker.typeName(self.arena.allocator(), expected.at(0)),
+                    });
+                    return error.TypeMismatch;
+                },
+            },
         }
-    ) {
-        self.report("Couldn't infer the type of lambda expression.", .{});
-        return error.InferenceError;
+        else {
+            self.report("Couldn't infer the type of lambda expression.", .{});
+            return error.InferenceError;
+        };
+
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+
+    const paramsRange = defines.Range{
+        .start = ast.extra[extraPtr],
+        .end = ast.extra[extraPtr + 1],
+    };
+
+    if (paramsRange.len() != expected.argTypes.len) blk: {
+        if (
+            paramsRange.len() == 0
+            and expected.argTypes.len == 1
+            and expected.argTypes[0] == comptime Builtin.Type("void").at(0)
+        ) {
+            break :blk;
+        }
+
+        self.report(
+            "Mismatching parameter types in lambda expression. Expected '{s}', received (s) '{s}'", .{
+                self.typechecker.typeNameMany(self.arena.allocator(), maybeExpected.?),
+                self.typechecker.typeNameMany(self.arena.allocator(), paramsRange),
+            }
+        );
+        return error.ArgumentCountMismatch;
     }
 
-    _ = extraPtr;
+    const returnRange = defines.Range{
+        .start = @intCast(self.typechecker.scratch.items.len),
+        .end = @intCast(self.typechecker.scratch.items.len + expected.returnTypes.len),
+    };
+    self.typechecker.extra.appendSlice(self.typechecker.arena.allocator(), expected.returnTypes)
+        catch return error.AllocatorFailure;
+    const returnTypes = try self.typechecker.typecheckExpression(ast.extra[extraPtr + 2], returnRange);
+    for (expected.argTypes, 0..) |arg, index| {
+        if (self.typechecker.extra.items[returnTypes.at(@intCast(index))] != arg) {
+            self.report(
+                "Mismatching return types in lambda expression. Expected '{s}', received type(s) '{s}'", .{
+                    self.typechecker.typeNameMany(self.arena.allocator(), maybeExpected.?),
+                    self.typechecker.typeNameMany(self.arena.allocator(), returnTypes),
+                }
+            );
+
+            return error.TypeMismatch;
+        }
+    }
+
     unreachable;
 }
 
@@ -687,7 +738,7 @@ fn evalIndexing(
         },
         else => |t| {
             self.report("Given type '{s}' is not indexable. ({s})", .{
-                self.typechecker.typeNameMany(self.arena.allocator(), try self.typechecker.typecheckValue(slice)),
+                self.typechecker.typeNameMany(self.arena.allocator(), try self.typechecker.typecheckValue(slice, null)),
                 @tagName(t),
             });
             return error.TypeMismatch;
@@ -699,7 +750,7 @@ fn evalIndexing(
         .Int => { },
         else => |t| {
             self.report("Given type '{s}' is not suitable to be an index. ({s})", .{
-                self.typechecker.typeNameMany(self.arena.allocator(), try self.typechecker.typecheckValue(index)),
+                self.typechecker.typeNameMany(self.arena.allocator(), try self.typechecker.typecheckValue(index, null)),
                 @tagName(t),
             });
             return error.TypeMismatch;
@@ -814,12 +865,7 @@ pub fn constructUndefined(self: *Comptime, valueType: Types.TypeID) Error!Value 
     };
 }
 
-fn generateRandomName(self: *Comptime, comptime mode: enum {
-    Function,
-    Enum,
-    Struct,
-    Union,
-}) Error![]const u8 {
+fn generateRandomName(self: *Comptime, comptime mode: @TypeOf(.EnumLiteral)) Error![]const u8 {
     const randint = self.rng.next();
 
     return std.fmt.allocPrint(self.arena.allocator(), "anon_"++@tagName(mode)++"_{d}", .{

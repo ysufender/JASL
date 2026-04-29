@@ -727,6 +727,9 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
 
                 isPresent.value_ptr.* = decl;
             }
+
+            const body = ast.extra[expr.value + 2];
+            try self.resolveExpression(body);
         },
         .Call => {
             const function = ast.extra[expr.value];

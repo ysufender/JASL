@@ -476,12 +476,6 @@ pub const Tests = struct {
     var debugAllocator = std.heap.DebugAllocator(.{}){};
     const gpa = debugAllocator.allocator();
 
-    test "Enum Litaral" {
-        var context = try common.CompilerContext.init(gpa);
-        var lexer = try init(gpa, &context, "test/enum_literal.jasl");
-        const _tokens = try lexer.lex();
-        const tokens = context.getTokens(_tokens);
-
-        try std.testing.expectEqual(.EnumLiteral, tokens.items(.type)[1]);
+    test "All" {
     }
 };

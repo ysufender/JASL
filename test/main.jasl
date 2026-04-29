@@ -1,1 +1,1 @@
-let main = fn || void;
+let main = fn || 0;

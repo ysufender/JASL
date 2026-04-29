@@ -236,14 +236,22 @@ pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
 }
 
 pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration, maybeExpected: ?defines.Range) Error!defines.Range {
-    const varType = try self.expectType(decl.type);
+    const varType =
+        if (maybeExpected) |expected| switch (decl.type) {
+            0 => expected,
+            else => {
+                self.report("Redundant type specifier in already infered scope.", .{});
+                return error.InferenceError;
+            },
+        }
+        else try self.expectType(decl.type);
 
     const initializer =
         if (
             decl.topLevel or
             varType.at(0) == comptime Comptime.Builtin.Type("type").at(0)
         )
-            try self.typecheckValue(try self.executer.eval(decl.node, varType))
+            try self.typecheckValue(try self.executer.eval(decl.node, varType), maybeExpected)
         else
             try self.typecheckExpression(decl.node, varType);
 
@@ -349,7 +357,7 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
     _ = tokens;
 
     if (self.executer.attemptEval(expressionPtr, maybeExpected)) |result| {
-        return self.typecheckValue(result);
+        return self.typecheckValue(result, maybeExpected);
     }
 
     const expr = ast.expressions.get(expressionPtr);
@@ -368,13 +376,28 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
     };
 }
 
-pub fn typecheckValue(self: *Typechecker, val: Comptime.Value) Error!defines.Range {
+pub fn typecheckValue(self: *Typechecker, val: Comptime.Value, maybeExpected: ?defines.Range) Error!defines.Range {
+    // TODO: Type casting from untyped comptime literals.
+
+    const expected =
+        if (maybeExpected) |expected|
+            if (expected.len() != 1) {
+                self.report("Multi-typed expressions are not (yet) supported.", .{});
+                return error.NotImplemented;
+            }
+            else expected.at(0)
+        else comptime Comptime.Builtin.Type("any").at(0);
+
     return switch (val) {
-        .Int => comptime Comptime.Builtin.Type("comptime_int"),
-        .Float => comptime Comptime.Builtin.Type("comptime_float"),
+        .Int => self.infer(expected, comptime Comptime.Builtin.Type("comptime_int").at(0)),
+        .Float => self.infer(expected, comptime Comptime.Builtin.Type("comptime_float").at(0)),
         .Bool => comptime Comptime.Builtin.Type("bool"),
         .Enum => |enumeration| switch (enumeration) {
-            .Literal => comptime Comptime.Builtin.Type("enum_literal"),
+            .Literal => {
+                // TODO:
+                self.report("Enum literal inference is not (yet) supported.", .{});
+                return error.NotImplemented;
+            },
             .Type => |enumType| .{
                 .start = enumType.Type,
                 .end = enumType.Type + 1,
@@ -409,7 +432,7 @@ pub fn typecheckValue(self: *Typechecker, val: Comptime.Value) Error!defines.Ran
         .Multi => |mult| ret: {
             const start = self.scratch.items.len;
             for (0..mult.Size) |index| {
-                const types = try self.typecheckValue(self.executer.memory.items[mult.Values + index]);
+                const types = try self.typecheckValue(self.executer.memory.items[mult.Values + index], null);
 
                 for (0..types.len()) |itemTypeIndex| {
                     self.scratch.append(self.arena.allocator(), types.at(@intCast(itemTypeIndex)))
@@ -518,7 +541,7 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
                     return error.NotImplemented;
                 },
             },
-        .Variable => try self.typecheckVariable(&decl),
+        .Variable => try self.typecheckVariable(&decl, maybeExpected),
         else => {
             self.report("{s} is not implemented.", .{@tagName(decl.kind)});
             return error.NotImplemented;
