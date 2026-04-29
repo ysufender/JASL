@@ -1,9 +1,1 @@
-let test: struct {
-    someField: i32,
-} = undefined;
-
-let test2: struct {
-    someField: i32,
-} = undefined;
-
-let main = as(typeOf(test), cast(test));
+let main = fn || void;

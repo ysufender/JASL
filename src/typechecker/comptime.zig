@@ -58,6 +58,10 @@ pub const Value = union(enum) {
         Type: Types.TypeID,
         To: ValuePtr,
     },
+    Multi: struct {
+        Size: u32,
+        Values: ValuePtr,
+    },
     Slice: struct {
         const Self = @This();
 
@@ -140,6 +144,7 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?def
         .UnionDefinition => try self.evalUnionType(expr.value),
         .Indexing => try self.evalIndexing(expr.value),
         .Call => try self.evalCall(expr.value, maybeExpected),
+        .Lambda => try self.evalLambda(expr.value, maybeExpected),
         else => |t| {
             self.report("Unable to resolve comptime expression. ({s})", .{
                 @tagName(t)
@@ -179,8 +184,7 @@ fn evalBuiltinCall(self: *Comptime, extraPtr: defines.ExpressionPtr, declPtr: de
         BI("cast") => self.evalCast(extraPtr, maybeExpected),
         BI("as") => self.evalTypeForwarding(extraPtr, maybeExpected),
         BI("typeOf") => .{
-            // TODO: Implement
-            .Type = (try self.typechecker.typecheckExpression(ast.extra[extraPtr], null)).at(0),
+            .Type = (try self.typechecker.typecheckExpression(ast.extra[extraPtr + 1], null)).at(0),
         },
         else => {
             self.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[declPtr]});
@@ -550,12 +554,13 @@ fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?define
 
         switch (err) {
             error.IncompatibleTypes => self.report("Given type '{s}' can't be cast to '{s}'.", rargs),
-            error.SizeMismatch => self.report("Type '{s}' is too big for '{s}'.", rargs),
+            error.SizeMismatch => self.report("Type '{s}' is too big for being cast to '{s}'.", rargs),
             error.MutabilityViolation => self.report("Cast from '{s}' to '{s}' ignores mutability specifiers.", rargs),
             error.PointerSizeMismatch => self.report("Illegal cast from unknown sized '{s}' to sized '{s}'.", rargs),
-            error.StructuralMismatch => self.report("Given types '{s}' and '{s}' are not structurally identical.", rargs),
+            error.StructuralMismatch => self.report("Illegal cast from structurally incompatible '{s}' to '{s}'", rargs),
             error.MismatchingSliceChildType => self.report("Cast from slice type '{s}' to '{s}' will alter the length of the slice.", rargs),
             error.InferenceError => self.report("Illegal cast from '{s}' to unknown type '{s}'.", rargs),
+            error.RedundantCast => self.report("Unnecessary cast from type '{s}' to '{s}'.", rargs),
             else => return error.ShouldBeImpossible,
         }
 
@@ -592,7 +597,57 @@ fn evalTypeForwarding(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpecte
     }
 
     const typeToForward = (try self.expectType(ast.extra[args.at(0)])).Type;
-    return self.eval(ast.extra[args.at(1)], .{ .start = typeToForward, .end = typeToForward + 1 });
+    const res = try self.eval(ast.extra[args.at(1)], .{ .start = typeToForward, .end = typeToForward + 1 });
+
+    if ((try self.typechecker.typecheckValue(res)).at(0) != typeToForward) {
+        self.report("Expected en expression of type '{s}' here.", .{
+            self.typechecker.typeName(self.arena.allocator(), typeToForward),
+        });
+        return error.TypeMismatch;
+    }
+
+    return res;
+}
+
+fn evalExpressionList(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+
+    const exprs = defines.Range{
+        .start = ast.extra[extraPtr],
+        .end = ast.extra[extraPtr + 1],
+    };
+    
+    const start = self.memory.items.len;
+    for (0..exprs.len()) |index| {
+        self.memory.append(self.arena.allocator(), try self.eval(ast.extra[exprs.at(@intCast(index))], null))
+            catch return error.AllocatorFailure;
+    }
+
+    return .{
+        .Multi = .{
+            .Size = @intCast(self.memory.items.len - start),
+            .Values = @intCast(start),
+        },
+    };
+}
+
+fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?defines.Range) Error!Value {
+    if (
+        maybeExpected == null
+        or
+        maybeExpected.?.len() <= 0
+        or
+        switch (maybeExpected.?.at(0)) {
+            Builtin.Type("any").at(0), Builtin.Type("mut any").at(0) => true,
+            else => false,
+        }
+    ) {
+        self.report("Couldn't infer the type of lambda expression.", .{});
+        return error.InferenceError;
+    }
+
+    _ = extraPtr;
+    unreachable;
 }
 
 fn evalCall(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?defines.Range) Error!Value {
@@ -873,7 +928,7 @@ fn castValue(self: *Comptime, value: Value, to: Types.TypeID) Error!Value {
                 },
             },
         },
-        .Struct => |fromStruct| .{
+        .Struct => |fromStruct| Value{
             .Struct = .{
                 .Type = to,
                 .Fields = fromStruct.Fields,
@@ -907,8 +962,8 @@ fn castValue(self: *Comptime, value: Value, to: Types.TypeID) Error!Value {
                 },
             },
         },
-        .Undefined => |undef| .{
-            .Undefined = undef, 
+        .Undefined => .{
+            .Undefined = to, 
         },
         else => error.ShouldBeImpossible,
     };

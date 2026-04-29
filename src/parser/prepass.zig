@@ -5,6 +5,7 @@ const collections = @import("../util/collections.zig");
 
 const Lexer = @import("../lexer/lexer.zig");
 const Parser = @import("parser.zig");
+const Resolver = @import("../typechecker/resolver.zig");
 
 const Context = common.CompilerContext;
 const Error = common.CompilerError;
@@ -254,6 +255,16 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
                     const ptr = sigs.at(@intCast(index));
                     const sig = ast.signatures.get(ast.extra[ptr]);
                     const sigName = tokens.get(sig.name).lexeme(self.context, file.dataIndex);
+
+                    for (Resolver.builtins) |builtin| {
+                        if (std.mem.eql(u8, builtin, sigName)) {
+                            self.report("Given symbol '{s}' collides with the builtin '{s}'.", .{
+                                sigName, sigName,
+                            }, file.dataIndex, sig.name);
+                            fail = true;
+                            break :case;
+                        }
+                    }
 
                     const idx = file.symbols.addOne(allocator) catch {
                         self.report(

@@ -53,6 +53,7 @@ const PrintContext = struct {
         const ex    = self.ast.extra;
 
         self.indent(depth);
+        defer self.write("\n\n");
 
         switch (stype) {
             .Block => {
@@ -69,21 +70,25 @@ const PrintContext = struct {
             .Return => {
                 self.write("Return ");
                 self.printExpr(@intCast(val), depth + 1);
+                self.write(";");
             },
 
             .Discard => {
                 self.write("Discard ");
                 self.printExpr(@intCast(val), depth + 1);
+                self.write(";");
             },
 
             .Expression => {
                 self.write("ExprStmt ");
                 self.printExpr(@intCast(val), depth + 1);
+                self.write(";");
             },
 
             .Defer => {
                 self.write("Defer ");
                 self.printExpr(@intCast(val), depth + 1);
+                self.write(";");
             },
 
             .VariableDefinition => {
@@ -99,6 +104,7 @@ const PrintContext = struct {
                 self.indent(depth);
                 self.write(") = ");
                 self.printExpr(@intCast(expr_idx), depth + 2);
+                self.write(";");
             },
 
             .Conditional => {
@@ -134,8 +140,8 @@ const PrintContext = struct {
                 self.printCases(ex, ex[val + 1], ex[val + 2], depth, true);
             },
 
-            .Break    => self.write("Break "),
-            .Continue => self.write("Continue "),
+            .Break    => self.write("Break;"),
+            .Continue => self.write("Continue;"),
 
             .Import => {
                 const module    = ex[val];
@@ -146,10 +152,12 @@ const PrintContext = struct {
                     self.indent(depth + 1);
                     self.print("as {s}", .{self.tokenLexeme(@intCast(ex[val + 2]))});
                 }
+                self.write(";");
             },
 
             .InlineAssembly => {
                 self.print("Asm {s} ", .{self.tokenLexeme(val)});
+                self.write(";");
             },
 
             .Mark => {
@@ -162,8 +170,6 @@ const PrintContext = struct {
                 self.printStmt(@intCast(ex[val + 2]), depth);
             },
         }
-
-        self.write("\n");
     }
 
     fn printExpr(self: *PrintContext, ei: defines.ExpressionPtr, depth: u32) void {
@@ -200,17 +206,20 @@ const PrintContext = struct {
 
             .Call => {
                 self.write("Call ");
-                self.write("callee: ");
-                self.printExpr(@intCast(ex[val]), depth + 2);
-                self.write("args: ");
-                self.printExpr(@intCast(ex[val + 1]), depth + 2);
+                self.printExpr(@intCast(ex[val]), depth + 1);
+                self.printExpr(@intCast(ex[val + 1]), depth + 1);
             },
 
             .ExpressionList => {
-                self.write("List ");
-                for (ex[ex[val]..ex[val + 1]]) |child| {
+                self.write("(");
+                const expl = ex[ex[val]..ex[val + 1]];
+                for (expl, 0..) |child, i| {
                     self.printExpr(@intCast(child), depth + 1);
+                    self.print("{s}", .{
+                        if (i == expl.len - 1) "" else ", ",
+                    });
                 }
+                self.write(")");
             },
 
             .Dot => {

@@ -17,10 +17,12 @@ const Context = common.CompilerContext;
 const Arena = std.heap.ArenaAllocator;
 const Allocator = std.mem.Allocator;
 const Callstack = collections.StaticRingStack(defines.DeclPtr, defines.stackLimit);
+const AnonMap = std.DynamicBitSetUnmanaged;
 
 const BuiltinIndex = Resolver.BuiltinIndex;
 const deepCopy = collections.deepCopy;
 const assert = std.debug.assert;
+const eql = std.meta.eql;
 
 pub const TypeTable = MultiArrayList(TypeInfo);
 pub const TypeMap = collections.HashMap(TypeInfo, defines.Range);
@@ -133,6 +135,8 @@ callstack: Callstack,
 scratch: std.ArrayList(TypeID),
 extra: std.ArrayList(TypeID),
 
+anonymousMap: AnonMap,
+
 pub fn init(
     gpa: Allocator,
     context: *Context,
@@ -178,6 +182,7 @@ pub fn init(
         .metadata = metadata,
         .lookup = lookup,
         .scratch = std.ArrayList(TypeID).initCapacity(allocator, 128) catch return error.AllocatorFailure,
+        .anonymousMap = AnonMap.initEmpty(arena.allocator(), typeMap.capacity()) catch return error.AllocatorFailure,
         .extra = extra,
         .constants = .{
             .all = try Constants.List.init(allocator, total * 2),
@@ -208,7 +213,7 @@ pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
     self.executer = try Comptime.init(self, allocator);
 
     const mainPtr = self.symbols.lookup.get(.{ .scope = 1, .name = "main" }).?;
-    const mainType = try self.typecheckDecl(mainPtr, null);
+    const mainType = try self.typecheckDecl(mainPtr, comptime Comptime.Builtin.Type("entry_point"));
     if (
         mainType.len() != 1
         or
@@ -230,8 +235,9 @@ pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
     }, allocator);
 }
 
-pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) Error!defines.Range {
+pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration, maybeExpected: ?defines.Range) Error!defines.Range {
     const varType = try self.expectType(decl.type);
+
     const initializer =
         if (
             decl.topLevel or
@@ -253,9 +259,9 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
     const got = self.extra.items[initializer.at(decl.index)];
 
     // TODO: type renaming on binding
-    return
+    const res =
         if (self.suitableSingle(expected, got))
-            self.infer(expected, got)
+            try self.infer(expected, got)
         else  {
             self.report(
                 "Mismatching initializer type in variable definition."
@@ -265,6 +271,76 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
             });
             return error.TypeMismatch;
         };
+
+    blk: switch (self.typeTable.get(got)) {
+        .Union, .Enum, .Struct => {
+            if (self.anonymousMap.isSet(got)) {
+                break :blk;
+            }
+
+            self.anonymousMap.set(got);
+
+            const ast = self.context.getAST(self.currentFile);
+            const tokens = self.context.getTokens(ast.tokens);
+
+            const symName = tokens.get(decl.token).lexeme(self.context, self.currentFile);
+            const namespace = self.modules.modules.get(self.currentFile).name;
+            const newName = std.fmt.allocPrint(self.arena.allocator(), "{s}::{s}", .{
+                namespace,
+                symName,
+            }) catch return error.AllocatorFailure;
+
+            self.typeTable.set(got, switch (self.typeTable.get(got)) {
+                .Struct => |str| .{
+                    .Struct = .{
+                        .mutable = str.mutable,
+                        .name = newName,
+                        .fields = str.fields,
+                        .definitions = str.definitions,
+                    },
+                },
+
+                .Enum => |enm| .{
+                    .Enum = .{
+                        .mutable = enm.mutable,
+                        .name = newName,
+                        .definitions = enm.definitions,
+                        .fields = enm.fields,
+                    },
+                },
+
+                .Union => |uni| switch (uni) {
+                    .Tagged => |tagged| TypeInfo{
+                        .Union = .{
+                            .Tagged = .{
+                                .mutable = tagged.mutable,
+                                .name = newName,
+                                .tag = tagged.tag,
+                                .fields = tagged.fields,
+                                .definitions = tagged.definitions,
+                            },
+                        },
+                    },
+                    .Plain => |plain| TypeInfo{
+                        .Union = .{
+                            .Plain = .{
+                                .mutable = plain.mutable,
+                                .name = newName,
+                                .fields = plain.fields,
+                                .definitions = plain.definitions,
+                            },
+                        },
+                    },
+                },
+
+                else => unreachable,
+            });
+        },
+
+        else => { },
+    }
+
+    return res;
 }
 
 pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.ExpressionPtr, maybeExpected: ?defines.Range) Error!defines.Range {
@@ -284,6 +360,7 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
             return self.typecheckDecl(decl, maybeExpected);
         },
         .Indexing => self.typecheckIndexing(expr.value),
+        .ExpressionList => self.typecheckExpressionList(expr.value),
         else => |t| {
             self.report("Unable to typecheck expression '{s}'.", .{@tagName(t)});
             return error.TypecheckingFailure;
@@ -291,7 +368,7 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
     };
 }
 
-pub fn typecheckValue(_: *const Typechecker, val: Comptime.Value) Error!defines.Range {
+pub fn typecheckValue(self: *Typechecker, val: Comptime.Value) Error!defines.Range {
     return switch (val) {
         .Int => comptime Comptime.Builtin.Type("comptime_int"),
         .Float => comptime Comptime.Builtin.Type("comptime_float"),
@@ -329,6 +406,21 @@ pub fn typecheckValue(_: *const Typechecker, val: Comptime.Value) Error!defines.
             .start = slice.Type,
             .end = slice.Type + 1,
         },
+        .Multi => |mult| ret: {
+            const start = self.scratch.items.len;
+            for (0..mult.Size) |index| {
+                const types = try self.typecheckValue(self.executer.memory.items[mult.Values + index]);
+
+                for (0..types.len()) |itemTypeIndex| {
+                    self.scratch.append(self.arena.allocator(), types.at(@intCast(itemTypeIndex)))
+                        catch return error.AllocatorFailure;
+                }
+            }
+
+            const res = try self.commitScratch(start);
+            std.debug.print("{s}\n", .{self.typeNameMany(self.arena.allocator(), res)});
+            break :ret res;
+        }
     };
 }
 
@@ -336,6 +428,34 @@ pub fn typecheckIndexing(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!
     _ = self;
     _ = extraPtr;
     return error.NotImplemented;
+}
+
+pub fn typecheckExpressionList(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!defines.Range {
+    const ast = self.context.getAST(self.currentFile);
+
+    const exprRange = defines.Range{
+        .start = ast.extra[extraPtr],
+        .end = ast.extra[extraPtr + 1],
+    };
+
+    var typesStart: ?defines.Range = null;
+    for (0..exprRange.len()) |index| {
+        const res = try self.typecheckExpression(ast.extra[exprRange.at(@intCast(index))], null);
+
+        if (res.len() == 0 or std.meta.eql(res, comptime Comptime.Builtin.Type("void"))) {
+            for (0..res.len()) |_| {
+                _ = self.extra.pop();
+            }
+        }
+
+        typesStart =
+            if (typesStart) |start| .{ .start = start.start, .end = res.end }
+            else .{ .start = res.start, .end = res.end };
+    }
+
+    return
+        if (typesStart.?.len() == 0) comptime Comptime.Builtin.Type("void")
+        else typesStart.?;
 }
 
 pub fn typecheckCasting(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?defines.Range) Error!defines.Range {
@@ -472,9 +592,6 @@ pub fn assertCastable(self: *Typechecker, from: TypeID, to: TypeID) Error!void {
     const toType = self.typeTable.get(to);
 
     if (from == to) {
-        self.report("Unnecessary cast from type '{s}' to itself.", .{
-            self.typeName(self.arena.allocator(), from),
-        });
         return error.RedundantCast;
     }
 
