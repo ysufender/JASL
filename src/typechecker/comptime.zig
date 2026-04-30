@@ -273,7 +273,6 @@ fn evalPtrType(
 }
 
 fn evalFuncType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
-    const allocator = self.arena.allocator();
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
     const args = try self.eval(ast.extra[extraPtr], null);
@@ -326,8 +325,13 @@ fn evalFuncType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
         },
     };
 
-    var argTypes = allocator.alloc(Types.TypeID, argSize) catch return error.AllocatorFailure;
-    var returnTypes = allocator.alloc(Types.TypeID, retSize) catch return error.AllocatorFailure;
+    // var argTypes = allocator.alloc(Types.TypeID, argSize) catch return error.AllocatorFailure;
+    // var returnTypes = allocator.alloc(Types.TypeID, retSize) catch return error.AllocatorFailure;
+    const argTypesRange = try self.typechecker.extendExtra(argSize);
+    const returnTypesRange = try self.typechecker.extendExtra(retSize);
+
+    var argTypes = argTypesRange.into(self.typechecker.extra.items);
+    var returnTypes = returnTypesRange.into(self.typechecker.extra.items);
 
     switch (args) {
         .Type => |argType| argTypes[0] = argType,
@@ -352,8 +356,8 @@ fn evalFuncType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
     const typeID = try self.typechecker.registerType(.{
         .Function = .{
             .mutable = false,
-            .argTypes = argTypes,
-            .returnTypes = returnTypes,
+            .argTypes = argTypesRange,
+            .returnTypes = returnTypesRange,
         },
     });
 
@@ -638,7 +642,7 @@ fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?defi
                 self.report("Couldn't infer the type of lambda expression.", .{});
                 return error.InferenceError;
             },
-            else => switch (self.typechecker.typeTable.get(expected.at(0))) {
+            else => switch (self.typechecker.typeTable.get(expected.get(self.typechecker.extra.items, 0))) {
                 .Function => |func| func,
                 else => {
                     self.report("Expected '{s}', received lambda expression.", .{
@@ -660,11 +664,11 @@ fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?defi
         .end = ast.extra[extraPtr + 1],
     };
 
-    if (paramsRange.len() != expected.argTypes.len) blk: {
+    if (paramsRange.len() != expected.argTypes.len()) blk: {
         if (
             paramsRange.len() == 0
-            and expected.argTypes.len == 1
-            and expected.argTypes[0] == comptime Builtin.Type("void").at(0)
+            and expected.argTypes.len() == 1
+            and expected.argTypes.get(self.typechecker.extra.items, 0) == Builtin.Type("void").at(0)
         ) {
             break :blk;
         }
@@ -678,15 +682,15 @@ fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?defi
         return error.ArgumentCountMismatch;
     }
 
-    const returnRange = defines.Range{
-        .start = @intCast(self.typechecker.scratch.items.len),
-        .end = @intCast(self.typechecker.scratch.items.len + expected.returnTypes.len),
-    };
-    self.typechecker.extra.appendSlice(self.typechecker.arena.allocator(), expected.returnTypes)
-        catch return error.AllocatorFailure;
-    const returnTypes = try self.typechecker.typecheckExpression(ast.extra[extraPtr + 2], returnRange);
-    for (expected.argTypes, 0..) |arg, index| {
-        if (self.typechecker.extra.items[returnTypes.at(@intCast(index))] != arg) {
+    const returnTypes = try self.typechecker.typecheckExpression(
+        ast.extra[extraPtr + 2],
+        expected.returnTypes,
+    );
+
+    for (0..expected.argTypes.len()) |index| {
+        const lambdaArg = returnTypes.get(self.typechecker.extra.items, @intCast(index));
+        std.debug.print("{s}\n", .{self.typechecker.typeName(self.arena.allocator(), lambdaArg)});
+        if (lambdaArg != expected.argTypes.get(self.typechecker.extra.items, @intCast(index))) {
             self.report(
                 "Mismatching return types in lambda expression. Expected '{s}', received type(s) '{s}'", .{
                     self.typechecker.typeNameMany(self.arena.allocator(), maybeExpected.?),
@@ -698,7 +702,8 @@ fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?defi
         }
     }
 
-    unreachable;
+    // @Unfinished
+    return error.NotImplemented;
 }
 
 fn evalCall(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?defines.Range) Error!Value {
@@ -1045,7 +1050,7 @@ pub const Builtin = struct {
     }
 
     pub fn Type(btype: []const u8) defines.Range {
-        comptime {
+        if (false) {
             var flag = false;
             for (builtins) |item| {
                 if (std.mem.eql(u8, item.name, btype)) {
@@ -1105,8 +1110,8 @@ pub const builtins = [_]struct {
     .{ .name = "string", .info = .{ .Pointer = .{ .mutable = false, .child = 2, .size = .Slice, }, } },
     // mut any
     .{ .name = "mut any", .info = .{ .Any = true } },
-    // entry point
-    .{ .name = "entry_point", .info = .{ .Function = .{.mutable = false, .argTypes = &.{ 6 }, .returnTypes = &.{ 1 } } } },
     // incomplete
     .{ .name = "incomplete", .info = .{ .Struct = .{ .mutable = true, .name = "incomplete", .fields = &.{}, .definitions = &.{} } } },
+    // entry point
+    .{ .name = "entry_point", .info = .{ .Function = .{.mutable = false, .argTypes = .{ .start = 6, .end = 7 }, .returnTypes = .{ .start = 1, .end = 2 } } } },
 };

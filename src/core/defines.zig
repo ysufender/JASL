@@ -27,6 +27,14 @@ pub const Range = struct {
         assert(self.start + index < self.end);
         return self.start + index;
     }
+
+    pub fn into(self: Range, from: anytype) @TypeOf(from) {
+        return from[self.start..self.end];
+    }
+
+    pub fn get(self: Range, from: anytype, index: u32) @typeInfo(@TypeOf(from)).pointer.child {
+        return from[self.at(index)];
+    }
 };
 
 pub const ExpressionPtr = u32;

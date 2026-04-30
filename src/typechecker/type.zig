@@ -1,4 +1,5 @@
 const std = @import("std");
+const defines = @import("../core/defines.zig");
 
 // @CompilerOnly 
 pub const TypeID = u32;
@@ -84,8 +85,8 @@ pub const Array = struct {
 
 pub const Function = struct {
     mutable: bool,
-    argTypes: []const TypeID,
-    returnTypes: []const TypeID,
+    argTypes: defines.Range,
+    returnTypes: defines.Range,
 };
 
 pub const Integer = struct {
