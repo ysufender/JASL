@@ -13,8 +13,6 @@ fn Context(comptime Key: type) type {
 
             pub fn hash(_: Self, key: Key) u64 { 
                 var hasher = std.hash.Wyhash.init(0);
-                // TODO: Sometimes errors when '.DeepRecursive' is used.
-                // Might be problematic.
                 std.hash.autoHashStrat(&hasher, key, .DeepRecursive);
                 return hasher.final();
             }

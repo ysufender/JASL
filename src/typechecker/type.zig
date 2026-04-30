@@ -9,20 +9,20 @@ pub const TypeInfo = union(enum) {
     Union: Union,
     Enum: Enum,
 
-    ComptimeInt: void, // Must be const
-    ComptimeFloat: void, // Must be const
-    EnumLiteral: void, // Must be const and comptime
+    ComptimeInt, // Must be const
+    ComptimeFloat, // Must be const
+    EnumLiteral, // Must be const and comptime
 
     Integer: Integer,
     Bool: bool, // mutability bool
     Float: bool, // mutability bool
-    Void: void,
+    Void,
 
     Pointer: Pointer,
     Function: Function, // is a pointer
-    Noreturn: void,
+    Noreturn,
     Any: bool, // mutability bool
-    Type: void,
+    Type,
 
     Array: Array,
 };
@@ -38,7 +38,7 @@ pub const FieldInfo = struct {
             this.public == that.public
             and std.mem.eql(u8, this.name, that.name)
             and this.valueType == that.valueType;
-        // TODO: Structural FieldInfo.valueType check instead.
+        // @Maybe TODO: Structural FieldInfo.valueType check instead.
     }
 };
 
@@ -85,8 +85,8 @@ pub const Array = struct {
 
 pub const Function = struct {
     mutable: bool,
-    argTypes: defines.Range,
-    returnTypes: defines.Range,
+    argTypes: []const TypeID,
+    returnType: TypeID,
 };
 
 pub const Integer = struct {

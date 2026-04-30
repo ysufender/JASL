@@ -1,11 +1,22 @@
 const defines = @import("../core/defines.zig");
+const types = @import("type.zig");
 
-pub const Operation = struct {
-    pub const Type = enum {
-        VariableDefinition,
-        // TODO
-    };
+const TypeID = types.TypeID;
 
-    type: Type,
-    value: defines.OpaquePtr,
+pub const Program = []Unit;
+
+pub const Unit = struct {
+    moduleID: defines.ModulePtr,
+    globals: []const Symbol,
+};
+
+pub const Symbol = struct {
+    /// Mangled, full name.
+    name: []const u8,
+    /// Global index
+    index: u32,
+    initializer: Operation,
+};
+
+pub const Operation = union(enum) {
 };

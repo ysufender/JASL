@@ -62,6 +62,7 @@ pub const Statement = struct {
         Conditional,
         Switch,
         While,
+        For,
         Break,
         Continue,
         Mark,
@@ -271,7 +272,7 @@ fn statement(self: *Parser) StatementResult {
         .Asm => self.inlineAssembly(),
         .Switch => self.switchStatement(),
         .If => self.conditional(),
-        .While => self.whileStatement(),
+        .While, .For => |loop| self.loopStatement(loop),
         .Return => self.returnStatement(),
         .Break => self.breakStatement(),
         .Continue => self.continueStatement(),
@@ -483,11 +484,11 @@ fn conditional(self: *Parser) StatementResult {
     return result;
 }
 
-fn whileStatement(self: *Parser) StatementResult {
+fn loopStatement(self: *Parser, loopToken: Lexer.TokenType) StatementResult {
     const condition = try self.ifExpression();
 
     if (!self.check(.LBrace)) {
-        self.report("Expected a while body.", .{});
+        self.report("Expected loop body.", .{});
         return error.MissingBrace;
     }
 
@@ -499,7 +500,11 @@ fn whileStatement(self: *Parser) StatementResult {
     
     const result = try self.alloc(Statement);
     self.statementMap.set(result, .{
-        .type = .While,
+        .type = switch (loopToken) {
+            .For => .For,
+            .While => .While,
+            else => unreachable,
+        },
         .value = start,
     });
     
@@ -1060,7 +1065,7 @@ fn function(self: *Parser) ExpressionResult {
             const params = try self.commitScratch(paramsStart);
 
             _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
-            const returns = try self.ifExpression();
+            const returnType = try self.ifExpression();
 
             _ = try self.consume(.LBrace, error.MissingBrace, "Expected function body.");
             self.current -= 1;
@@ -1069,7 +1074,7 @@ fn function(self: *Parser) ExpressionResult {
             const start: defines.OpaquePtr = @intCast(self.extra.items.len);
             self.extra.append(self.allocator(), params.start) catch return error.AllocatorFailure;
             self.extra.append(self.allocator(), params.end) catch return error.AllocatorFailure;
-            self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;
+            self.extra.append(self.allocator(), returnType) catch return error.AllocatorFailure;
             self.extra.append(self.allocator(), body) catch return error.AllocatorFailure;
 
             const expr = try self.alloc(Expression);
@@ -1325,11 +1330,11 @@ fn typeExpression(self: *Parser) ExpressionResult {
                 const args = try self.ifExpression();
 
                 _ = try self.consume(.Arrow, error.MissingArrow, "Expected arrow '->' to denote return type.");
-                const returns = try self.ifExpression();
+                const returnType = try self.ifExpression();
 
                 const start: defines.OpaquePtr = @intCast(self.extra.items.len);
                 self.extra.append(self.allocator(), args) catch return error.AllocatorFailure;
-                self.extra.append(self.allocator(), returns) catch return error.AllocatorFailure;
+                self.extra.append(self.allocator(), returnType) catch return error.AllocatorFailure;
 
                 const expr = try self.alloc(Expression);
                 self.expressionMap.set(expr, .{

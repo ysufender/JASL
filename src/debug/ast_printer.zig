@@ -124,8 +124,8 @@ const PrintContext = struct {
                 }
             },
 
-            .While => {
-                self.write("While ");
+            .While, .For => |loop| {
+                self.write(if (loop == .While) "While " else "For ");
                 self.indent(depth + 1);
                 self.printExpr(@intCast(ex[val]), depth + 2);
                 self.indent(depth + 1);

@@ -1,1 +1,3 @@
-let main: *fn void -> i32 = fn || 0;
+import std;
+
+let main = std::Option;

@@ -120,11 +120,11 @@ pub let Iterator = fn (T: type) -> type {
             pub let Implement = fn (For: type) -> *fn (*mut Trait(For)) -> Self {
                 return fn (self: *mut For) -> Self {
                     return Self(
-                        self as *mut void,
+                        cast(self),
                         VTable(
-                            self.next as *fn (*mut void) -> Next,
-                            self.peek as *fn (*mut void) -> Next,
-                            self.eos as *fn (*mut void) -> bool,
+                            cast(self.next),
+                            cast(self.peek),
+                            cast(self.eos),
                         ),
                     );
                 };

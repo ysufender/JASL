@@ -8,7 +8,6 @@ pub const FlagSet = hashmap.HashMap([]const u8, void);
 
 const Self = @This();
 
-// TODO: a hashmap instead of manually adding fields.
 inputFile: []const u8,
 workingDir: []const u8,
 includeDirs: [][]const u8,

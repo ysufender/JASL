@@ -25,8 +25,8 @@ const assert = std.debug.assert;
 const eql = std.meta.eql;
 
 pub const TypeTable = MultiArrayList(TypeInfo);
-pub const TypeMap = collections.HashMap(TypeInfo, defines.Range);
-pub const ResolutionMap = collections.HashMap(defines.DeclPtr, defines.Range);
+pub const TypeMap = collections.HashMap(TypeInfo, TypeID);
+pub const ResolutionMap = collections.HashMap(defines.DeclPtr, TypeID);
 pub const MetadataMap = collections.HashMap(Element, []const defines.ExpressionPtr);
 const LookupMap = collections.HashMap(defines.DeclPtr, TypecheckStatus);
 
@@ -37,7 +37,7 @@ const TypecheckStatus = struct {
         NotChecked,
     },
 
-    types: defines.Range,
+    types: TypeID,
 };
 
 pub const Element = struct {
@@ -100,15 +100,10 @@ pub const Constants = struct {
 pub const Resolution = struct {
     types: TypeTable.Slice,
     resolutionMap: ResolutionMap,
-    extra: std.ArrayList(TypeID).Slice,
     constants: Constants.Slice,
 
-    pub fn get(self: *const Resolution, key: defines.DeclPtr) defines.Range {
+    pub fn get(self: *const Resolution, key: defines.DeclPtr) TypeID {
         return self.resolutionMap.get(key).?;
-    }
-
-    pub fn getTypeAt(self: *const Resolution, key: defines.DeclPtr, index: u32) TypeID {
-        return self.extra[self.resolutionMap.get(key).?.at(index)];
     }
 };
 
@@ -133,7 +128,6 @@ lastToken: defines.TokenPtr,
 callstack: Callstack,
 
 scratch: std.ArrayList(TypeID),
-extra: std.ArrayList(TypeID),
 
 anonymousMap: AnonMap,
 
@@ -153,7 +147,6 @@ pub fn init(
     var typeTable = TypeTable{};
     typeTable.ensureTotalCapacity(allocator, typeCount + @as(u32, @intCast(Comptime.builtins.len)))
         catch return error.AllocatorFailure;
-    var extra = std.ArrayList(TypeID).initCapacity(allocator, typeCount) catch return error.AllocatorFailure;
     var reso = ResolutionMap.empty;
     var typeMap = TypeMap.empty;
     var metadata = MetadataMap.empty;
@@ -166,11 +159,7 @@ pub fn init(
 
     inline for (Comptime.builtins, 0..) |builtin, id| {
         typeTable.appendAssumeCapacity(builtin.info);
-        typeMap.putAssumeCapacityNoClobber(builtin.info, .{
-            .start = @intCast(id),
-            .end = @intCast(id + 1)
-        });
-        extra.appendAssumeCapacity(id);
+        typeMap.putAssumeCapacityNoClobber(builtin.info, @intCast(id));
     }
 
     return .{
@@ -183,7 +172,6 @@ pub fn init(
         .lookup = lookup,
         .scratch = std.ArrayList(TypeID).initCapacity(allocator, 128) catch return error.AllocatorFailure,
         .anonymousMap = AnonMap.initEmpty(arena.allocator(), typeMap.capacity()) catch return error.AllocatorFailure,
-        .extra = extra,
         .constants = .{
             .all = try Constants.List.init(allocator, total * 2),
             .ints = Constants.Integer.initCapacity(allocator, (counts.integer * 3) / 2) catch return error.AllocatorFailure,
@@ -212,17 +200,14 @@ pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
     defer self.arena.deinit();
     self.executer = try Comptime.init(self, allocator);
 
-    const mainPtr = self.symbols.lookup.get(.{ .scope = 1, .name = "main" }).?;
-    const mainType = try self.typecheckDecl(mainPtr, comptime Comptime.Builtin.Type("entry_point"));
-    if (
-        mainType.len() != 1
-        or
-        mainType.at(0) != comptime Comptime.Builtin.Type("entry_point").at(0)
-    ) {
+    // TODO:                                             This part is not really nice, fix it.
+    const mainPtr = self.symbols.lookup.get(.{ .scope = self.modules.modules.len - 1, .name = "main" }).?;
+    const mainType = try self.typecheckDecl(mainPtr, null);
+    if (mainType != Comptime.Builtin.Type("entry_point")) {
         const main = self.symbols.getDecl(mainPtr);
         self.lastToken = main.token;
         self.report("Unexpected type of entry point 'main'. Expected '*fn void -> i32', received '{s}'", .{
-            self.typeNameMany(allocator, mainType),
+            self.typeName(allocator, mainType),
         });
         return error.TypeMismatch;
     }
@@ -231,53 +216,41 @@ pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
         .types = self.typeTable.slice(), 
         .resolutionMap = self.reso,
         .constants = self.constants.slice(),
-        .extra = self.extra.items,
     }, allocator);
 }
 
-pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) Error!defines.Range {
-    const varType = try self.expectType(decl.type);
+pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) Error!TypeID {
+    const expected = try self.expectType(decl.type);
 
     const initializer =
         if (
             decl.topLevel or
-            varType.at(0) == comptime Comptime.Builtin.Type("type").at(0)
+            expected == Comptime.Builtin.Type("type")
         )
-            try self.typecheckValue(try self.executer.eval(decl.node, varType), varType)
+            try self.typecheckValue(try self.executer.eval(decl.node, expected), expected)
         else
-            try self.typecheckExpression(decl.node, varType);
-
-    if (initializer.len() != decl.meta) {
-        self.report(
-            "Mismatching initializer counts in variable definition."
-            ++ " Expected '{d}', received '{d}'", .{decl.meta, initializer.len()}
-        );
-        return error.TypeMismatch;
-    }
-
-    const expected = varType.get(self.extra.items, 0);
-    const got = initializer.get(self.extra.items, decl.index);
+            try self.typecheckExpression(decl.node, expected);
 
     const res =
-        if (self.suitableSingle(expected, got))
-            try self.infer(expected, got)
+        if (self.suitable(expected, initializer))
+            try self.infer(expected, initializer)
         else  {
             self.report(
                 "Mismatching initializer type in variable definition."
                 ++ " Expected '{s}', received '{s}'.", .{
                 self.typeName(self.arena.allocator(), expected),
-                self.typeName(self.arena.allocator(), got),
+                self.typeName(self.arena.allocator(), initializer),
             });
             return error.TypeMismatch;
         };
 
-    blk: switch (self.typeTable.get(got)) {
+    blk: switch (self.typeTable.get(initializer)) {
         .Union, .Enum, .Struct => {
-            if (self.anonymousMap.isSet(got)) {
+            if (self.anonymousMap.isSet(initializer)) {
                 break :blk;
             }
 
-            self.anonymousMap.set(got);
+            self.anonymousMap.set(initializer);
 
             const ast = self.context.getAST(self.currentFile);
             const tokens = self.context.getTokens(ast.tokens);
@@ -289,7 +262,7 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
                 symName,
             }) catch return error.AllocatorFailure;
 
-            self.typeTable.set(got, switch (self.typeTable.get(got)) {
+            self.typeTable.set(initializer, switch (self.typeTable.get(initializer)) {
                 .Struct => |str| .{
                     .Struct = .{
                         .mutable = str.mutable,
@@ -342,7 +315,7 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
     return res;
 }
 
-pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.ExpressionPtr, maybeExpected: ?defines.Range) Error!defines.Range {
+pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.ExpressionPtr, maybeExpected: ?TypeID) Error!TypeID {
     const ast = self.context.getAST(self.currentFile);
     const tokens = self.context.getTokens(ast.tokens);
     _ = tokens;
@@ -359,7 +332,6 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
             return self.typecheckDecl(decl, maybeExpected);
         },
         .Indexing => self.typecheckIndexing(expr.value),
-        .ExpressionList => self.typecheckExpressionList(expr.value),
         else => |t| {
             self.report("Unable to typecheck expression '{s}'.", .{@tagName(t)});
             return error.TypecheckingFailure;
@@ -367,119 +339,50 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
     };
 }
 
-pub fn typecheckValue(self: *Typechecker, val: Comptime.Value, maybeExpected: ?defines.Range) Error!defines.Range {
-    // TODO: Type casting from untyped comptime literals.
-
+pub fn typecheckValue(self: *Typechecker, val: Comptime.Value, maybeExpected: ?TypeID) Error!TypeID {
     const expected =
-        if (maybeExpected) |expected|
-            if (expected.len() != 1) {
-                self.report("Multi-typed expressions are not (yet) supported.", .{});
-                return error.NotImplemented;
-            }
-            else expected.at(0)
-        else comptime Comptime.Builtin.Type("any").at(0);
+        if (maybeExpected) |expected| expected
+        else Comptime.Builtin.Type("any");
 
     return switch (val) {
-        .Int => self.infer(expected, comptime Comptime.Builtin.Type("comptime_int").at(0)),
-        .Float => self.infer(expected, comptime Comptime.Builtin.Type("comptime_float").at(0)),
-        .Bool => comptime Comptime.Builtin.Type("bool"),
+        .Int => self.infer(expected, Comptime.Builtin.Type("comptime_int"))
+            catch Comptime.Builtin.Type("comptime_int"),
+        .Float => self.infer(expected, Comptime.Builtin.Type("comptime_float"))
+            catch Comptime.Builtin.Type("comptime_float"),
+        .Bool => Comptime.Builtin.Type("bool"),
         .Enum => |enumeration| switch (enumeration) {
             .Literal => {
                 // TODO:
                 self.report("Enum literal inference is not (yet) supported.", .{});
                 return error.NotImplemented;
             },
-            .Type => |enumType| .{
-                .start = enumType.Type,
-                .end = enumType.Type + 1,
-            },
+            .Type => |enumType| enumType.Type,
         },
-        .Union => |uni| .{
-            .start = uni.Type,
-            .end = uni.Type + 1,
-        },
-        .Struct => |str| .{
-            .start = str.Type,
-            .end = str.Type + 1,
-        },
-        .Type => comptime Comptime.Builtin.Type("type"),
-        .Pointer => |ptr| .{
-            .start = ptr.Type,
-            .end = ptr.Type + 1,
-        },
-        .Function => |func| .{
-            .start = func,
-            .end = func + 1,
-        },
-        .Void => comptime Comptime.Builtin.Type("void"),
-        .Undefined => |undef| .{
-            .start = undef,
-            .end = undef + 1,
-        },
-        .Slice => |slice| .{
-            .start = slice.Type,
-            .end = slice.Type + 1,
-        },
-        .Multi => |mult| ret: {
-            const start = self.scratch.items.len;
-            for (0..mult.Size) |index| {
-                const types = try self.typecheckValue(self.executer.memory.items[mult.Values + index], null);
-
-                for (0..types.len()) |itemTypeIndex| {
-                    self.scratch.append(self.arena.allocator(), types.at(@intCast(itemTypeIndex)))
-                        catch return error.AllocatorFailure;
-                }
-            }
-
-            const res = try self.commitScratch(start);
-            std.debug.print("{s}\n", .{self.typeNameMany(self.arena.allocator(), res)});
-            break :ret res;
-        }
+        .Union => |uni| uni.Type,
+        .Struct => |str| str.Type,
+        .Type => Comptime.Builtin.Type("type"),
+        .Pointer => |ptr| ptr.Type,
+        .Function => |func| func,
+        .Void => Comptime.Builtin.Type("void"),
+        .Undefined => |undef| undef,
+        .Slice => |slice| slice.Type,
     };
 }
 
-pub fn typecheckIndexing(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!defines.Range {
+pub fn typecheckIndexing(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!TypeID {
     _ = self;
     _ = extraPtr;
     return error.NotImplemented;
 }
 
-pub fn typecheckExpressionList(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!defines.Range {
-    const ast = self.context.getAST(self.currentFile);
-
-    const exprRange = defines.Range{
-        .start = ast.extra[extraPtr],
-        .end = ast.extra[extraPtr + 1],
-    };
-
-    var typesStart: ?defines.Range = null;
-    for (0..exprRange.len()) |index| {
-        const res = try self.typecheckExpression(ast.extra[exprRange.at(@intCast(index))], null);
-
-        if (res.len() == 0 or std.meta.eql(res, comptime Comptime.Builtin.Type("void"))) {
-            for (0..res.len()) |_| {
-                _ = self.extra.pop();
-            }
-        }
-
-        typesStart =
-            if (typesStart) |start| .{ .start = start.start, .end = res.end }
-            else .{ .start = res.start, .end = res.end };
-    }
-
-    return
-        if (typesStart.?.len() == 0) comptime Comptime.Builtin.Type("void")
-        else typesStart.?;
-}
-
-pub fn typecheckCasting(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?defines.Range) Error!defines.Range {
+pub fn typecheckCasting(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
     _ = self;
     _ = extraPtr;
     _ = maybeExpected;
     return error.NotImplemented;
 }
 
-pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected: ?defines.Range) Error!defines.Range {
+pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!TypeID {
     const allocator = self.arena.allocator();
 
     const ast = self.context.getAST(self.currentFile);
@@ -506,7 +409,7 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
 
     isPresent.value_ptr.* = .{
         .status = .InProgress,
-        .types = std.mem.zeroes(defines.Range),
+        .types = 0,
     };
 
     const prev = self.lastToken;
@@ -519,7 +422,7 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
 
     const types = switch (decl.kind) {
         .Builtin =>
-            if (Comptime.Builtin.isBuiltinType(decl.type)) comptime Comptime.Builtin.Type("type")
+            if (Comptime.Builtin.isBuiltinType(decl.type)) Comptime.Builtin.Type("type")
             else switch (decl.type) {
                 BuiltinIndex("undefined") =>
                     if (maybeExpected) |expected| expected
@@ -548,19 +451,13 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
     return types;
 }
 
-pub fn registerType(self: *Typechecker, newType: TypeInfo) Error!defines.Range {
+pub fn registerType(self: *Typechecker, newType: TypeInfo) Error!TypeID {
     const isPresent = self.typeMap.getOrPut(self.arena.allocator(), newType)
         catch return error.AllocatorFailure;
 
     if (!isPresent.found_existing) {
         const typeID = try self.typeTable.addOne(self.arena.allocator());
-        const start: u32 = @intCast(self.extra.items.len);
-        self.extra.append(self.arena.allocator(), @intCast(typeID))
-            catch return error.AllocatorFailure;
-        isPresent.value_ptr.* = .{
-            .start = start,
-            .end = start + 1,
-        };
+        isPresent.value_ptr.* = @intCast(typeID);
 
         self.typeTable.set(typeID, newType);
     }
@@ -610,8 +507,8 @@ pub fn assertCastable(self: *Typechecker, from: TypeID, to: TypeID) Error!void {
     }
 
     switch (to) {
-        Comptime.Builtin.Type("any").at(0),
-        Comptime.Builtin.Type("mut any").at(0) => return error.InferenceError,
+        Comptime.Builtin.Type("any"),
+        Comptime.Builtin.Type("mut any") => return error.InferenceError,
         else => { },
     }
 
@@ -749,25 +646,12 @@ pub fn structurallyIdentical(self: *const Typechecker, this: TypeID, that: TypeI
     return true;
 }
 
-pub fn suitable(self: *const Typechecker, expected: defines.Range, got: defines.Range) bool {
+pub fn suitable(self: *const Typechecker, expected: TypeID, got: TypeID) bool {
     self.assertSuitable(expected, got) catch return false;
     return true;
 }
 
-pub fn suitableSingle(self: *const Typechecker, expected: TypeID, got: TypeID) bool {
-    self.assertSuitableSingle(expected, got) catch return false;
-    return true;
-}
-
-pub fn assertSuitable(self: *const Typechecker, this: defines.Range, that: defines.Range) Error!void {
-    return
-        if (this.len() != that.len()) error.TypeMismatch 
-        else for (0..this.len()) |i| {
-            try self.assertSuitableSingle(this.at(@intCast(i)), that.at(@intCast(i)));
-        };
-}
-
-pub fn assertSuitableSingle(self: *const Typechecker, this: TypeID, that: TypeID) Error!void {
+pub fn assertSuitable(self: *const Typechecker, this: TypeID, that: TypeID) Error!void {
     const thisType = self.typeTable.get(this);
     const thatType = self.typeTable.get(that);
 
@@ -801,11 +685,11 @@ pub fn isFloat(self: *const Typechecker, maybeFloat: TypeID) bool {
 pub fn assignable(self: *const Typechecker, this: TypeID, that: TypeID) bool {
     return
         if (!self.mutable(this)) false
-        else self.suitableSingle(this, that);
+        else self.suitable(this, that);
 }
 
-pub fn infer(self: *const Typechecker, this: TypeID, that: TypeID) Error!defines.Range {
-    try self.assertSuitableSingle(this, that);
+pub fn infer(self: *const Typechecker, this: TypeID, that: TypeID) Error!TypeID {
+    try self.assertSuitable(this, that);
 
     const thisType = std.meta.activeTag(self.typeTable.get(this));
     const thatType = std.meta.activeTag(self.typeTable.get(that));
@@ -819,18 +703,12 @@ pub fn infer(self: *const Typechecker, this: TypeID, that: TypeID) Error!defines
         },
     };
 
-    return .{
-        .start = resType,
-        .end = resType + 1,
-    };
+    return resType;
 }
 
-pub fn expectType(self: *Typechecker, exprPtr: defines.ExpressionPtr) Error!defines.Range {
+pub fn expectType(self: *Typechecker, exprPtr: defines.ExpressionPtr) Error!TypeID {
     return
-        if (self.executer.expectType(exprPtr)) |val| .{
-            .start = val.Type,
-            .end = val.Type + 1,
-        } 
+        if (self.executer.expectType(exprPtr)) |val| val.Type 
         else |err| err;
 }
 
@@ -925,7 +803,7 @@ pub fn makeMutable(_: *const Typechecker, info: TypeInfo) TypeInfo {
             .Function = .{
                 .mutable = true,
                 .argTypes = func.argTypes,
-                .returnTypes = func.returnTypes,
+                .returnType = func.returnType,
             },
         },
         .Integer => |int| .{
@@ -973,25 +851,6 @@ pub fn sizeOf(self: *const Typechecker, of: TypeID) u32 {
                 .Tagged => size + @sizeOf(u32),
                 .Plain => size,
             };
-        },
-    };
-}
-
-pub fn typeNameMany(self: *const Typechecker, allocator: Allocator, types: defines.Range) []const u8 {
-    return ret: switch (types.len()) {
-        0 => "void",
-        1 => self.typeName(allocator, self.extra.items[types.start]),
-        else => {
-            const res = allocator.alloc(u8, 64) catch break :ret "AllocatorFailure";
-            _ = std.fmt.bufPrint(res, "(", .{}) catch unreachable;
-            for (types.start..types.end) |typePtr| {
-                _ = std.fmt.bufPrint(res, "{s}{s}", .{
-                    self.typeName(allocator, self.extra.items[typePtr]),
-                    if (typePtr == types.end - 1) ")" else ", "
-                }) catch "TypeNameTooLong";
-            }
-
-            break :ret res;
         },
     };
 }
@@ -1048,28 +907,19 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
             .Function => |func| {
                 var res: []const u8 = if (func.mutable) "mut *fn (" else "*fn (";
 
-                for (0..func.argTypes.len()) |index| {
+                for (0..func.argTypes.len) |index| {
                     res = std.fmt.allocPrint(allocator, "{s}{s}{s}", .{
                         res,
-                        self.typeName(allocator, func.argTypes.get(self.extra.items, @intCast(index))),
-                        if (index == func.argTypes.len() - 1) ")" else ", ",
+                        self.typeName(allocator, func.argTypes[index]),
+                        if (index == func.argTypes.len - 1) "" else ", ",
                     }) catch return "AllocatorFailure";
                 }
 
-                res = std.fmt.allocPrint(allocator, "{s} -> {s}", .{
+
+                res = std.fmt.allocPrint(allocator, "{s}) -> {s}", .{
                     res,
-                    if (func.returnTypes.len() == 1) "" else "("
+                    self.typeName(allocator, func.returnType),
                 }) catch return "AllocatorFailure";
-
-                for (0..func.returnTypes.len()) |index| {
-                    res = std.fmt.allocPrint(allocator, "{s}{s}{s}", .{
-                        res,
-                        self.typeName(allocator, func.returnTypes.get(self.extra.items, @intCast(index))),
-                        if (func.returnTypes.len() == 1) ""
-                        else if (index == func.returnTypes.len() - 1) ")"
-                        else ", "
-                    }) catch return "AllocatorFailure";
-                }
 
                 break :ret res;
             },
@@ -1097,7 +947,7 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
         };
 }
 
-pub fn extendExtra(self: *Typechecker, size: usize) common.CompilerError!defines.Range {
+pub fn extendExtra(self: *Typechecker, size: usize) common.CompilerError!TypeID {
     const start: defines.OpaquePtr = @intCast(self.extra.items.len);
     _ = self.extra.addManyAsSlice(self.arena.allocator(), size) catch return error.AllocatorFailure;
     return .{
@@ -1106,7 +956,7 @@ pub fn extendExtra(self: *Typechecker, size: usize) common.CompilerError!defines
     };
 }
 
-pub fn commitFromSlice(self: *Typechecker, items: []const defines.OpaquePtr) common.CompilerError!defines.Range {
+pub fn commitFromSlice(self: *Typechecker, items: []const defines.OpaquePtr) common.CompilerError!TypeID {
     const allocator = self.arena.allocator();
     const start: defines.OpaquePtr = @intCast(self.extra.items.len);
     self.extra.appendSlice(allocator, items) catch return error.AllocatorFailure;
@@ -1116,7 +966,7 @@ pub fn commitFromSlice(self: *Typechecker, items: []const defines.OpaquePtr) com
     };
 }
 
-pub fn commitScratch(self: *Typechecker, scratchStart: usize) common.CompilerError!defines.Range {
+pub fn commitScratch(self: *Typechecker, scratchStart: usize) common.CompilerError!TypeID {
     const span = try self.commitFromSlice(self.scratch.items[scratchStart..]);
     self.scratch.shrinkRetainingCapacity(@intCast(scratchStart));
     return span;
