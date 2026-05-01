@@ -62,7 +62,9 @@ pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Context {
     const allocator = arena.allocator();
 
     const settings = cli.parseCLI(allocator) catch |err| {
-        log.err("Couldn't parse CLI input.", .{});
+        if (err != error.Terminate) {
+            log.err("Couldn't parse CLI input.", .{});
+        }
         return err;
     };
     settings.print(baseAllocator);

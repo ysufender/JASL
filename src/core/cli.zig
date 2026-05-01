@@ -11,7 +11,7 @@ const Flags = enum {
     MaxErr,
     None,
     Include,
-    PrintAST,
+    Flag,
 };
 
 const flags = std.StaticStringMap(Flags).initComptime(&.{
@@ -30,7 +30,13 @@ const flags = std.StaticStringMap(Flags).initComptime(&.{
     .{ "--include", .Include },
     .{ "-I", .Include },
 
-    .{ "--print-ast", .PrintAST },
+    .{ "--print-ast", .Flag },
+
+    .{ "--parse-only", .Flag },
+
+    .{ "--typecheck-only", .Flag },
+
+    .{ "--resolve-only", .Flag },
 });
 
 const descriptions = std.StaticStringMap([]const u8).initComptime(&.{
@@ -45,6 +51,10 @@ const descriptions = std.StaticStringMap([]const u8).initComptime(&.{
     .{ "--include, -I", " <path>: Add <path> to the searchpath of the compiler. Can be relative or absolute." },
 
     .{ "--print-ast", ": Print a pretty(!) formatted AST dump to stdout." },
+
+    .{ "--parse-only", ": Parse the project, do not compile." },
+    .{ "--typecheck-only", ": Typecheck the project, do not compile." },
+    .{ "--resolve-only", ": Resolve the project, do not compile." },
 });
 
 pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.CompilerSettings {
@@ -72,9 +82,8 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
 
     while (args.next()) |flag| {
         switch (hash(flag)) {
-            .PrintAST => try settings.setFlag(flag),
-            .Help => printHelp(),
-            .Version => printHeader(),
+            .Help => return printHelp(),
+            .Version => return printHeader(),
             .Working => {
                 const dir = if (args.next()) |next| next else return error.MissingFlag;
 
@@ -114,12 +123,20 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
                 }
             },
 
-            else => if (maybeFile != null) {
-                common.log.err("Unexpected commandline option {s}", .{flag});
-                return error.UnknownFlag;
-            } else {
-                maybeFile = flag;
-            }
+            else =>
+                if (
+                    std.mem.startsWith(u8, flag, "--")
+                    or std.mem.startsWith(u8, flag, "-")
+                ) {
+                    try settings.setFlag(flag);
+                }
+                else if (maybeFile != null) {
+                    common.log.err("Unexpected commandline option {s}", .{flag});
+                    return error.UnknownFlag;
+                }
+                else {
+                    maybeFile = flag;
+                }
         }
     }
 
@@ -154,21 +171,25 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
     };
 }
 
-fn printHeader() void {
+fn printHeader() common.CompilerError {
     common.log.info(
         "The JASL Compiler:" ++
         "\n\tVersion: " ++ common.JASL_VERSION,
         .{}
     );
+
+    return error.Terminate; 
 }
 
-fn printHelp() void {
-    printHeader();
+fn printHelp() common.CompilerError {
+    printHeader() catch { };
     common.log.info("\n\tUsage:\n\tjaslc <input_file> [flags]\n\n\tFlags:", .{});
 
     for (descriptions.keys()) |flag| {
         common.log.info("\t\t{s}{s}", .{flag, descriptions.get(flag).?});
     }
+
+    return error.Terminate; 
 }  
 
 fn hash(str: []const u8) Flags {

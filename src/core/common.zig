@@ -76,4 +76,5 @@ pub const CompilerError = error {
     ModuleNotInScope,
     FieldNotFound,
     ShouldBeImpossible,
+    Terminate,
 };

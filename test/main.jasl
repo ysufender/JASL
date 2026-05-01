@@ -1,5 +1,3 @@
 import std;
 
-let ErrorCode = std::ErrorCode;
-
 let main = ErrorCode::Ok;

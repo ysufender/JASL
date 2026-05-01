@@ -14,7 +14,7 @@ const Typechecker = @import("typechecker/typechecker.zig");
 pub fn main() !void {
     const allocator = perfAllc.performanceAllocator;
 
-    innerMain(allocator) catch |err| {
+    innerMain(allocator) catch |err| blk: {
         switch (err) {
             error.ShouldBeImpossible => common.log.err(
                 "This is a compiler bug, a part of impossible branch has been reached."
@@ -23,6 +23,7 @@ pub fn main() !void {
             error.NotImplemented => common.log.err(
                 "The compiler has hit an unfinished part of the codebase, stay tuned.", .{ }
             ),
+            error.Terminate => break :blk,
             else => { }, 
         }
 
@@ -61,22 +62,38 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     );
     const ast = try parser.parse();
 
+    if (context.settings.hasFlag("--print-ast")) {
+        debug.ASTPrinter.printAST(ast, &context);
+    }
+
+    if (context.settings.hasFlag("--parse-only")) {
+        return;
+    }
+
     var prepass = try Prepass.init(&context, ast, allocator);
     const modules = try prepass.prepass(allocator);
-
-    if (context.settings.hasFlag("--print-ast")) {
-        debug.ASTPrinter.printAST(&context, &modules);
-    }
 
     var resolver = try Resolver.init(allocator, &context, &modules);
     const resolved = try resolver.resolve(allocator);
 
-    var typechecker = try Typechecker.init(allocator, &context, &modules, &resolved);
-    const typechecked = try typechecker.typecheck(allocator);
-    _ = typechecked;
+    if (context.settings.hasFlag("--print-resolution")) {
+        common.log.info("--print-resolution: Not implemented.", .{});
+    }
 
-    context.stats();
+    if (context.settings.hasFlag("--resolve-only")) {
+        return;
+    }
+
+    var typechecker = try Typechecker.init(allocator, &context, &modules, &resolved);
+    _ = try typechecker.typecheck(allocator);
+
+    if (context.settings.hasFlag("--typecheck-only")) {
+        return;
+    }
+
     if (false) {
+        context.stats();
+
         var miterator = modules.modules.iterator();
         _ = miterator.next();
         while (miterator.next()) |mod| {

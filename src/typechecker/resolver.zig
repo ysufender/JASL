@@ -791,105 +791,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             const returns = ast.extra[expr.value + 1];
             try self.resolveExpression(returns);
         },
-        .Scoping => {
-            var root = exprPtr;
-            var chainLen: u32 = 0;
-            while (ast.expressions.items(.type)[root] == .Scoping) {
-                root = ast.extra[ast.expressions.items(.value)[root]];
-                chainLen += 1;
-            }
-
-            if (ast.expressions.items(.type)[root] != .Identifier) {
-                return self.resolveExpression(root);
-            }
-
-            const rootTokenPtr = ast.expressions.items(.value)[root];
-            const nameStart = tokens.items(.start)[rootTokenPtr];
-
-            var matchedModuleIdx: ?defines.ModulePtr = null;
-            var consumedDepth: u32 = 0;
-
-            var prefixDepth: u32 = 0;
-            while (prefixDepth <= chainLen) : (prefixDepth += 1) {
-                var cur = exprPtr;
-                var steps: u32 = 0;
-                while (steps < chainLen - prefixDepth) : (steps += 1) {
-                    cur = ast.extra[ast.expressions.items(.value)[cur]];
-                }
-
-                const endToken =
-                    if (prefixDepth == 0) rootTokenPtr
-                    else ast.extra[ast.expressions.items(.value)[cur] + 1];
-
-                const nameEnd = tokens.items(.end)[endToken];
-                const moduleName = self.context.getFile(self.dataIndex())[nameStart..nameEnd];
-
-                 if (self.modules.ids.get(moduleName)) |moduleIdx| {
-                    const decl = self.decls.get(try self.lookName(moduleName));
-                    
-                    if (decl.node == moduleIdx) {
-                        matchedModuleIdx = moduleIdx;
-                        consumedDepth = prefixDepth;
-                    }
-                    else {
-                        self.report("Ambiguous aliasing of module '{s}' to '{s}'", .{
-                            self.getModuleName(decl.type),
-                            moduleName,
-                        });
-                        return error.ModuleNotInScope;
-                    }
-                }
-            }
-
-            var currentDecl: defines.DeclPtr = undefined;
-
-            if (matchedModuleIdx) |moduleIdx| {
-                const d = try self.decls.addOne(allocator);
-                self.decls.set(d, .{
-                    .kind = .Namespace,
-                    .scope = self.currentScope,
-                    .public = false,
-                    .token = rootTokenPtr,
-                    .node = moduleIdx,
-                    .type = 0,
-                    .topLevel = false,
-                });
-                currentDecl = d;
-            }
-            else {
-                currentDecl = self.look(rootTokenPtr) catch return error.InvalidIdentifier;
-                consumedDepth = 0;
-            }
-
-            var depth: u32 = chainLen - consumedDepth;
-            var currentExprPtr = exprPtr;
-            while (depth > 0) {
-                depth -= 1;
-
-                var cur = exprPtr;
-                var steps: u32 = 0;
-                while (steps < depth) {
-                    cur = ast.extra[ast.expressions.items(.value)[cur]];
-                    steps += 1;
-                }
-
-                const member = ast.extra[ast.expressions.items(.value)[cur] + 1];
-
-                if (self.decls.items(.kind)[currentDecl] == .Namespace) {
-                    const targetScope = self.decls.items(.node)[currentDecl];
-                    currentDecl = self.lookAt(member, targetScope) catch return;
-                    currentExprPtr = cur;
-                }
-                else {
-                    self.resolved.putNoClobber(allocator, .{ .file = self.dataIndex(), .expr = currentExprPtr }, currentDecl)
-                        catch return error.AllocatorFailure;
-                    return;
-                }
-            }
-
-            self.resolved.putNoClobber(allocator, .{ .file = self.dataIndex(), .expr = exprPtr }, currentDecl)
-                catch return error.AllocatorFailure;
-        },
+        .Scoping => _ = try self.resolveScoping(ast, tokens, exprPtr),
         .ExpressionList => {
             const expressions = defines.Range{
                 .start = ast.extra[expr.value],
@@ -902,6 +804,43 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
         },
         .Dot => try self.resolveExpression(ast.extra[expr.value]),
         else => {},
+    }
+}
+
+fn resolveScoping(
+    self: *Resolver,
+    ast: *const Parser.AST,
+    tokens: *const Lexer.TokenList.Slice,
+    expr: defines.ExpressionPtr,
+) Error!defines.Offset {
+    const extra: defines.OpaquePtr = ast.expressions.items(.value)[expr];
+    const leftExpressionPtr = ast.extra[extra];
+    const member = ast.extra[extra + 1];
+
+    const leftExpression = ast.expressions.get(leftExpressionPtr);
+    const maybeLeftMost: ?defines.Offset = switch (leftExpression.type) {
+        .Identifier => tokens.items(.start)[leftExpression.value],
+        .Scoping => try self.resolveScoping(ast, tokens, leftExpressionPtr),
+        else => null,
+    };
+
+    const file = self.context.getFile(ast.tokens);
+
+    if (maybeLeftMost) |leftMost| {
+        const module = file[leftMost..tokens.items(.end)[member]];
+
+        if (self.lookup.get(.{ .scope = self.currentScope, .name = module })) |decl| {
+            self.resolved.putNoClobber(self.arena.allocator(), .{
+                .file = ast.tokens,
+                .expr = expr,
+            }, decl) catch return error.AllocatorFailure;
+        }
+
+        return leftMost;
+    }
+    else {
+        try self.resolveExpression(leftExpressionPtr);
+        return 0;
     }
 }
 

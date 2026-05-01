@@ -5,6 +5,7 @@ const collections = @import("../util/collections.zig");
 const functional = @import("../util/functional.zig");
 const Types = @import("type.zig");
 
+const Printer = @import("../debug/ast_printer.zig").PrintContext;
 const Parser = @import("../parser/parser.zig");
 const Comptime = @import("comptime.zig");
 const Resolver = @import("resolver.zig");
@@ -324,10 +325,6 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
         return self.typecheckValue(result, maybeExpected);
     }
 
-    if (self.symbols.resolutionMap.get(.{ .file = self.currentFile, .expr = expressionPtr })) |found| {
-        return self.typecheckDecl(found, null);
-    }
-
     const expr = ast.expressions.get(expressionPtr);
     return switch (expr.type) {
         .Identifier => {
@@ -337,7 +334,7 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
         },
         .Indexing => self.typecheckIndexing(expr.value),
         .Call => self.typecheckCall(expr.value, maybeExpected),
-        .Scoping => self.typecheckScoping(expr.value),
+        .Scoping => self.typecheckScoping(expressionPtr),
         else => |t| {
             self.report("Unable to typecheck expression '{s}'.", .{@tagName(t)});
             return error.TypecheckingFailure;
@@ -368,9 +365,18 @@ pub fn typecheckValue(self: *Typechecker, val: Comptime.Value, maybeExpected: ?T
     };
 }
 
-pub fn typecheckScoping(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!TypeID {
+pub fn typecheckScoping(self: *Typechecker, expr: defines.ExpressionPtr) Error!TypeID {
+    if (self.symbols.resolutionMap.get(.{
+        .file = self.currentFile,
+        .expr = expr,
+    })) |decl| {
+        return self.typecheckDecl(decl, null);
+    }
+
     const ast = self.context.getAST(self.currentFile);
     const tokens = self.context.getTokens(ast.tokens);
+
+    const extraPtr: defines.OpaquePtr = ast.expressions.items(.value)[expr];
 
     const lhsTypePtr =
         if (self.executer.attemptEval(ast.extra[extraPtr], Comptime.Builtin.Type("type"))) |res| switch (res) {

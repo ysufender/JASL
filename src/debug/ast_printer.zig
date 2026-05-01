@@ -10,19 +10,27 @@ const Statement = parser.Statement;
 
 const Error = common.CompilerError;
 
-pub fn printAST(context: *common.CompilerContext, modules: *const ModuleList) void {
+pub fn printASTs(context: *common.CompilerContext, modules: *const ModuleList) void {
     var it = modules.modules.iterator();
     while (it.next()) |module| {
-        var ctx = PrintContext{
-            .ast = context.getAST(module.dataIndex),
-            .tokens = context.getTokens(module.dataIndex),
-            .context = context,
-            .file = module.dataIndex,
-        };
-        for (ctx.ast.statementMask) |si| {
-            ctx.printStmt(@intCast(si), 0);
-        }
+        printAST(module.dataIndex, context);
     }
+}
+
+pub fn printAST(astPtr: defines.ASTPtr, context: *common.CompilerContext) void {
+    const ast = context.getAST(astPtr);
+
+    var ctx = PrintContext{
+        .ast = ast,
+        .tokens = context.getTokens(ast.tokens),
+        .context = context,
+        .file = ast.tokens,
+    };
+    ctx.print("------------BEGIN  AST: {s}------------\n", .{context.getFileName(astPtr)});
+    for (ast.statementMask) |si| {
+        ctx.printStmt(@intCast(si), 0);
+    }
+    ctx.print("------------END  AST: {s}------------\n\n", .{context.getFileName(astPtr)});
 }
 
 pub const PrintContext = struct {
@@ -57,7 +65,7 @@ pub const PrintContext = struct {
         const ex    = self.ast.extra;
 
         self.indent(depth);
-        defer self.write("\n\n");
+        defer self.write("\n");
 
         switch (stype) {
             .Block => {
@@ -392,7 +400,7 @@ pub const PrintContext = struct {
         }
     }
 
-    fn printSig(self: *PrintContext, si: defines.SignaturePtr, depth: u32) void {
+    pub fn printSig(self: *PrintContext, si: defines.SignaturePtr, depth: u32) void {
         const sigs = self.ast.signatures;
         const sig  = sigs.get(si);
         self.indent(depth);

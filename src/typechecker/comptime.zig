@@ -118,11 +118,6 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
         .expr = exprPtr,
     };
 
-    if (self.typechecker.symbols.resolutionMap.get(key)) |decl| {
-        const value = try self.evalDecl(decl, maybeExpected);
-        return value;
-    }
-
     if (self.cache.get(key)) |cached| {
         return self.memory.items[cached];
     }
@@ -145,7 +140,7 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
         .Indexing => try self.evalIndexing(expr.value),
         .Call => try self.evalCall(expr.value, maybeExpected),
         .Lambda => try self.evalLambda(expr.value, maybeExpected),
-        .Scoping => try self.evalScoping(expr.value, exprPtr),
+        .Scoping => try self.evalScoping(exprPtr),
         else => |t| {
             self.report("Unable to resolve comptime expression. ({s})", .{
                 @tagName(t)
@@ -580,9 +575,44 @@ fn evalTypeForwarding(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpecte
     return self.eval(ast.extra[args.at(1)], typeToForward);
 }
 
-fn evalScoping(self: *Comptime, extraPtr: defines.OpaquePtr, _: defines.ExpressionPtr) Error!Value {
-    const resType = try self.typechecker.typecheckScoping(extraPtr);
-    return self.constructUndefined(resType);
+fn evalScoping(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
+    if (self.typechecker.symbols.resolutionMap.get(.{
+        .file = self.typechecker.currentFile,
+        .expr = expr,
+    })) |decl| {
+        return self.evalDecl(decl, null);
+    }
+
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+    const tokens = self.typechecker.context.getTokens(ast.tokens);
+
+    const extraPtr = ast.expressions.items(.value)[expr];
+
+    _ = try self.typechecker.typecheckScoping(expr);
+    const res = (try self.expectType(ast.extra[extraPtr])).Type;
+
+    const member = tokens
+        .get(ast.extra[extraPtr + 1])
+        .lexeme(self.typechecker.context, ast.tokens);
+
+    std.debug.print("{s}\n", .{member});
+
+    return switch (self.typechecker.typeTable.get(res)) {
+        .Enum => |enm| Value{
+            .Enum = .{
+                .Type = res,
+                .Value = blk: for (enm.fields, 0..) |field, index| {
+                    if (std.mem.eql(u8, field, member)) {
+                        break :blk @intCast(index);
+                    }
+                } else unreachable
+            },
+        },
+        else => |o| {
+            std.debug.print("{s} is not implemented.\n", .{@tagName(std.meta.activeTag(o))});
+            return error.ShouldBeImpossible;
+        },
+    };
 }
 
 fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!Value {
