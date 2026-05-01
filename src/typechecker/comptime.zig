@@ -132,7 +132,7 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
         .Identifier =>
             if (expr.value == 0) Value{ .Type = comptime Builtin.Type("any") }
             else try self.evalDecl(typechecker.symbols.findDecl(.{ .file = file, .expr = exprPtr }), maybeExpected),
-        .Literal => try self.evalLiteral(expr.value),
+        .Literal => try self.evalLiteral(expr.value, maybeExpected),
         .PointerType => try self.evalPtrType(.Single, expr.value),
         .SliceType => try self.evalPtrType(.Slice, expr.value),
         .CPointerType => try self.evalPtrType(.C, expr.value),
@@ -230,7 +230,7 @@ fn evalBuiltin(self: *Comptime, decl: *const Resolver.Declaration, maybeExpected
         };
 }
 
-fn evalLiteral(self: *Comptime, tokenPtr: defines.TokenPtr) Error!Value {
+fn evalLiteral(self: *Comptime, tokenPtr: defines.TokenPtr, maybeExpected: ?TypeID) Error!Value {
     const token = self.typechecker.context.getTokens(self.typechecker.currentFile).get(tokenPtr);
     const lexeme = token.lexeme(self.typechecker.context, self.typechecker.currentFile);
     return switch (token.type) {
@@ -250,7 +250,38 @@ fn evalLiteral(self: *Comptime, tokenPtr: defines.TokenPtr) Error!Value {
                 .To = 0,
             },
         },
-        .EnumLiteral => error.NotImplemented,
+        .EnumLiteral =>
+            if (maybeExpected) |expected| switch (self.typechecker.typeTable.get(expected)) {
+                .Enum => |enm| ret: for (enm.fields, 0..) |field, index| {
+                    if (std.mem.eql(u8, field, lexeme[1..])) {
+                        break :ret Value{
+                            .Enum = .{
+                                .Type = expected,
+                                .Value = @intCast(index),
+                            },
+                        };
+                    }
+                } else {
+                    self.report("Couldn't find enumeration '{s}' in '{s}'.", .{
+                        lexeme[1..],
+                        self.typechecker.typeName(self.arena.allocator(), expected),
+                    });
+                    return error.FieldNotFound;
+                },
+                else => {
+                    self.report("Context requires '{s}', received '{s}' instead.", .{
+                        self.typechecker.typeName(self.arena.allocator(), expected),
+                        lexeme,
+                    });
+                    return error.TypeMismatch;
+                },
+            }
+            else {
+                self.report("Can't infer the type of enum literal '{s}'.", .{
+                    lexeme,
+                });
+                return error.InferenceError;
+            },
         else => unreachable,
     };
 }

@@ -74,5 +74,6 @@ pub const CompilerError = error {
     RedundantCast,
     CastOfUndefinedValue,
     ModuleNotInScope,
+    FieldNotFound,
     ShouldBeImpossible,
 };
