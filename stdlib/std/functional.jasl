@@ -21,11 +21,3 @@
 */
 
 import std::iterator as iterator;
-
-pub let LoopResult = fn (T: type) -> type {
-    return union(enum) {
-        Break: void,
-        Continue: void,
-        Return: T,
-    };
-};

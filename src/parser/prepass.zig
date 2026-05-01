@@ -17,8 +17,6 @@ pub const Module = struct {
         name: defines.TokenPtr,
         value: defines.StatementPtr,
         type: defines.ExpressionPtr,
-        index: u32,
-        meta: u32,
         public: bool,
     };
 
@@ -154,161 +152,36 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
 
     file.symbolPtrs.ensureTotalCapacity(allocator, @max(tokens.len / 16, 16)) catch |e| return e;
 
-    var fail = false;
+    var lastErr: ?Error = null;
+    var errc: u32 = 0;
 
-    //std.debug.print("\nPrepass {s}", .{name});
-    //ast.print(self.context);
     var statement: Parser.Statement = undefined;
     var first = true;
     var stmt: u32 = 0;
     statementLoop: while (stmt < ast.statementMask.len) {
+        if (errc == self.context.settings.maxErr) {
+            self.report("Too many errors, aborting the prepass of module '{s}'", .{
+                name
+            }, file.dataIndex, null);
+
+            break :statementLoop;
+        }
+
         if (first) {
             first = false;
             statement = ast.statements.get(ast.statementMask[stmt]);
         }
 
         case: switch (statement.type) {
-            .Import => {
-                const module = getModuleName(statement.value, ast, self.context);
-                file.dependencies.append(allocator, module) catch {
-                    self.report("Couldn't add dependency {s} to {s}.", .{module, file.name}, file.dataIndex, null);
-
-                    fail = true;
-                    break :case;
-                };
-
-                const path = getModulePathWithExtension(allocator, statement.value, ast, self.context) catch |err| {
-                    self.report("Couldn't get module path for {s}: {s}.",
-                        .{module, @errorName(err)},
-                        file.dataIndex,
-                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
-                            ast.expressions.items(.value)[ast.extra[statement.value]]
-                        else
-                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1],
-                    );
-
-                    fail = true;
-                    break :case;
-                };
-
-                if (self.context.isProcessed(path)) {
+            .Import => self.prepassImport(ast, statement.value, &file) catch |err| {
+                lastErr = err;
+                errc += 1;
                 break :case;
-                }
-
-                var lexer = Lexer.init(allocator, self.context, path) catch {
-                    self.report("Couldn't scan module at path {s}.", .{path}, self.context.getFileId(path),
-                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
-                            ast.expressions.items(.value)[ast.extra[statement.value]]
-                        else
-                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1]
-                    );
-
-                    fail = true;
-                    break :case;
-                };
-
-                const moduleTokens = lexer.lex() catch {
-                    self.report("Couldn't scan module at path {s}.", .{path}, file.dataIndex,
-                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
-                            ast.expressions.items(.value)[ast.extra[statement.value]]
-                        else
-                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1]
-                    );
-
-                    fail = true;
-                    break :case;
-                };
-
-                var prs = Parser.init(allocator, self.context, moduleTokens) catch {
-                    self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex,
-                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
-                            ast.expressions.items(.value)[ast.extra[statement.value]]
-                        else
-                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1]
-                    );
-
-                    fail = true;
-                    break :case;
-                };
-
-                const imported = prs.parse() catch {
-                    self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex,
-                        if (ast.expressions.items(.type)[ast.extra[statement.value]] == .Identifier)
-                            ast.expressions.items(.value)[ast.extra[statement.value]]
-                        else
-                            ast.extra[ast.expressions.items(.value)[ast.extra[statement.value]] + 1]
-                    );
-
-                    fail = true;
-                    break :case;
-                };
-
-                try self.prepassImpl(self.context.getAST(imported), module);
             },
-            .VariableDefinition => {
-                const sigs = defines.Range{
-                    .start = ast.extra[statement.value],
-                    .end = ast.extra[statement.value + 1],
-                };
-
-                for (0..sigs.len()) |index| {
-                    const ptr = sigs.at(@intCast(index));
-                    const sig = ast.signatures.get(ast.extra[ptr]);
-                    const sigName = tokens.get(sig.name).lexeme(self.context, file.dataIndex);
-
-                    for (Resolver.builtins) |builtin| {
-                        if (std.mem.eql(u8, builtin, sigName)) {
-                            self.report("Given symbol '{s}' collides with the builtin '{s}'.", .{
-                                sigName, sigName,
-                            }, file.dataIndex, sig.name);
-                            fail = true;
-                            break :case;
-                        }
-                    }
-
-                    const idx = file.symbols.addOne(allocator) catch {
-                        self.report(
-                            "Couldn't add symbol {s} to module map. System is out of memory.",
-                            .{sigName},
-                            file.dataIndex,
-                            sig.name,
-                        );
-                        fail = true;
-                        break :case;
-                    };
-
-                    const res = file.symbolPtrs.getOrPut(allocator, sigName) catch {
-                        self.report(
-                            "Couldn't add symbol {s} to module map. System is out of memory.",
-                            .{sigName},
-                            file.dataIndex,
-                            sig.name,
-                        );
-                        fail = true;
-                        break :case;
-                    };
-
-                    if (res.found_existing) {
-                        self.report("Given symbol '{s}' collides with the previous definition of '{s}'.",
-                            .{sigName, sigName},
-                            file.dataIndex,
-                            sig.name,
-                        );
-                        fail = true;
-                        break :case;
-                    }
-
-                    res.value_ptr.* = idx;
-
-                    file.symbols.set(idx, .{
-                        .public = sig.public,
-                        .name = sig.name,
-                        .value = stmt,
-                        .index = @intCast(index),
-                        .type = sig.type,
-                        .meta = sigs.len(),
-                    });
-                }
+            .VariableDefinition => self.prepassVariableDef(ast, tokens, &file, statement.value) catch |err| {
+                lastErr = err;
+                errc += 1;
+                break :case;
             },
             .Mark => {
                 statement = ast.statements.get(ast.extra[statement.value + 2]); 
@@ -321,7 +194,9 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
                     file.dataIndex,
                     null
                 );
-                fail = true;
+
+                lastErr = error.MissingStatement;
+                errc += 1;
                 break :case;
             },
         }
@@ -330,8 +205,11 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
         statement = if (stmt >= ast.statementMask.len) statement else ast.statements.get(ast.statementMask[stmt]);
     }
 
-    if (fail) {
+    if (errc > 1) {
         return error.MultipleErrors;
+    }
+    else if (errc == 1) {
+        return lastErr.?;
     }
 
     const index = self.modules.modules.addOne(allocator) catch |e| return e;
@@ -344,6 +222,127 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
     }
 
     self.context.registerModule(&file);
+}
+
+fn prepassImport(
+    self: *Prepass,
+    ast: *const Parser.AST,
+    stmt: defines.OpaquePtr,
+    file: *Module,
+) Error!void {
+    const module = getModuleName(stmt, ast, self.context);
+    file.dependencies.append(self.arena.allocator(), module)
+        catch return error.AllocatorFailure;
+
+    const path = getModulePathWithExtension(self.arena.allocator(), stmt, ast, self.context) catch |err| {
+        self.report("Couldn't get module path for {s}: {s}.",
+            .{module, @errorName(err)},
+            file.dataIndex,
+            if (ast.expressions.items(.type)[ast.extra[stmt]] == .Identifier)
+                ast.expressions.items(.value)[ast.extra[stmt]]
+            else
+                ast.extra[ast.expressions.items(.value)[ast.extra[stmt]] + 1],
+        );
+
+        return err;
+    };
+
+    if (self.context.isProcessed(path)) {
+        return;
+    }
+
+    var lexer = Lexer.init(self.arena.allocator(), self.context, path) catch |err| {
+        self.report("Couldn't scan module at path {s}.", .{path}, self.context.getFileId(path),
+            if (ast.expressions.items(.type)[ast.extra[stmt]] == .Identifier)
+                ast.expressions.items(.value)[ast.extra[stmt]]
+            else
+                ast.extra[ast.expressions.items(.value)[ast.extra[stmt]] + 1]
+        );
+
+        return err;
+    };
+
+    const moduleTokens = lexer.lex() catch |err| {
+        self.report("Couldn't scan module at path {s}.", .{path}, file.dataIndex,
+            if (ast.expressions.items(.type)[ast.extra[stmt]] == .Identifier)
+                ast.expressions.items(.value)[ast.extra[stmt]]
+            else
+                ast.extra[ast.expressions.items(.value)[ast.extra[stmt]] + 1]
+        );
+
+        return err;
+    };
+
+    var prs = Parser.init(self.arena.allocator(), self.context, moduleTokens) catch |err| {
+        self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex,
+            if (ast.expressions.items(.type)[ast.extra[stmt]] == .Identifier)
+                ast.expressions.items(.value)[ast.extra[stmt]]
+            else
+                ast.extra[ast.expressions.items(.value)[ast.extra[stmt]] + 1]
+        );
+
+        return err;
+    };
+
+    const imported = prs.parse() catch |err| {
+        self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex,
+            if (ast.expressions.items(.type)[ast.extra[stmt]] == .Identifier)
+                ast.expressions.items(.value)[ast.extra[stmt]]
+            else
+                ast.extra[ast.expressions.items(.value)[ast.extra[stmt]] + 1]
+        );
+
+        return err;
+    };
+
+    return self.prepassImpl(self.context.getAST(imported), module);
+}
+
+fn prepassVariableDef(
+    self: *Prepass,
+    ast: *const Parser.AST,
+    tokens: *const Lexer.TokenList.Slice,
+    file: *Module,
+    stmt: defines.OpaquePtr,
+) Error!void {
+    const signature = ast.extra[stmt];
+
+    const sig = ast.signatures.get(signature);
+    const sigName = tokens.get(sig.name).lexeme(self.context, file.dataIndex);
+
+    for (Resolver.builtins) |builtin| {
+        if (std.mem.eql(u8, builtin, sigName)) {
+            self.report("Given symbol '{s}' collides with the builtin '{s}'.", .{
+                sigName, sigName,
+            }, file.dataIndex, sig.name);
+            return error.DuplicateSymbol;
+        }
+    }
+
+    const idx = file.symbols.addOne(self.arena.allocator()) catch
+        return error.AllocatorFailure;
+
+    const res = file.symbolPtrs.getOrPut(self.arena.allocator(), sigName) catch
+        return error.AllocatorFailure;
+
+    if (res.found_existing) {
+        self.report("Given symbol '{s}' collides with the previous definition of '{s}'.",
+            .{sigName, sigName},
+            file.dataIndex,
+            sig.name,
+        );
+
+        return error.DuplicateSymbol;
+    }
+
+    res.value_ptr.* = idx;
+
+    file.symbols.set(idx, .{
+        .public = sig.public,
+        .name = sig.name,
+        .value = stmt,
+        .type = sig.type,
+    });
 }
 
 fn getModulePathWithExtension(allocator: std.mem.Allocator, id: u32, ast: *const Parser.AST, context: *Context) Error![]const u8 {
@@ -429,10 +428,10 @@ fn report(self: *Prepass, comptime fmt: []const u8, args: anytype, file: u32, to
         const t_idx = token orelse 0;
         if (t_idx < self.context.getTokens(self.context.getAST(file).tokens).len) {
             const position = self.context.getTokens(self.context.getAST(file).tokens).get(t_idx).position(self.context, file);
-            common.log.err(("." ** 4) ++ " In {s} {d}:{d}", .{self.context.getFileName(file), position.line, position.column});
+            common.log.err(("." ** 4) ++ " In {s} {d}:{d}\n", .{self.context.getFileName(file), position.line, position.column});
             return;
         }
     }
     
-    common.log.err(("." ** 4) ++ " In {s} (no location available)", .{self.context.getFileName(file)});
+    common.log.err(("." ** 4) ++ " In {s} (no location available)\n", .{self.context.getFileName(file)});
 }

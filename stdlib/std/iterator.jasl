@@ -202,7 +202,8 @@ pub let Iterator = fn (T: type) -> type {
                     let withParams: [With.len + 1]type = undefined;
                     withParams[0] = *mut Iter;
 
-                    let i: mut u32, j: mut u32 = (1, 0);
+                    let i: mut u32 = 1;
+                    let j: mut u32 = 0;
                     while i < withParams.len and j < typeInfo.fields.len {
                         defer j = j + 1;
                         let field = typeInfo.fields[j];
@@ -323,10 +324,10 @@ pub let Iterator = fn (T: type) -> type {
                 };
             };
 
-            pub let Implement = fn (For: type) -> (
-                *fn (*Trait(For), *fn type -> type) -> any,
-                *fn (*Trait(For), *fn type -> type) -> any,
-            ) {
+            pub let Implement = fn (For: type) -> struct {
+                pub pipe: *fn (*Trait(For), *fn type -> type) -> any,
+                pub terminate: *fn (*Trait(For), *fn type -> type) -> any,
+            } {
                 return (
                     fn (self: *For, Generator: *fn type -> type)
                         -> Iterator(Extract(Generator(For), @Of))::HigherOrder::Trait(Generator(For)) {
@@ -420,11 +421,10 @@ pub let Map = fn (To: type) -> *fn (type) -> type {
                 return self.inner.eos();
             };
 
-            pub let iterator, pipe, terminate, wrap = (
-                Iter::Interface::Implement(Self),
-                Iter::Pipeline::Implement(Self),
-                Iter::HigherOrder::Implement(Self),
-            );
+            pub let iterator = Iter::Interface::Implement(Self);
+            pub let pipe = Iter::Pipeline::Implement(Self).pipe;
+            pub let terminate = Iter::Pipeline::Implement(Self).terminate;
+            pub let wrap = Iter::HigherOrder::Implement(Self);
 
             pub let with = fn (self: *mut Self, func: *fn (From) -> To) -> *mut Self {
                 self.func = func;
@@ -478,11 +478,10 @@ pub let Filter = fn (Over: type) -> type {
             return self.peek().none();
         };
 
-        pub let iterator, pipe, terminate, wrap = (
-            Iterator(Of)::Interface::Implement(Self),
-            Iterator(Of)::Pipeline::Implement(Self),
-            Iterator(Of)::HigherOrder::Implement(Self),
-        );
+        pub let iterator = Iterator(Of)::Interface::Implement(Self);
+        pub let pipe = Iterator(Of)::Pipeline::Implement(Self).pipe;
+        pub let terminate = Iterator(Of)::Pipeline::Implement(Self).terminate;
+        pub let wrap = Iterator(Of)::HigherOrder::Implement(Self);
 
         pub let with = fn (self: *mut Self, func: *fn (Of) -> bool) -> *mut Self {
             self.func = func;
@@ -512,11 +511,10 @@ pub let Take = fn (Over: type) -> type {
         pub let eos = fn (self: *mut Self) -> bool {
         };
 
-        pub let iterator, pipe, terminate, wrap = (
-            Iterator(Of)::Interface::Implement(Self),
-            Iterator(Of)::Pipeline::Implement(Self),
-            Iterator(Of)::HigherOrder::Implement(Self),
-        );
+        pub let iterator = Iterator(Of)::Interface::Implement(Self);
+        pub let pipe = Iterator(Of)::Pipeline::Implement(Self).pipe;
+        pub let terminate = Iterator(Of)::Pipeline::Implement(Self).terminate;
+        pub let wrap = Iterator(Of)::HigherOrder::Implement(Self);
 
         pub let with = fn (self: *mut Self, func: *fn (Of) -> bool) -> *mut Self {
             self.func = func;
@@ -770,10 +768,8 @@ pub let Range = fn (T: type) -> type {
             };
         };
 
-        pub let iterator, pipe = (
-            Iterator(Of)::Interface::Implement(Self),
-            Iterator(Of)::Pipeline::Implement(Self),
-        );
+        pub let iterator = Iterator(Of)::Interface::Implement(Self);
+        pub let pipe = Iterator(Of)::Pipeline::Implement(Self).pipe;
     };
 };
 
@@ -805,10 +801,8 @@ pub let Repeat = struct {
         return self.times <= 0;
     };
 
-    pub let iterator, pipe = (
-        Iterator(Of)::Interface::Implement(Self),
-        Iterator(Of)::Pipeline::Implement(Self),
-    );
+    pub let iterator = Iterator(Of)::Interface::Implement(Self);
+    pub let pipe = Iterator(Of)::Pipeline::Implement(Self).pipe;
 };
 
 pub let Loop = struct {
@@ -829,10 +823,8 @@ pub let Loop = struct {
         return false;
     };
 
-    pub let iterator, pipe = (
-        Iterator(Of)::Interface::Implement(Self),
-        Iterator(Of)::Pipeline::Implement(Self),
-    );
+    pub let iterator = Iterator(Of)::Interface::Implement(Self);
+    pub let pipe = Iterator(Of)::Pipeline::Implement(Self).pipe;
 };
 
 pub let Slice = fn (P: type) -> type {
@@ -863,9 +855,7 @@ pub let Slice = fn (P: type) -> type {
             return self.items.len == 0;
         };
 
-        pub let iterator, pipe = (
-            Iterator(Of)::Interface::Implement(Self),
-            Iterator(Of)::Pipeline::Implement(Self),
-        );
+        pub let iterator = Iterator(Of)::Interface::Implement(Self);
+        pub let pipe = Iterator(Of)::Pipeline::Implement(Self).pipe;
     };
 };

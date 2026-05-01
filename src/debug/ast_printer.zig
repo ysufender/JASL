@@ -2,6 +2,7 @@ const std = @import("std");
 const common = @import("../core/common.zig");
 const defines = @import("../core/defines.zig");
 const parser = @import("../parser/parser.zig");
+const ModuleList = @import("../parser/prepass.zig").ModuleList;
 
 const AST = parser.AST;
 const Expression = parser.Expression;
@@ -9,19 +10,22 @@ const Statement = parser.Statement;
 
 const Error = common.CompilerError;
 
-pub fn printAST(ast: *const AST, context: *common.CompilerContext) void {
-    var ctx = PrintContext{
-        .ast = ast,
-        .tokens = context.getTokens(ast.tokens),
-        .context = context,
-        .file = ast.tokens,
-    };
-    for (ast.statementMask) |si| {
-        ctx.printStmt(@intCast(si), 0);
+pub fn printAST(context: *common.CompilerContext, modules: *const ModuleList) void {
+    var it = modules.modules.iterator();
+    while (it.next()) |module| {
+        var ctx = PrintContext{
+            .ast = context.getAST(module.dataIndex),
+            .tokens = context.getTokens(module.dataIndex),
+            .context = context,
+            .file = module.dataIndex,
+        };
+        for (ctx.ast.statementMask) |si| {
+            ctx.printStmt(@intCast(si), 0);
+        }
     }
 }
 
-const PrintContext = struct {
+pub const PrintContext = struct {
     ast: *const AST,
     tokens: *const @TypeOf(@as(*common.CompilerContext, undefined).getTokens(0).*),
     context: *common.CompilerContext,
@@ -46,7 +50,7 @@ const PrintContext = struct {
         return self.tokens.get(ptr).lexeme(self.context, self.file);
     }
 
-    fn printStmt(self: *PrintContext, si: defines.StatementPtr, depth: u32) void {
+    pub fn printStmt(self: *PrintContext, si: defines.StatementPtr, depth: u32) void {
         const stmts = self.ast.statements;
         const stype = stmts.items(.type)[si];
         const val   = stmts.items(.value)[si];
@@ -93,16 +97,12 @@ const PrintContext = struct {
 
             .VariableDefinition => {
                 const sig_start = ex[val];
-                const sig_end   = ex[val + 1];
-                const expr_idx  = ex[val + 2];
-                const is_pub = sig_end > sig_start and
-                    self.ast.signatures.items(.public)[ex[sig_start]];
-                self.print("Let{s} (\n", .{if (is_pub) " pub" else ""});
-                for (ex[sig_start..sig_end]) |raw_sig| {
-                    self.printSig(@intCast(raw_sig), depth + 1);
-                }
+                const expr_idx  = ex[val + 1];
+                const is_pub = self.ast.signatures.items(.public)[sig_start];
+                self.print("Let {s}", .{if (is_pub) "pub " else ""});
+                self.printSig(sig_start, depth);
                 self.indent(depth);
-                self.write(") = ");
+                self.write(" = ");
                 self.printExpr(@intCast(expr_idx), depth + 2);
                 self.write(";");
             },
@@ -172,7 +172,7 @@ const PrintContext = struct {
         }
     }
 
-    fn printExpr(self: *PrintContext, ei: defines.ExpressionPtr, depth: u32) void {
+    pub fn printExpr(self: *PrintContext, ei: defines.ExpressionPtr, depth: u32) void {
         const exprs = self.ast.expressions;
         const etype = exprs.items(.type)[ei];
         const val   = exprs.items(.value)[ei];
@@ -228,8 +228,9 @@ const PrintContext = struct {
             },
 
             .Scoping => {
-                self.print("Scope({s}) ", .{self.tokenLexeme(@intCast(ex[val + 1]))});
+                self.write("Scope(");
                 self.printExpr(@intCast(ex[val]), depth + 1);
+                self.print(", {s})", .{self.tokenLexeme(@intCast(ex[val + 1]))});
             },
 
             .Indexing => {
@@ -399,7 +400,6 @@ const PrintContext = struct {
         self.print("{s}", .{self.tokenLexeme(sig.name)});
         self.write(": ");
         self.printExpr(sig.type, 0);
-        self.write("\n");
     }
 
     fn printCases(

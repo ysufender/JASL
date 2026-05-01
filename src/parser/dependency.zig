@@ -124,8 +124,8 @@ pub const Graph = struct {
         };
     }
 
-    pub fn iterator(self: *const Graph, allocator: std.mem.Allocator) Error!collections.Iterator(Iterator, Node) {
-        return .init(self.nodes, allocator);
+    pub fn iterator(self: *const Graph, allocator: std.mem.Allocator) Error!Iterator {
+        return Iterator.init(self.nodes, allocator);
     }
 };
 
@@ -135,7 +135,6 @@ modules: *const ModuleList,
 context: *Context,
 arena: std.heap.ArenaAllocator,
 resolved: std.StringHashMapUnmanaged(defines.Offset),
-lock: defines.Lock,
 
 pub fn init(context: *Context, modules: *const ModuleList) Self {
     return .{
@@ -143,7 +142,6 @@ pub fn init(context: *Context, modules: *const ModuleList) Self {
         .modules = modules,
         .arena = std.heap.ArenaAllocator.init(std.heap.smp_allocator),
         .resolved = .empty,
-        .lock = .{},
     };
 }
 

@@ -48,7 +48,7 @@ pub const CompilerError = error {
     InvalidIdentifier,
     MissingModuleName,
     DuplicateSymbol,
-    MissingEntry,
+    MissingDefinition,
     NotImplemented,
     InvalidEnumeration,
     TypeMismatch,
@@ -73,5 +73,6 @@ pub const CompilerError = error {
     ArgumentCountMismatch,
     RedundantCast,
     CastOfUndefinedValue,
+    ModuleNotInScope,
     ShouldBeImpossible,
 };

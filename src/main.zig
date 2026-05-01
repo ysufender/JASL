@@ -8,7 +8,6 @@ const debug = @import("debug/debug.zig");
 const Lexer = @import("lexer/lexer.zig");
 const Parser = @import("parser/parser.zig");
 const Prepass = @import("parser/prepass.zig");
-const Dependency = @import("parser/dependency.zig");
 const Resolver = @import("typechecker/resolver.zig");
 const Typechecker = @import("typechecker/typechecker.zig");
 
@@ -66,7 +65,7 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     const modules = try prepass.prepass(allocator);
 
     if (context.settings.hasFlag("--print-ast")) {
-        debug.ASTPrinter.printAST(context.getAST(ast), &context);
+        debug.ASTPrinter.printAST(&context, &modules);
     }
 
     var resolver = try Resolver.init(allocator, &context, &modules);

@@ -46,11 +46,9 @@ pub const Declaration = struct {
     };
 
     scope: defines.ScopePtr,
-    index: defines.Offset,
     token: defines.TokenPtr,
     node: defines.StatementPtr,
     type: defines.ExpressionPtr,
-    meta: u32,
     topLevel: bool,
     kind: Kind,
     public: bool,
@@ -146,12 +144,10 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
             .kind = .Builtin,
             .scope = builtin,
             .public = true,
-            .index = @intCast(i),
             .token = 0,
             .node = @intCast(i),
             .type = @intCast(i),
             .topLevel = true,
-            .meta = 1,
         });
 
         lookup.putNoClobber(allocator, .{ .name = b, .scope = builtin }, decl)
@@ -180,11 +176,9 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
                 .kind = .Variable,
                 .public = symbol.public,
                 .token = symbol.name,
-                .index = symbol.index,
                 .node = symbol.value,
                 .type = symbol.type,
                 .topLevel = true,
-                .meta = symbol.meta,
             });
 
             lookup.putNoClobber(allocator, .{
@@ -357,10 +351,8 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                         .public = false,
                         .token = capture,
                         .node = item,
-                        .index = 0,
                         .type = 0,
                         .topLevel = false,
-                        .meta = 1,
                     });
 
                     const lexeme = tokens.get(capture).lexeme(self.context, self.dataIndex());
@@ -393,51 +385,41 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
             try self.resolveStatement(marked, topLevel);
         },
         .VariableDefinition => {
-            const signatures = defines.Range{
-                .start = ast.extra[statement.value],
-                .end = ast.extra[statement.value + 1],
-            };
+            const signature = ast.signatures.get(ast.extra[statement.value]);
+            const initializer = ast.extra[statement.value + 1];
 
-            const initializer = ast.extra[statement.value + 2];
-
-            for (0..signatures.len()) |index| {
-                const signature = ast.signatures.get(ast.extra[signatures.at(@intCast(index))]);
-
-                if (signature.type != 0) {
-                    try self.resolveExpression(signature.type);
-                }
-
-                const decl =
-                    if (topLevel) try self.look(signature.name)
-                    else try self.decls.addOne(allocator);
-
-                self.decls.set(decl, .{
-                    .kind = .Variable,
-                    .scope = self.currentScope,
-                    .public = signature.public,
-                    .index = @intCast(index),
-                    .token = signature.name,
-                    .node = initializer,
-                    .type = signature.type,
-                    .topLevel = topLevel,
-                    .meta = signatures.len(),
-                });
-
-                if (topLevel) {
-                    continue;
-                }
-
-                const name = tokens.get(signature.name).lexeme(self.context, self.dataIndex());
-                const isPresent = self.lookup.getOrPut(allocator, .{ .name = name, .scope = self.currentScope })
-                    catch return error.AllocatorFailure;
-
-                if (isPresent.found_existing) {
-                    self.report("Given symbol '{s}' collides with the previous definition of '{s}'.", .{name, name});
-                    return error.DuplicateSymbol;
-                }
-
-                isPresent.value_ptr.* = decl;
+            if (signature.type != 0) {
+                try self.resolveExpression(signature.type);
             }
+
+            const decl =
+                if (topLevel) try self.look(signature.name)
+                else try self.decls.addOne(allocator);
+
+            self.decls.set(decl, .{
+                .kind = .Variable,
+                .scope = self.currentScope,
+                .public = signature.public,
+                .token = signature.name,
+                .node = initializer,
+                .type = signature.type,
+                .topLevel = topLevel,
+            });
+
+            if (topLevel) {
+                return self.resolveExpression(initializer);
+            }
+
+            const name = tokens.get(signature.name).lexeme(self.context, self.dataIndex());
+            const isPresent = self.lookup.getOrPut(allocator, .{ .name = name, .scope = self.currentScope })
+                catch return error.AllocatorFailure;
+
+            if (isPresent.found_existing) {
+                self.report("Given symbol '{s}' collides with the previous definition of '{s}'.", .{name, name});
+                return error.DuplicateSymbol;
+            }
+
+            isPresent.value_ptr.* = decl;
 
             try self.resolveExpression(initializer);
         },
@@ -454,12 +436,10 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                 .kind = .Namespace,
                 .scope = self.currentScope,
                 .public = false,
-                .index = 0,
-                .token = if (isAlias) alias else ast.extra[statement.value + 1],
+                .token = if (isAlias) alias else ast.extra[statement.value],
                 .node = moduleID,
-                .type = 0,
+                .type = ast.extra[statement.value],
                 .topLevel = true,
-                .meta = 1,
             });
 
             const lexeme =
@@ -556,7 +536,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             };
 
             for (fields.start..fields.end) |fieldPtrPtr| {
-                if (try self.resolveSignature(ast.extra[fieldPtrPtr], @as(u32, @intCast(fieldPtrPtr)) - fields.start, .Field, .Struct)) {
+                if (try self.resolveSignature(ast.extra[fieldPtrPtr], .Field, .Struct)) {
                     const lexeme = tokens.get(ast.signatures.get(ast.extra[fieldPtrPtr]).name).lexeme(self.context, self.dataIndex());
                     self.report("Given field '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
                     return error.DuplicateSymbol;
@@ -588,7 +568,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             };
 
             for (fields.start..fields.end) |fieldPtrPtr| {
-                if (try self.resolveSignature(ast.extra[fieldPtrPtr], @as(u32, @intCast(fieldPtrPtr)) - fields.start, .Field, .Enum)) {
+                if (try self.resolveSignature(ast.extra[fieldPtrPtr], .Field, .Enum)) {
                     const lexeme = tokens.get(ast.signatures.get(ast.extra[fieldPtrPtr]).name).lexeme(self.context, self.dataIndex());
                     self.report("Given field '{s}' is already present in the enum body.", .{lexeme});
                     return error.DuplicateSymbol;
@@ -632,7 +612,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             };
 
             for (fields.start..fields.end) |fieldPtrPtr| {
-                if (try self.resolveSignature(ast.extra[fieldPtrPtr], @as(u32, @intCast(fieldPtrPtr)) - fields.start, .Field, .Union)) {
+                if (try self.resolveSignature(ast.extra[fieldPtrPtr], .Field, .Union)) {
                     const lexeme = tokens.get(ast.signatures.get(ast.extra[fieldPtrPtr]).name).lexeme(self.context, self.dataIndex());
                     self.report("Given field '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
                     return error.DuplicateSymbol;
@@ -658,7 +638,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
 
             for (params.start..params.end) |paramPtrPtr| {
                 const lexeme = tokens.get(ast.signatures.get(ast.extra[paramPtrPtr]).name).lexeme(self.context, self.dataIndex());
-                if (try self.resolveSignature(ast.extra[paramPtrPtr], @as(u32, @intCast(paramPtrPtr)) - params.start, .Parameter, .Block)) {
+                if (try self.resolveSignature(ast.extra[paramPtrPtr], .Parameter, .Block)) {
                     self.report("Duplicate parameter name '{s}'.", .{lexeme});
                     return error.DuplicateSymbol;
                 }
@@ -709,12 +689,10 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                     .kind = .Parameter,
                     .scope = self.currentScope,
                     .public = false,
-                    .index = @as(u32, @intCast(capturePtrPtr)) - captures.start,
                     .token = name,
                     .node = name,
                     .type = 0,
                     .topLevel = false,
-                    .meta = 1,
                 });
 
                 const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
@@ -785,10 +763,8 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                         .public = false,
                         .token = capture,
                         .node = item,
-                        .index = 0,
                         .type = 0,
                         .topLevel = false,
-                        .meta = 1,
                     });
 
                     const lexeme = tokens.get(capture).lexeme(self.context, self.dataIndex());
@@ -824,8 +800,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             }
 
             if (ast.expressions.items(.type)[root] != .Identifier) {
-                try self.resolveExpression(root);
-                return;
+                return self.resolveExpression(root);
             }
 
             const rootTokenPtr = ast.expressions.items(.value)[root];
@@ -849,9 +824,20 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                 const nameEnd = tokens.items(.end)[endToken];
                 const moduleName = self.context.getFile(self.dataIndex())[nameStart..nameEnd];
 
-                if (self.modules.ids.get(moduleName)) |moduleIdx| {
-                    matchedModuleIdx = moduleIdx;
-                    consumedDepth = prefixDepth;
+                 if (self.modules.ids.get(moduleName)) |moduleIdx| {
+                    const decl = self.decls.get(try self.lookName(moduleName));
+                    
+                    if (decl.node == moduleIdx) {
+                        matchedModuleIdx = moduleIdx;
+                        consumedDepth = prefixDepth;
+                    }
+                    else {
+                        self.report("Ambiguous aliasing of module '{s}' to '{s}'", .{
+                            self.getModuleName(decl.type),
+                            moduleName,
+                        });
+                        return error.ModuleNotInScope;
+                    }
                 }
             }
 
@@ -863,20 +849,20 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                     .kind = .Namespace,
                     .scope = self.currentScope,
                     .public = false,
-                    .index = 0,
                     .token = rootTokenPtr,
                     .node = moduleIdx,
                     .type = 0,
                     .topLevel = false,
-                    .meta = 1,
                 });
                 currentDecl = d;
-            } else {
+            }
+            else {
                 currentDecl = self.look(rootTokenPtr) catch return error.InvalidIdentifier;
                 consumedDepth = 0;
             }
 
             var depth: u32 = chainLen - consumedDepth;
+            var currentExprPtr = exprPtr;
             while (depth > 0) {
                 depth -= 1;
 
@@ -892,7 +878,13 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                 if (self.decls.items(.kind)[currentDecl] == .Namespace) {
                     const targetScope = self.decls.items(.node)[currentDecl];
                     currentDecl = self.lookAt(member, targetScope) catch return;
-                } else return;
+                    currentExprPtr = cur;
+                }
+                else {
+                    self.resolved.putNoClobber(allocator, .{ .file = self.dataIndex(), .expr = currentExprPtr }, currentDecl)
+                        catch return error.AllocatorFailure;
+                    return;
+                }
             }
 
             self.resolved.putNoClobber(allocator, .{ .file = self.dataIndex(), .expr = exprPtr }, currentDecl)
@@ -913,7 +905,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
     }
 }
 
-fn resolveSignature(self: *Resolver, signaturePtr: defines.SignaturePtr, index: defines.Offset, comptime signatureType: Declaration.Kind, comptime bodyType: Scope.Kind) Error!bool {
+fn resolveSignature(self: *Resolver, signaturePtr: defines.SignaturePtr, comptime signatureType: Declaration.Kind, comptime bodyType: Scope.Kind) Error!bool {
     const allocator = self.arena.allocator();
     const ast = self.context.getAST(self.dataIndex());
     const tokens = self.context.getTokens(self.dataIndex());
@@ -948,12 +940,10 @@ fn resolveSignature(self: *Resolver, signaturePtr: defines.SignaturePtr, index: 
                     .kind = t,
                     .scope = self.currentScope,
                     .public = field.public,
-                    .index = index,
                     .token = field.name,
                     .node = field.type,
                     .type = field.type,
                     .topLevel = false,
-                    .meta = 1,
                 });
 
                 const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
@@ -979,40 +969,32 @@ fn prepassScope(self: *Resolver, declarations: defines.Range) Error!void {
     for (declarations.start..declarations.end) |declarationPtrPtr| {
         const expr = ast.statements.items(.value)[ast.extra[declarationPtrPtr]];
 
-        const signatures = defines.Range{
-            .start = ast.extra[expr],
-            .end = ast.extra[expr + 1],
-        };
+        const signature = ast.extra[expr];
         
-        for (0..signatures.len()) |index| {
-            const signaturePtrPtr = signatures.at(@intCast(index));
-            const field = ast.signatures.items(.name)[ast.extra[signaturePtrPtr]];
-            self.lastToken = field;
-            const lexeme = tokens.get(field).lexeme(self.context, self.dataIndex());
+        const field = ast.signatures.items(.name)[signature];
+        self.lastToken = field;
+        const lexeme = tokens.get(field).lexeme(self.context, self.dataIndex());
 
-            const decl = try self.decls.addOne(allocator);
-            self.decls.set(decl, .{
-                .kind = .Variable,
-                .scope = self.currentScope,
-                .public = false,
-                .index = @intCast(index),
-                .token = field,
-                .node = ast.extra[expr + 2],
-                .type = ast.signatures.items(.type)[ast.extra[signaturePtrPtr]],
-                .topLevel = true,
-                .meta = signatures.len(),
-            });
+        const decl = try self.decls.addOne(allocator);
+        self.decls.set(decl, .{
+            .kind = .Variable,
+            .scope = self.currentScope,
+            .public = false,
+            .token = field,
+            .node = ast.extra[expr + 1],
+            .type = ast.signatures.items(.type)[signature],
+            .topLevel = true,
+        });
 
-            const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
-                catch return error.AllocatorFailure;
+        const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
+            catch return error.AllocatorFailure;
 
-            if (isPresent.found_existing) {
-                self.report("Given field '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
-                return error.DuplicateSymbol;
-            }
-
-            isPresent.value_ptr.* = decl;
+        if (isPresent.found_existing) {
+            self.report("Given definition '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
+            return error.DuplicateSymbol;
         }
+
+        isPresent.value_ptr.* = decl;
     }
 }
 
@@ -1024,35 +1006,27 @@ fn handleScopeDefs(self: *Resolver, declarations: defines.Range) Error!void {
     for (declarations.start..declarations.end) |declPtrPtr| {
         const def = ast.statements.items(.value)[ast.extra[declPtrPtr]];
 
-        const signatures = defines.Range{
-            .start = ast.extra[def],
-            .end = ast.extra[def + 1],
-        };
-        const initializer = ast.extra[def + 2];
+        const signature = ast.extra[def]; 
+        const initializer = ast.extra[def + 1];
 
-        for (0..signatures.len()) |index| {
-            const signaturePtrPtr = signatures.at(@intCast(index));
-            const signaturePtr = ast.extra[signaturePtrPtr];
-            const field = ast.signatures.get(signaturePtr);
-            self.lastToken = field.name;
+        const field = ast.signatures.get(signature);
+        self.lastToken = field.name;
 
-            if (field.type != 0) {
-                try self.resolveExpression(field.type);
-            }
-
-            const decl = try self.look(field.name);
-            self.decls.set(decl, .{
-                .kind = .Variable,
-                .scope = self.currentScope,
-                .public = field.public,
-                .token = field.name,
-                .node = initializer,
-                .index = @intCast(index),
-                .type = field.type,
-                .topLevel = true,
-                .meta = signatures.len(),
-            });
+        if (field.type != 0) {
+            try self.resolveExpression(field.type);
         }
+
+        const decl = try self.look(field.name);
+        self.decls.set(decl, .{
+            .kind = .Variable,
+            .scope = self.currentScope,
+            .public = field.public,
+            .token = field.name,
+            .node = initializer,
+            .type = field.type,
+            .topLevel = true,
+        });
+        
 
         try self.resolveExpression(initializer);
     }

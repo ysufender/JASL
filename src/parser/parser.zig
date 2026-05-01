@@ -532,26 +532,14 @@ fn continueStatement(self: *Parser) StatementResult {
 }
 
 fn variable(self: *Parser, public: bool) StatementResult {
-    const sigsStart = self.scratch.items.len;
-    while (!self.check(.Equal)) {
-        self.scratch.append(self.allocator(), try self.variableSignature(public, false)) catch return error.AllocatorFailure;
-        if (!self.match(&.{.Comma})) break;
-    }
-
-    if (sigsStart == self.scratch.items.len) {
-        self.report("Expected variable signature(s) after 'let'.", .{});
-        return error.MissingIdentifier;
-    }
-
-    const signatures = try self.commitScratch(sigsStart);
+    const signature = try self.variableSignature(public, false);
 
     _ = try self.consume(.Equal, error.MissingAssignment, "Expected assignment in variable definition.");
     const expr = try self.ifExpression();
     _ = try self.consume(.Semicolon, error.MissingSemicolon, "Expected semicolon after statement.");
 
     const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-    self.extra.append(self.allocator(), signatures.start) catch return error.AllocatorFailure;
-    self.extra.append(self.allocator(), signatures.end) catch return error.AllocatorFailure;
+    self.extra.append(self.allocator(), signature) catch return error.AllocatorFailure;
     self.extra.append(self.allocator(), expr) catch return error.AllocatorFailure;
 
     const result = try self.alloc(Statement);

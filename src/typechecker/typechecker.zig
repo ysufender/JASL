@@ -127,8 +127,6 @@ currentFile: defines.FilePtr,
 lastToken: defines.TokenPtr,
 callstack: Callstack,
 
-scratch: std.ArrayList(TypeID),
-
 anonymousMap: AnonMap,
 
 pub fn init(
@@ -170,7 +168,6 @@ pub fn init(
         .typeMap = typeMap,
         .metadata = metadata,
         .lookup = lookup,
-        .scratch = std.ArrayList(TypeID).initCapacity(allocator, 128) catch return error.AllocatorFailure,
         .anonymousMap = AnonMap.initEmpty(arena.allocator(), typeMap.capacity()) catch return error.AllocatorFailure,
         .constants = .{
             .all = try Constants.List.init(allocator, total * 2),
@@ -194,7 +191,7 @@ pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
     
     if (!self.modules.getItem("root", .symbolPtrs).contains("main")) {
         self.report("Couldn't find an entry point in the root module.", .{});
-        return error.MissingEntry;
+        return error.MissingDefinition;
     }
 
     defer self.arena.deinit();
@@ -224,8 +221,8 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
 
     const initializer =
         if (
-            decl.topLevel or
-            expected == Comptime.Builtin.Type("type")
+            decl.topLevel
+            or expected == Comptime.Builtin.Type("type")
         )
             try self.typecheckValue(try self.executer.eval(decl.node, expected), expected)
         else
@@ -245,24 +242,30 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
         };
 
     blk: switch (self.typeTable.get(initializer)) {
-        .Union, .Enum, .Struct => {
-            if (self.anonymousMap.isSet(initializer)) {
+        .Type => {
+            const newType = (try self.executer.eval(decl.node, expected)).Type;
+            switch (self.typeTable.get(newType)) {
+                .Union, .Enum, .Struct => { },
+                else => break :blk,
+            }
+
+            if (self.anonymousMap.isSet(newType)) {
                 break :blk;
             }
 
-            self.anonymousMap.set(initializer);
+            self.anonymousMap.set(newType);
 
             const ast = self.context.getAST(self.currentFile);
             const tokens = self.context.getTokens(ast.tokens);
 
             const symName = tokens.get(decl.token).lexeme(self.context, self.currentFile);
-            const namespace = self.modules.modules.get(self.currentFile).name;
+            const namespace = self.modules.modules.get(self.modules.modules.len - self.currentFile - 1).name;
             const newName = std.fmt.allocPrint(self.arena.allocator(), "{s}::{s}", .{
                 namespace,
                 symName,
             }) catch return error.AllocatorFailure;
 
-            self.typeTable.set(initializer, switch (self.typeTable.get(initializer)) {
+            self.typeTable.set(newType, switch (self.typeTable.get(newType)) {
                 .Struct => |str| .{
                     .Struct = .{
                         .mutable = str.mutable,
@@ -308,7 +311,6 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
                 else => unreachable,
             });
         },
-
         else => { },
     }
 
@@ -317,11 +319,13 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
 
 pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.ExpressionPtr, maybeExpected: ?TypeID) Error!TypeID {
     const ast = self.context.getAST(self.currentFile);
-    const tokens = self.context.getTokens(ast.tokens);
-    _ = tokens;
 
     if (self.executer.attemptEval(expressionPtr, maybeExpected)) |result| {
         return self.typecheckValue(result, maybeExpected);
+    }
+
+    if (self.symbols.resolutionMap.get(.{ .file = self.currentFile, .expr = expressionPtr })) |found| {
+        return self.typecheckDecl(found, null);
     }
 
     const expr = ast.expressions.get(expressionPtr);
@@ -332,6 +336,8 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
             return self.typecheckDecl(decl, maybeExpected);
         },
         .Indexing => self.typecheckIndexing(expr.value),
+        .Call => self.typecheckCall(expr.value, maybeExpected),
+        .Scoping => self.typecheckScoping(expr.value),
         else => |t| {
             self.report("Unable to typecheck expression '{s}'.", .{@tagName(t)});
             return error.TypecheckingFailure;
@@ -350,14 +356,7 @@ pub fn typecheckValue(self: *Typechecker, val: Comptime.Value, maybeExpected: ?T
         .Float => self.infer(expected, Comptime.Builtin.Type("comptime_float"))
             catch Comptime.Builtin.Type("comptime_float"),
         .Bool => Comptime.Builtin.Type("bool"),
-        .Enum => |enumeration| switch (enumeration) {
-            .Literal => {
-                // TODO:
-                self.report("Enum literal inference is not (yet) supported.", .{});
-                return error.NotImplemented;
-            },
-            .Type => |enumType| enumType.Type,
-        },
+        .Enum => |enumeration| enumeration.Type,
         .Union => |uni| uni.Type,
         .Struct => |str| str.Type,
         .Type => Comptime.Builtin.Type("type"),
@@ -369,28 +368,222 @@ pub fn typecheckValue(self: *Typechecker, val: Comptime.Value, maybeExpected: ?T
     };
 }
 
+pub fn typecheckScoping(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!TypeID {
+    const ast = self.context.getAST(self.currentFile);
+    const tokens = self.context.getTokens(ast.tokens);
+
+    const lhsTypePtr =
+        if (self.executer.attemptEval(ast.extra[extraPtr], Comptime.Builtin.Type("type"))) |res| switch (res) {
+            .Type => |t| t,
+            else => |wrong| {
+                self.report("Attempt to scope a non-scoped expression of type '{s}'.", .{
+                    self.typeName(self.arena.allocator(), try self.typecheckValue(wrong, null)),
+                });
+                return error.UnexpectedNonTypeExpression;
+            },
+        }
+        else {
+            self.report("Expected a comptime-known expression on the left hand side of scoping.", .{});
+            return error.ComptimeNotPossible;
+        };
+    const lhsType = self.typeTable.get(lhsTypePtr);
+
+    const member = tokens.get(ast.extra[extraPtr + 1]).lexeme(self.context, self.currentFile);
+
+    return ret: switch (lhsType) {
+        .Enum => |enm| {
+            for (enm.fields) |field| {
+                if (std.mem.eql(u8, field, member)) {
+                    break :ret lhsTypePtr;
+                }
+            }
+
+            self.report("Couldn't find definition '{s}' in type '{s}'.", .{
+                member,
+                enm.name,
+            });
+            break :ret error.MissingDefinition;
+        },
+        else => error.NotImplemented,
+    };
+}
+
+pub fn typecheckCall(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
+    const ast = self.context.getAST(self.currentFile);
+
+    if (ast.expressions.items(.type)[ast.extra[extraPtr]] == .Identifier) {
+        if (self.symbols.resolutionMap.get(.{
+            .file = self.currentFile,
+            .expr = ast.extra[extraPtr], 
+        })) |builtinPtr| {
+            return self.typecheckBuiltinCall(extraPtr, builtinPtr, maybeExpected);
+        }
+    }
+
+    const func = switch (self.typeTable.get(try self.typecheckExpression(ast.extra[extraPtr], null))) {
+        .Function => |func| func,
+        else => {
+            self.report("Attemp to call non-function type '{s}'.", .{
+                self.typeName(self.arena.allocator(), try self.typecheckExpression(ast.extra[extraPtr], null)),
+            });
+            return error.IllegalSyntax;
+        },
+    };
+
+    const exprList = ast.expressions.items(.value)[ast.extra[extraPtr + 1]];
+    const args = ast.extra[
+        ast.extra[exprList]
+        ..
+        ast.extra[exprList + 1]
+    ];
+
+    if (args.len != func.argTypes.len) {
+        self.report("Mismatching argument counts in function call. Expected {d}, received {d}.", .{
+            func.argTypes.len,
+            args.len,
+        });
+        return error.ArgumentCountMismatch;
+    }
+
+    for (func.argTypes, args, 0..) |arg, expr, index| {
+        const exprType = try self.typecheckExpression(expr, arg);
+
+        if (exprType != arg) {
+            self.report(
+                "Argument type mismatch in function call."
+                ++ " In argument {d}: expected {s}, received {s}", .{
+                index,
+                self.typeName(self.arena.allocator(), arg),
+                self.typeName(self.arena.allocator(), exprType),
+            });
+            return error.TypeMismatch;
+        }
+    }
+
+    return func.returnType;
+}
+
+pub fn typecheckBuiltinCall(self: *Typechecker, extraPtr: defines.ExpressionPtr, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!TypeID {
+    const BI = Resolver.BuiltinIndex;
+
+    return switch (declPtr) {
+        BI("cast") => self.typecheckCast(extraPtr, maybeExpected),
+        BI("as") => self.typecheckTypeForwarding(extraPtr, maybeExpected),
+        BI("typeOf") => (try self.executer.evalTypeOf(extraPtr)).Type,
+        else => {
+            self.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[declPtr]});
+            return error.ComptimeNotPossible;
+        },
+    };
+}
+
+pub fn typecheckCast(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
+    const targetType =
+        if (maybeExpected) |target| target
+        else {
+            self.report("Casting requires a known target type.", .{});
+            return error.InferenceError;
+        };
+
+    const ast = self.context.getAST(self.currentFile);
+
+    const expressionList = ast.expressions.items(.value)[ast.extra[extraPtr + 1]];
+    const thingToCastRange = defines.Range{
+        .start = ast.extra[expressionList],
+        .end = ast.extra[expressionList + 1],
+    };
+
+    if (thingToCastRange.len() != 1) {
+        self.report("Multi-value type casting is not supported.", .{});
+        return error.NotImplemented;
+    }
+
+    const thingToCastType = try self.typecheckExpression(ast.extra[thingToCastRange.at(0)], null);
+
+    self.assertCastable(thingToCastType, targetType) catch |err| {
+        const rargs = .{
+            self.typeName(self.arena.allocator(), thingToCastType),
+            self.typeName(self.arena.allocator(), targetType),
+        };
+
+        switch (err) {
+            error.IncompatibleTypes => self.report("Given type '{s}' can't be cast to '{s}'.", rargs),
+            error.SizeMismatch => self.report("Type '{s}' is too big for being cast to '{s}'.", rargs),
+            error.MutabilityViolation => self.report("Cast from '{s}' to '{s}' ignores mutability specifiers.", rargs),
+            error.PointerSizeMismatch => self.report("Illegal cast from unknown sized '{s}' to sized '{s}'.", rargs),
+            error.StructuralMismatch => self.report("Illegal cast from structurally incompatible '{s}' to '{s}'", rargs),
+            error.MismatchingSliceChildType => self.report("Cast from slice type '{s}' to '{s}' will alter the length of the slice.", rargs),
+            error.InferenceError => self.report("Illegal cast from '{s}' to unknown type '{s}'.", rargs),
+            error.RedundantCast => self.report("Unnecessary cast from type '{s}' to '{s}'.", rargs),
+            else => return error.ShouldBeImpossible,
+        }
+
+        return err;
+    };
+
+    return targetType;
+}
+
+pub fn typecheckTypeForwarding(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
+    if (maybeExpected) |expected| {
+        if (!self.castable(Comptime.Builtin.Type("any"), expected)) {
+            self.report("Reduntant type forwarding in already inferable context.", .{ });
+            return error.RedundantTypeForwarding;
+        }
+    }
+
+    const ast = self.context.getAST(self.currentFile);
+
+    const expressionList = ast.expressions.items(.value)[ast.extra[extraPtr + 1]];
+    const args = defines.Range{
+        .start = ast.extra[expressionList],
+        .end = ast.extra[expressionList + 1],
+    };
+
+    if (args.len() != 2) {
+        self.report("Expected 2 arguments, received {d}.", .{
+            args.len(),
+        });
+        return error.ArgumentCountMismatch;
+    }
+
+    const typeToForward = try self.expectType(ast.extra[args.at(0)]);
+    const res = try self.typecheckExpression(ast.extra[args.at(1)], typeToForward);
+
+    if (res != typeToForward) {
+        self.report("Expected en expression of type '{s}' here.", .{
+            self.typeName(self.arena.allocator(), typeToForward),
+        });
+        return error.TypeMismatch;
+    }
+
+    return res;
+}
+
 pub fn typecheckIndexing(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!TypeID {
     _ = self;
     _ = extraPtr;
     return error.NotImplemented;
 }
 
-pub fn typecheckCasting(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
-    _ = self;
-    _ = extraPtr;
-    _ = maybeExpected;
-    return error.NotImplemented;
-}
-
 pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!TypeID {
     const allocator = self.arena.allocator();
 
-    const ast = self.context.getAST(self.currentFile);
-    const tokens = self.context.getTokens(ast.tokens);
-
     const decl = self.symbols.declarations.get(declPtr);
 
+    const prevToken = self.lastToken;
+    const prevFile = self.currentFile;
+    if (decl.kind != .Builtin) {
+        self.currentFile = self.modules.modules.items(.dataIndex)[self.symbols.scopes.items(.module)[decl.scope]];
+        self.lastToken = decl.token;
+    }
+    defer self.lastToken = prevToken;
+    defer self.currentFile = prevFile;
+
     const isPresent = self.lookup.getOrPut(allocator, declPtr) catch return error.AllocatorFailure;
+
+    const ast = self.context.getAST(self.currentFile);
+    const tokens = self.context.getTokens(ast.tokens);
 
     if (isPresent.found_existing) {
         switch (isPresent.value_ptr.status) {
@@ -412,15 +605,9 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
         .types = 0,
     };
 
-    const prev = self.lastToken;
-    if (decl.kind != .Builtin) {
-        self.lastToken = decl.token;
-    }
-    defer self.lastToken = prev;
-
     self.callstack.push(declPtr);
 
-    const types = switch (decl.kind) {
+    const types = try switch (decl.kind) {
         .Builtin =>
             if (Comptime.Builtin.isBuiltinType(decl.type)) Comptime.Builtin.Type("type")
             else switch (decl.type) {
@@ -435,7 +622,7 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
                     return error.NotImplemented;
                 },
             },
-        .Variable => try self.typecheckVariable(&decl),
+        .Variable => self.typecheckVariable(&decl),
         else => {
             self.report("{s} is not implemented.", .{@tagName(decl.kind)});
             return error.NotImplemented;
@@ -522,6 +709,8 @@ pub fn assertCastable(self: *Typechecker, from: TypeID, to: TypeID) Error!void {
             .Integer => |int| try functional.throwIf(int.size <= 0, error.SizeMismatch),
             else => return error.IncompatibleTypes,
         },
+        .ComptimeInt => try functional.throwIf(!self.isInt(to), error.IncompatibleTypes),
+        .ComptimeFloat => try functional.throwIf(!self.isFloat(to), error.IncompatibleTypes),
         .Integer => |fromInt| switch (toType) {
             .Integer => |toInt| try functional.throwIf(!toInt.canContain(fromInt), error.SizeMismatch),
             .Float => try functional.throwIf(
@@ -547,9 +736,10 @@ pub fn assertCastable(self: *Typechecker, from: TypeID, to: TypeID) Error!void {
             .Function => { },
             else => return error.IncompatibleTypes,
         },
-        .Any, .Type, .ComptimeFloat,
-        .ComptimeInt, .EnumLiteral,
-        .Noreturn, .Array, .Void => return error.IncompatibleTypes,
+        .EnumLiteral => return error.ShouldBeImpossible,
+        .Any, .Type,
+        .Noreturn, .Array,
+        .Void => return error.IncompatibleTypes,
     }
 }
 
@@ -954,20 +1144,4 @@ pub fn extendExtra(self: *Typechecker, size: usize) common.CompilerError!TypeID 
         .start = start,
         .end = @intCast(self.extra.items.len),
     };
-}
-
-pub fn commitFromSlice(self: *Typechecker, items: []const defines.OpaquePtr) common.CompilerError!TypeID {
-    const allocator = self.arena.allocator();
-    const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-    self.extra.appendSlice(allocator, items) catch return error.AllocatorFailure;
-    return .{
-        .start = start,
-        .end = @intCast(self.extra.items.len)
-    };
-}
-
-pub fn commitScratch(self: *Typechecker, scratchStart: usize) common.CompilerError!TypeID {
-    const span = try self.commitFromSlice(self.scratch.items[scratchStart..]);
-    self.scratch.shrinkRetainingCapacity(@intCast(scratchStart));
-    return span;
 }
