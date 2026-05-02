@@ -10,6 +10,7 @@ const Parser = @import("../parser/parser.zig");
 const Comptime = @import("comptime.zig");
 const Resolver = @import("resolver.zig");
 const ModuleList = @import("../parser/prepass.zig").ModuleList;
+const Lexer = @import("../lexer/lexer.zig");
 const TypeInfo = Types.TypeInfo;
 const TypeID = Types.TypeID;
 const MultiArrayList = std.MultiArrayList;
@@ -86,14 +87,14 @@ pub const Constants = struct {
     bools: Bool,
     aggs: Aggregate,
 
-    pub fn slice(self: *const Constants) Slice {
+    pub fn slice(typechecker: *const Constants) Slice {
         return .{
-            .all = self.all.slice(),
-            .ints = self.ints.items,
-            .floats = self.floats.items,
-            .strings = self.strings.items,
-            .bools = self.bools.items,
-            .aggs = self.aggs.items,
+            .all = typechecker.all.slice(),
+            .ints = typechecker.ints.items,
+            .floats = typechecker.floats.items,
+            .strings = typechecker.strings.items,
+            .bools = typechecker.bools.items,
+            .aggs = typechecker.aggs.items,
         };
     }
 };
@@ -103,8 +104,8 @@ pub const Resolution = struct {
     resolutionMap: ResolutionMap,
     constants: Constants.Slice,
 
-    pub fn get(self: *const Resolution, key: defines.DeclPtr) TypeID {
-        return self.resolutionMap.get(key).?;
+    pub fn get(typechecker: *const Resolution, key: defines.DeclPtr) TypeID {
+        return typechecker.resolutionMap.get(key).?;
     }
 };
 
@@ -187,86 +188,86 @@ pub fn init(
     };
 }
 
-pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
-    self.currentFile = self.modules.getItem("root", .dataIndex);
+pub fn typecheck(typechecker: *Typechecker, allocator: Allocator) Error!Resolution {
+    typechecker.currentFile = typechecker.modules.getItem("root", .dataIndex);
     
-    if (!self.modules.getItem("root", .symbolPtrs).contains("main")) {
-        self.report("Couldn't find an entry point in the root module.", .{});
+    if (!typechecker.modules.getItem("root", .symbolPtrs).contains("main")) {
+        typechecker.report("Couldn't find an entry point in the root module.", .{});
         return error.MissingDefinition;
     }
 
-    defer self.arena.deinit();
-    self.executer = try Comptime.init(self, allocator);
+    defer typechecker.arena.deinit();
+    typechecker.executer = try Comptime.init(typechecker, allocator);
 
     // TODO:                                             This part is not really nice, fix it.
-    const mainPtr = self.symbols.lookup.get(.{ .scope = self.modules.modules.len - 1, .name = "main" }).?;
-    const mainType = try self.typecheckDecl(mainPtr, null);
+    const mainPtr = typechecker.symbols.lookup.get(.{ .scope = typechecker.modules.modules.len - 1, .name = "main" }).?;
+    const mainType = try typechecker.typecheckDecl(mainPtr, null);
     if (mainType != Comptime.Builtin.Type("entry_point")) {
-        const main = self.symbols.getDecl(mainPtr);
-        self.lastToken = main.token;
-        self.report("Unexpected type of entry point 'main'. Expected '*fn void -> i32', received '{s}'", .{
-            self.typeName(allocator, mainType),
+        const main = typechecker.symbols.getDecl(mainPtr);
+        typechecker.lastToken = main.token;
+        typechecker.report("Unexpected type of entry point 'main'. Expected '*fn void -> i32', received '{s}'", .{
+            typechecker.typeName(allocator, mainType),
         });
         return error.TypeMismatch;
     }
 
     return collections.deepCopy(Resolution{
-        .types = self.typeTable.slice(), 
-        .resolutionMap = self.reso,
-        .constants = self.constants.slice(),
+        .types = typechecker.typeTable.slice(), 
+        .resolutionMap = typechecker.reso,
+        .constants = typechecker.constants.slice(),
     }, allocator);
 }
 
-pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) Error!TypeID {
-    const expected = try self.expectType(decl.type);
+pub fn typecheckVariable(typechecker: *Typechecker, decl: *const Resolver.Declaration) Error!TypeID {
+    const expected = try typechecker.expectType(decl.type);
 
     const initializer =
         if (
             decl.topLevel
             or expected == Comptime.Builtin.Type("type")
         )
-            try self.typecheckValue(try self.executer.eval(decl.node, expected), expected)
+            try typechecker.typecheckValue(try typechecker.executer.eval(decl.node, expected), expected)
         else
-            try self.typecheckExpression(decl.node, expected);
+            try typechecker.typecheckExpression(decl.node, expected);
 
     const res =
-        if (self.suitable(expected, initializer))
-            try self.infer(expected, initializer)
+        if (typechecker.suitable(expected, initializer))
+            try typechecker.infer(expected, initializer)
         else  {
-            self.report(
+            typechecker.report(
                 "Mismatching initializer type in variable definition."
                 ++ " Expected '{s}', received '{s}'.", .{
-                self.typeName(self.arena.allocator(), expected),
-                self.typeName(self.arena.allocator(), initializer),
+                typechecker.typeName(typechecker.arena.allocator(), expected),
+                typechecker.typeName(typechecker.arena.allocator(), initializer),
             });
             return error.TypeMismatch;
         };
 
-    blk: switch (self.typeTable.get(initializer)) {
+    blk: switch (typechecker.typeTable.get(initializer)) {
         .Type => {
-            const newType = (try self.executer.eval(decl.node, expected)).Type;
-            switch (self.typeTable.get(newType)) {
+            const newType = (try typechecker.executer.eval(decl.node, expected)).Type;
+            switch (typechecker.typeTable.get(newType)) {
                 .Union, .Enum, .Struct => { },
                 else => break :blk,
             }
 
-            if (self.anonymousMap.isSet(newType)) {
+            if (typechecker.anonymousMap.isSet(newType)) {
                 break :blk;
             }
 
-            self.anonymousMap.set(newType);
+            typechecker.anonymousMap.set(newType);
 
-            const ast = self.context.getAST(self.currentFile);
-            const tokens = self.context.getTokens(ast.tokens);
+            const ast = typechecker.context.getAST(typechecker.currentFile);
+            const tokens = typechecker.context.getTokens(ast.tokens);
 
-            const symName = tokens.get(decl.token).lexeme(self.context, self.currentFile);
-            const namespace = self.modules.modules.get(self.modules.modules.len - self.currentFile - 1).name;
-            const newName = std.fmt.allocPrint(self.arena.allocator(), "{s}::{s}", .{
+            const symName = tokens.get(decl.token).lexeme(typechecker.context, typechecker.currentFile);
+            const namespace = typechecker.modules.modules.get(typechecker.modules.modules.len - typechecker.currentFile - 1).name;
+            const newName = std.fmt.allocPrint(typechecker.arena.allocator(), "{s}::{s}", .{
                 namespace,
                 symName,
             }) catch return error.AllocatorFailure;
 
-            self.typeTable.set(newType, switch (self.typeTable.get(newType)) {
+            typechecker.typeTable.set(newType, switch (typechecker.typeTable.get(newType)) {
                 .Struct => |str| .{
                     .Struct = .{
                         .mutable = str.mutable,
@@ -318,39 +319,39 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
     return res;
 }
 
-pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.ExpressionPtr, maybeExpected: ?TypeID) Error!TypeID {
-    const ast = self.context.getAST(self.currentFile);
+pub fn typecheckExpression(typechecker: *Typechecker, expressionPtr: defines.ExpressionPtr, maybeExpected: ?TypeID) Error!TypeID {
+    const ast = typechecker.context.getAST(typechecker.currentFile);
 
-    if (self.executer.attemptEval(expressionPtr, maybeExpected)) |result| {
-        return self.typecheckValue(result, maybeExpected);
+    if (typechecker.executer.attemptEval(expressionPtr, maybeExpected)) |result| {
+        return typechecker.typecheckValue(result, maybeExpected);
     }
 
     const expr = ast.expressions.get(expressionPtr);
     return switch (expr.type) {
         .Identifier => {
-            self.lastToken = expr.value;
-            const decl = self.symbols.findDecl(.{ .file = self.currentFile, .expr = expressionPtr });
-            return self.typecheckDecl(decl, maybeExpected);
+            typechecker.lastToken = expr.value;
+            const decl = typechecker.symbols.findDecl(.{ .file = typechecker.currentFile, .expr = expressionPtr });
+            return typechecker.typecheckDecl(decl, maybeExpected);
         },
-        .Indexing => self.typecheckIndexing(expr.value),
-        .Call => self.typecheckCall(expr.value, maybeExpected),
-        .Scoping => self.typecheckScoping(expressionPtr),
+        .Indexing => typechecker.typecheckIndexing(expr.value),
+        .Call => typechecker.typecheckCall(expr.value, maybeExpected),
+        .Scoping => typechecker.typecheckScoping(expressionPtr),
         else => |t| {
-            self.report("Unable to typecheck expression '{s}'.", .{@tagName(t)});
+            typechecker.report("Unable to typecheck expression '{s}'.", .{@tagName(t)});
             return error.TypecheckingFailure;
         }
     };
 }
 
-pub fn typecheckValue(self: *Typechecker, val: Comptime.Value, maybeExpected: ?TypeID) Error!TypeID {
+pub fn typecheckValue(typechecker: *Typechecker, val: Comptime.Value, maybeExpected: ?TypeID) Error!TypeID {
     const expected =
         if (maybeExpected) |expected| expected
         else Comptime.Builtin.Type("any");
 
     return switch (val) {
-        .Int => self.infer(expected, Comptime.Builtin.Type("comptime_int"))
+        .Int => typechecker.infer(expected, Comptime.Builtin.Type("comptime_int"))
             catch Comptime.Builtin.Type("comptime_int"),
-        .Float => self.infer(expected, Comptime.Builtin.Type("comptime_float"))
+        .Float => typechecker.infer(expected, Comptime.Builtin.Type("comptime_float"))
             catch Comptime.Builtin.Type("comptime_float"),
         .Bool => Comptime.Builtin.Type("bool"),
         .Enum => |enumeration| enumeration.Type,
@@ -365,36 +366,37 @@ pub fn typecheckValue(self: *Typechecker, val: Comptime.Value, maybeExpected: ?T
     };
 }
 
-pub fn typecheckScoping(self: *Typechecker, expr: defines.ExpressionPtr) Error!TypeID {
-    if (self.symbols.resolutionMap.get(.{
-        .file = self.currentFile,
+pub fn typecheckScoping(typechecker: *Typechecker, expr: defines.ExpressionPtr) Error!TypeID {
+    if (typechecker.symbols.resolutionMap.get(.{
+        .file = typechecker.currentFile,
         .expr = expr,
     })) |decl| {
-        return self.typecheckDecl(decl, null);
+        return typechecker.typecheckDecl(decl, null);
     }
 
-    const ast = self.context.getAST(self.currentFile);
-    const tokens = self.context.getTokens(ast.tokens);
+    const ast = typechecker.context.getAST(typechecker.currentFile);
+    const tokens = typechecker.context.getTokens(ast.tokens);
 
     const extraPtr: defines.OpaquePtr = ast.expressions.items(.value)[expr];
 
     const lhsTypePtr =
-        if (self.executer.attemptEval(ast.extra[extraPtr], Comptime.Builtin.Type("type"))) |res| switch (res) {
-            .Type => |t| t,
-            else => |wrong| {
-                self.report("Attempt to scope a non-scoped expression of type '{s}'.", .{
-                    self.typeName(self.arena.allocator(), try self.typecheckValue(wrong, null)),
-                });
-                return error.UnexpectedNonTypeExpression;
-            },
-        }
-        else {
-            self.report("Expected a comptime-known expression on the left hand side of scoping.", .{});
-            return error.ComptimeNotPossible;
-        };
-    const lhsType = self.typeTable.get(lhsTypePtr);
+        try typechecker.expectType(ast.extra[extraPtr]);
+        //if (typechecker.executer.attemptEval(ast.extra[extraPtr], Comptime.Builtin.Type("type"))) |res| switch (res) {
+        //    .Type => |t| t,
+        //    else => |wrong| {
+        //        typechecker.report("Attempt to scope a non-scoped expression of type '{s}'.", .{
+        //            typechecker.typeName(typechecker.arena.allocator(), try typechecker.typecheckValue(wrong, null)),
+        //        });
+        //        return error.UnexpectedNonTypeExpression;
+        //    },
+        //}
+        //else {
+        //    typechecker.report("Expected a comptime-known expression on the left hand side of scoping.", .{});
+        //    return error.ComptimeNotPossible;
+        //};
+    const lhsType = typechecker.typeTable.get(lhsTypePtr);
 
-    const member = tokens.get(ast.extra[extraPtr + 1]).lexeme(self.context, self.currentFile);
+    const member = tokens.get(ast.extra[extraPtr + 1]).lexeme(typechecker.context, typechecker.currentFile);
 
     return ret: switch (lhsType) {
         .Enum => |enm| {
@@ -404,33 +406,33 @@ pub fn typecheckScoping(self: *Typechecker, expr: defines.ExpressionPtr) Error!T
                 }
             }
 
-            self.report("Couldn't find definition '{s}' in type '{s}'.", .{
+            typechecker.report("Couldn't find definition '{s}' in type '{s}'.", .{
                 member,
                 enm.name,
             });
             break :ret error.MissingDefinition;
         },
-        else => error.NotImplemented,
+        else => common.debug.NotImplemented(@src()),
     };
 }
 
-pub fn typecheckCall(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
-    const ast = self.context.getAST(self.currentFile);
+pub fn typecheckCall(typechecker: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
+    const ast = typechecker.context.getAST(typechecker.currentFile);
 
     if (ast.expressions.items(.type)[ast.extra[extraPtr]] == .Identifier) {
-        if (self.symbols.resolutionMap.get(.{
-            .file = self.currentFile,
+        if (typechecker.symbols.resolutionMap.get(.{
+            .file = typechecker.currentFile,
             .expr = ast.extra[extraPtr], 
         })) |builtinPtr| {
-            return self.typecheckBuiltinCall(extraPtr, builtinPtr, maybeExpected);
+            return typechecker.typecheckBuiltinCall(extraPtr, builtinPtr, maybeExpected);
         }
     }
 
-    const func = switch (self.typeTable.get(try self.typecheckExpression(ast.extra[extraPtr], null))) {
+    const func = switch (typechecker.typeTable.get(try typechecker.typecheckExpression(ast.extra[extraPtr], null))) {
         .Function => |func| func,
         else => {
-            self.report("Attemp to call non-function type '{s}'.", .{
-                self.typeName(self.arena.allocator(), try self.typecheckExpression(ast.extra[extraPtr], null)),
+            typechecker.report("Attemp to call non-function type '{s}'.", .{
+                typechecker.typeName(typechecker.arena.allocator(), try typechecker.typecheckExpression(ast.extra[extraPtr], null)),
             });
             return error.IllegalSyntax;
         },
@@ -444,7 +446,7 @@ pub fn typecheckCall(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpec
     ];
 
     if (args.len != func.argTypes.len) {
-        self.report("Mismatching argument counts in function call. Expected {d}, received {d}.", .{
+        typechecker.report("Mismatching argument counts in function call. Expected {d}, received {d}.", .{
             func.argTypes.len,
             args.len,
         });
@@ -452,15 +454,15 @@ pub fn typecheckCall(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpec
     }
 
     for (func.argTypes, args, 0..) |arg, expr, index| {
-        const exprType = try self.typecheckExpression(expr, arg);
+        const exprType = try typechecker.typecheckExpression(expr, arg);
 
         if (exprType != arg) {
-            self.report(
+            typechecker.report(
                 "Argument type mismatch in function call."
                 ++ " In argument {d}: expected {s}, received {s}", .{
                 index,
-                self.typeName(self.arena.allocator(), arg),
-                self.typeName(self.arena.allocator(), exprType),
+                typechecker.typeName(typechecker.arena.allocator(), arg),
+                typechecker.typeName(typechecker.arena.allocator(), exprType),
             });
             return error.TypeMismatch;
         }
@@ -469,29 +471,29 @@ pub fn typecheckCall(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpec
     return func.returnType;
 }
 
-pub fn typecheckBuiltinCall(self: *Typechecker, extraPtr: defines.ExpressionPtr, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!TypeID {
+pub fn typecheckBuiltinCall(typechecker: *Typechecker, extraPtr: defines.ExpressionPtr, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!TypeID {
     const BI = Resolver.BuiltinIndex;
 
     return switch (declPtr) {
-        BI("cast") => self.typecheckCast(extraPtr, maybeExpected),
-        BI("as") => self.typecheckTypeForwarding(extraPtr, maybeExpected),
-        BI("typeOf") => (try self.executer.evalTypeOf(extraPtr)).Type,
+        BI("cast") => typechecker.typecheckCast(extraPtr, maybeExpected),
+        BI("as") => typechecker.typecheckTypeForwarding(extraPtr, maybeExpected),
+        BI("typeOf") => (try typechecker.executer.evalTypeOf(extraPtr)).Type,
         else => {
-            self.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[declPtr]});
+            typechecker.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[declPtr]});
             return error.ComptimeNotPossible;
         },
     };
 }
 
-pub fn typecheckCast(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
+pub fn typecheckCast(typechecker: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
     const targetType =
         if (maybeExpected) |target| target
         else {
-            self.report("Casting requires a known target type.", .{});
+            typechecker.report("Casting requires a known target type.", .{});
             return error.InferenceError;
         };
 
-    const ast = self.context.getAST(self.currentFile);
+    const ast = typechecker.context.getAST(typechecker.currentFile);
 
     const expressionList = ast.expressions.items(.value)[ast.extra[extraPtr + 1]];
     const thingToCastRange = defines.Range{
@@ -500,27 +502,27 @@ pub fn typecheckCast(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpec
     };
 
     if (thingToCastRange.len() != 1) {
-        self.report("Multi-value type casting is not supported.", .{});
+        typechecker.report("Multi-value type casting is not supported.", .{});
         return error.NotImplemented;
     }
 
-    const thingToCastType = try self.typecheckExpression(ast.extra[thingToCastRange.at(0)], null);
+    const thingToCastType = try typechecker.typecheckExpression(ast.extra[thingToCastRange.at(0)], null);
 
-    self.assertCastable(thingToCastType, targetType) catch |err| {
+    typechecker.assertCastable(thingToCastType, targetType) catch |err| {
         const rargs = .{
-            self.typeName(self.arena.allocator(), thingToCastType),
-            self.typeName(self.arena.allocator(), targetType),
+            typechecker.typeName(typechecker.arena.allocator(), thingToCastType),
+            typechecker.typeName(typechecker.arena.allocator(), targetType),
         };
 
         switch (err) {
-            error.IncompatibleTypes => self.report("Given type '{s}' can't be cast to '{s}'.", rargs),
-            error.SizeMismatch => self.report("Type '{s}' is too big for being cast to '{s}'.", rargs),
-            error.MutabilityViolation => self.report("Cast from '{s}' to '{s}' ignores mutability specifiers.", rargs),
-            error.PointerSizeMismatch => self.report("Illegal cast from unknown sized '{s}' to sized '{s}'.", rargs),
-            error.StructuralMismatch => self.report("Illegal cast from structurally incompatible '{s}' to '{s}'", rargs),
-            error.MismatchingSliceChildType => self.report("Cast from slice type '{s}' to '{s}' will alter the length of the slice.", rargs),
-            error.InferenceError => self.report("Illegal cast from '{s}' to unknown type '{s}'.", rargs),
-            error.RedundantCast => self.report("Unnecessary cast from type '{s}' to '{s}'.", rargs),
+            error.IncompatibleTypes => typechecker.report("Given type '{s}' can't be cast to '{s}'.", rargs),
+            error.SizeMismatch => typechecker.report("Type '{s}' is too big for being cast to '{s}'.", rargs),
+            error.MutabilityViolation => typechecker.report("Cast from '{s}' to '{s}' ignores mutability specifiers.", rargs),
+            error.PointerSizeMismatch => typechecker.report("Illegal cast from unknown sized '{s}' to sized '{s}'.", rargs),
+            error.StructuralMismatch => typechecker.report("Illegal cast from structurally incompatible '{s}' to '{s}'", rargs),
+            error.MismatchingSliceChildType => typechecker.report("Cast from slice type '{s}' to '{s}' will alter the length of the slice.", rargs),
+            error.InferenceError => typechecker.report("Illegal cast from '{s}' to unknown type '{s}'.", rargs),
+            error.RedundantCast => typechecker.report("Unnecessary cast from type '{s}' to '{s}'.", rargs),
             else => return common.debug.ShouldBeImpossible(@src()),
         }
 
@@ -530,15 +532,8 @@ pub fn typecheckCast(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpec
     return targetType;
 }
 
-pub fn typecheckTypeForwarding(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
-    if (maybeExpected) |expected| {
-        if (!self.castable(Comptime.Builtin.Type("any"), expected)) {
-            self.report("Reduntant type forwarding in already inferable context.", .{ });
-            return error.RedundantTypeForwarding;
-        }
-    }
-
-    const ast = self.context.getAST(self.currentFile);
+pub fn typecheckTypeForwarding(typechecker: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
+    const ast = typechecker.context.getAST(typechecker.currentFile);
 
     const expressionList = ast.expressions.items(.value)[ast.extra[extraPtr + 1]];
     const args = defines.Range{
@@ -547,18 +542,31 @@ pub fn typecheckTypeForwarding(self: *Typechecker, extraPtr: defines.OpaquePtr, 
     };
 
     if (args.len() != 2) {
-        self.report("Expected 2 arguments, received {d}.", .{
+        typechecker.report("Expected 2 arguments, received {d}.", .{
             args.len(),
         });
         return error.ArgumentCountMismatch;
     }
 
-    const typeToForward = try self.expectType(ast.extra[args.at(0)]);
-    const res = try self.typecheckExpression(ast.extra[args.at(1)], typeToForward);
+    const typeToForward = try typechecker.expectType(ast.extra[args.at(0)]);
 
+    if (maybeExpected) |expected| {
+        switch (expected) {
+            Comptime.Builtin.Type("any"),
+            Comptime.Builtin.Type("mut any") => { },
+            else => {
+                if (typechecker.suitable(typeToForward, expected)) {
+                    typechecker.report("Reduntant type forwarding in already inferable context.", .{ });
+                    return error.RedundantTypeForwarding;
+                }
+            },
+        }
+    }
+
+    const res = try typechecker.typecheckExpression(ast.extra[args.at(1)], typeToForward);
     if (res != typeToForward) {
-        self.report("Expected en expression of type '{s}' here.", .{
-            self.typeName(self.arena.allocator(), typeToForward),
+        typechecker.report("Expected en expression of type '{s}' here.", .{
+            typechecker.typeName(typechecker.arena.allocator(), typeToForward),
         });
         return error.TypeMismatch;
     }
@@ -566,38 +574,38 @@ pub fn typecheckTypeForwarding(self: *Typechecker, extraPtr: defines.OpaquePtr, 
     return res;
 }
 
-pub fn typecheckIndexing(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!TypeID {
-    _ = self;
+pub fn typecheckIndexing(typechecker: *Typechecker, extraPtr: defines.OpaquePtr) Error!TypeID {
+    _ = typechecker;
     _ = extraPtr;
     return error.NotImplemented;
 }
 
-pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!TypeID {
-    const allocator = self.arena.allocator();
+pub fn typecheckDecl(typechecker: *Typechecker, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!TypeID {
+    const allocator = typechecker.arena.allocator();
 
-    const decl = self.symbols.declarations.get(declPtr);
+    const decl = typechecker.symbols.declarations.get(declPtr);
 
-    const prevToken = self.lastToken;
-    const prevFile = self.currentFile;
+    const prevToken = typechecker.lastToken;
+    const prevFile = typechecker.currentFile;
     if (decl.kind != .Builtin) {
-        self.currentFile = self.modules.modules.items(.dataIndex)[self.symbols.scopes.items(.module)[decl.scope]];
-        self.lastToken = decl.token;
+        typechecker.currentFile = typechecker.modules.modules.items(.dataIndex)[typechecker.symbols.scopes.items(.module)[decl.scope]];
+        typechecker.lastToken = decl.token;
     }
-    defer self.lastToken = prevToken;
-    defer self.currentFile = prevFile;
+    defer typechecker.lastToken = prevToken;
+    defer typechecker.currentFile = prevFile;
 
-    const isPresent = self.lookup.getOrPut(allocator, declPtr) catch return error.AllocatorFailure;
+    const isPresent = typechecker.lookup.getOrPut(allocator, declPtr) catch return error.AllocatorFailure;
 
-    const ast = self.context.getAST(self.currentFile);
-    const tokens = self.context.getTokens(ast.tokens);
+    const ast = typechecker.context.getAST(typechecker.currentFile);
+    const tokens = typechecker.context.getTokens(ast.tokens);
 
     if (isPresent.found_existing) {
         switch (isPresent.value_ptr.status) {
             .Checked => return isPresent.value_ptr.types,
             .InProgress => {
-                if (!self.executer.flags.isSet(Comptime.Flags.flag(.CanCycle))) {
-                    self.report("Dependency cycle detected. '{s}' depends on itself.", .{
-                        tokens.get(decl.token).lexeme(self.context, self.currentFile),
+                if (!typechecker.executer.flags.isSet(Comptime.Flags.flag(.CanCycle))) {
+                    typechecker.report("Dependency cycle detected. '{s}' depends on ittypechecker.", .{
+                        tokens.get(decl.token).lexeme(typechecker.context, typechecker.currentFile),
                     });
                 }
                 return error.DependencyCycle;
@@ -611,7 +619,7 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
         .types = 0,
     };
 
-    self.callstack.push(declPtr);
+    typechecker.callstack.push(declPtr);
 
     const types = try switch (decl.kind) {
         .Builtin =>
@@ -620,17 +628,21 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
                 BuiltinIndex("undefined") =>
                     if (maybeExpected) |expected| expected
                     else {
-                        self.report("Unable to resolve the type of undefined value.", .{});
+                        typechecker.report("Unable to resolve the type of undefined value.", .{});
                         return error.MissingTypeSpecifier;
                     },
                 else => {
-                    self.report("Builtin '{s}' is not implemented.", .{Resolver.builtins[decl.type]});
+                    typechecker.report("Builtin '{s}' is not implemented.", .{Resolver.builtins[decl.type]});
                     return error.NotImplemented;
                 },
             },
-        .Variable => self.typecheckVariable(&decl),
+        .Variable => typechecker.typecheckVariable(&decl),
+        .Namespace => {
+            typechecker.report("Operations on namespaces are not allowed.", .{});
+            return error.NamespaceAsValue;
+        },
         else => {
-            self.report("{s} is not implemented.", .{@tagName(decl.kind)});
+            typechecker.report("{s} is not implemented.", .{@tagName(decl.kind)});
             return error.NotImplemented;
         },
     };
@@ -640,64 +652,61 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
         .types = types,
     };
 
-    _ = self.callstack.pop();
+    _ = typechecker.callstack.pop();
     return types;
 }
 
-pub fn registerType(self: *Typechecker, newType: TypeInfo) Error!TypeID {
-    const isPresent = self.typeMap.getOrPut(self.arena.allocator(), newType)
+pub fn registerType(typechecker: *Typechecker, newType: TypeInfo) Error!TypeID {
+    const isPresent = typechecker.typeMap.getOrPut(typechecker.arena.allocator(), newType)
         catch return error.AllocatorFailure;
 
     if (!isPresent.found_existing) {
-        const typeID = try self.typeTable.addOne(self.arena.allocator());
+        const typeID = try typechecker.typeTable.addOne(typechecker.arena.allocator());
         isPresent.value_ptr.* = @intCast(typeID);
 
-        self.typeTable.set(typeID, newType);
+        typechecker.typeTable.set(typeID, newType);
     }
 
     return isPresent.value_ptr.*;
 }
 
-pub fn report(self: *Typechecker, comptime fmt: []const u8, args: anytype) void {
+pub fn report(typechecker: *Typechecker, comptime fmt: []const u8, args: anytype) void {
     common.log.err(fmt, args);
-    const token = self.context.getTokens(self.currentFile).get(self.lastToken);
-    const position = token.position(self.context, self.currentFile);
-    common.log.err(("." ** 4) ++ " In {s} {d}:{d}{s}", .{
-        self.context.getFileName(self.currentFile),
+    const token = typechecker.context.getTokens(typechecker.currentFile).get(typechecker.lastToken);
+    const position = token.position(typechecker.context, typechecker.currentFile);
+
+    common.log.err(("." ** 4) ++ " In {s} {d}:{d}", .{
+        typechecker.context.getFileName(typechecker.currentFile),
         position.line,
         position.column,
-        if (self.callstack.empty()) "\n" else ""
     });
-    self.dumpCallStack();
+    token.printLocation(typechecker.arena.allocator(), typechecker.context, typechecker.currentFile, position, typechecker.callstack.size == 1);
+    typechecker.dumpCallStack();
 }
 
-fn dumpCallStack(self: *Typechecker) void {
-    _ = self.callstack.pop();
-    while (self.callstack.pop()) |declPtr| {
-        const lastDecl = self.symbols.getDecl(declPtr);
-        const modulePtr = self.symbols.scopes.get(lastDecl.scope).module;
-        const module = self.modules.modules.get(modulePtr);
-        const token = self.context.getTokens(module.dataIndex).get(lastDecl.token);
-        const position = token.position(self.context, module.dataIndex);
-        common.log.err(("." ** 8) ++ " Required from '{s} {d}:{d}'{s}", .{
-            self.context.getFileName(module.dataIndex),
+fn dumpCallStack(typechecker: *Typechecker) void {
+    _ = typechecker.callstack.pop();
+    while (typechecker.callstack.pop()) |declPtr| {
+        const lastDecl = typechecker.symbols.getDecl(declPtr);
+        const modulePtr = typechecker.symbols.scopes.get(lastDecl.scope).module;
+        const module = typechecker.modules.modules.get(modulePtr);
+        const token = typechecker.context.getTokens(module.dataIndex).get(lastDecl.token);
+        const position = token.position(typechecker.context, module.dataIndex);
+        common.log.err(("." ** 8) ++ " Required from '{s} {d}:{d}'", .{
+            typechecker.context.getFileName(module.dataIndex),
             position.line,
             position.column,
-            if (self.callstack.empty()) "\n" else ""
         });
+        token.printLocation(typechecker.arena.allocator(), typechecker.context, typechecker.currentFile, position, typechecker.callstack.empty());
     }
 }
 
-pub fn assertCastable(self: *Typechecker, from: TypeID, to: TypeID) Error!void {
+pub fn assertCastable(typechecker: *Typechecker, from: TypeID, to: TypeID) Error!void {
     const fmax = std.math.floatMax;
     const fmin = struct{fn fmin(comptime T: type) T { return -fmax(T); }}.fmin;
 
-    const fromType = self.typeTable.get(from);
-    const toType = self.typeTable.get(to);
-
-    if (from == to) {
-        return error.RedundantCast;
-    }
+    const fromType = typechecker.typeTable.get(from);
+    const toType = typechecker.typeTable.get(to);
 
     switch (to) {
         Comptime.Builtin.Type("any"),
@@ -705,18 +714,22 @@ pub fn assertCastable(self: *Typechecker, from: TypeID, to: TypeID) Error!void {
         else => { },
     }
 
-    if (!self.mutable(from) and self.mutable(to)) {
+    if (from == to) {
+        return error.RedundantCast;
+    }
+
+    if (!typechecker.mutable(from) and typechecker.mutable(to)) {
         return error.MutabilityViolation;
     }
 
     switch (fromType) {
-        .Enum, .Union, .Struct => try self.assertStructurallyIdentical(from, to),
+        .Enum, .Union, .Struct => try typechecker.assertStructurallyIdentical(from, to),
         .Bool => switch (toType) {
             .Integer => |int| try functional.throwIf(int.size <= 0, error.SizeMismatch),
             else => return error.IncompatibleTypes,
         },
-        .ComptimeInt => try functional.throwIf(!self.isInt(to), error.IncompatibleTypes),
-        .ComptimeFloat => try functional.throwIf(!self.isFloat(to), error.IncompatibleTypes),
+        .ComptimeInt => try functional.throwIf(!typechecker.isInt(to), error.IncompatibleTypes),
+        .ComptimeFloat => try functional.throwIf(!typechecker.isFloat(to), error.IncompatibleTypes),
         .Integer => |fromInt| switch (toType) {
             .Integer => |toInt| try functional.throwIf(!toInt.canContain(fromInt), error.SizeMismatch),
             .Float => try functional.throwIf(
@@ -735,7 +748,7 @@ pub fn assertCastable(self: *Typechecker, from: TypeID, to: TypeID) Error!void {
             else => return error.IncompatibleTypes,
         },
         .Pointer => |fromPtr| switch (toType) {
-            .Pointer => |toPtr| try self.assertCastablePtr(fromPtr, toPtr),
+            .Pointer => |toPtr| try typechecker.assertCastablePtr(fromPtr, toPtr),
             else => return error.IncompatibleTypes,
         },
         .Function => switch (toType) {
@@ -749,25 +762,25 @@ pub fn assertCastable(self: *Typechecker, from: TypeID, to: TypeID) Error!void {
     }
 }
 
-pub fn castable(self: *Typechecker, from: TypeID, to: TypeID) bool {
-    self.assertCastable(from, to) catch return false;
+pub fn castable(typechecker: *Typechecker, from: TypeID, to: TypeID) bool {
+    typechecker.assertCastable(from, to) catch return false;
     return true;
 }
 
-pub fn assertCastablePtr(self: *const Typechecker, this: Types.Pointer, that: Types.Pointer) Error!void {
+pub fn assertCastablePtr(typechecker: *const Typechecker, this: Types.Pointer, that: Types.Pointer) Error!void {
     switch (this.size) {
-        .Slice => try functional.throwIf(that.size == .Slice and self.sizeOf(this.child) != self.sizeOf(that.child), error.MismatchingSliceChildType),
+        .Slice => try functional.throwIf(that.size == .Slice and typechecker.sizeOf(this.child) != typechecker.sizeOf(that.child), error.MismatchingSliceChildType),
         .Single => try functional.throwIf(that.size == .Slice, error.PointerSizeMismatch),
         .C => try functional.throwIf(that.size == .Slice, error.PointerSizeMismatch),
     }
 
-    try functional.throwIf(!self.mutable(this.child) and self.mutable(that.child), error.MutabilityViolation);
+    try functional.throwIf(!typechecker.mutable(this.child) and typechecker.mutable(that.child), error.MutabilityViolation);
 }
 
 /// Does no mutability check
-pub fn assertStructurallyIdentical(self: *const Typechecker, this: TypeID, that: TypeID) Error!void {
-    const fromType = self.typeTable.get(this);
-    const toType = self.typeTable.get(that);
+pub fn assertStructurallyIdentical(typechecker: *const Typechecker, this: TypeID, that: TypeID) Error!void {
+    const fromType = typechecker.typeTable.get(this);
+    const toType = typechecker.typeTable.get(that);
 
     if (std.meta.activeTag(fromType) != std.meta.activeTag(toType)) {
         return error.IncompatibleTypes;
@@ -837,58 +850,58 @@ pub fn assertStructurallyIdentical(self: *const Typechecker, this: TypeID, that:
     }
 }
 
-pub fn structurallyIdentical(self: *const Typechecker, this: TypeID, that: TypeID) bool {
-    self.assertStructurallyIdentical(this, that) catch return false;
+pub fn structurallyIdentical(typechecker: *const Typechecker, this: TypeID, that: TypeID) bool {
+    typechecker.assertStructurallyIdentical(this, that) catch return false;
     return true;
 }
 
-pub fn suitable(self: *const Typechecker, expected: TypeID, got: TypeID) bool {
-    self.assertSuitable(expected, got) catch return false;
+pub fn suitable(typechecker: *const Typechecker, expected: TypeID, got: TypeID) bool {
+    typechecker.assertSuitable(expected, got) catch return false;
     return true;
 }
 
-pub fn assertSuitable(self: *const Typechecker, this: TypeID, that: TypeID) Error!void {
-    const thisType = self.typeTable.get(this);
-    const thatType = self.typeTable.get(that);
+pub fn assertSuitable(typechecker: *const Typechecker, this: TypeID, that: TypeID) Error!void {
+    const thisType = typechecker.typeTable.get(this);
+    const thatType = typechecker.typeTable.get(that);
 
     return switch (thatType) {
         .Noreturn => { },
         .Any => functional.throwIf(std.meta.activeTag(thatType) == .Any, error.TypeMismatch),
         else => switch (thisType) {
             .Any => { },
-            .ComptimeInt, .Integer => functional.throwIf(!self.isInt(that), error.TypeMismatch),
-            .ComptimeFloat, .Float => functional.throwIf(!self.isFloat(that), error.TypeMismatch),
-            .Struct, .Union, .Enum => self.assertStructurallyIdentical(this, that),
+            .ComptimeInt, .Integer => functional.throwIf(!typechecker.isInt(that), error.TypeMismatch),
+            .ComptimeFloat, .Float => functional.throwIf(!typechecker.isFloat(that), error.TypeMismatch),
+            .Struct, .Union, .Enum => typechecker.assertStructurallyIdentical(this, that),
             else => functional.throwIf(this != that, error.TypeMismatch),
         },
     };
 }
 
-pub fn isInt(self: *const Typechecker, maybeInt: TypeID) bool {
-    return switch (self.typeTable.get(maybeInt)) {
+pub fn isInt(typechecker: *const Typechecker, maybeInt: TypeID) bool {
+    return switch (typechecker.typeTable.get(maybeInt)) {
         .ComptimeInt, .Integer => true,
         else => false,
     };
 }
 
-pub fn isFloat(self: *const Typechecker, maybeFloat: TypeID) bool {
-    return switch (self.typeTable.get(maybeFloat)) {
+pub fn isFloat(typechecker: *const Typechecker, maybeFloat: TypeID) bool {
+    return switch (typechecker.typeTable.get(maybeFloat)) {
         .ComptimeFloat, .Float => true,
         else => false,
     };
 }
 
-pub fn assignable(self: *const Typechecker, this: TypeID, that: TypeID) bool {
+pub fn assignable(typechecker: *const Typechecker, this: TypeID, that: TypeID) bool {
     return
-        if (!self.mutable(this)) false
-        else self.suitable(this, that);
+        if (!typechecker.mutable(this)) false
+        else typechecker.suitable(this, that);
 }
 
-pub fn infer(self: *const Typechecker, this: TypeID, that: TypeID) Error!TypeID {
-    try self.assertSuitable(this, that);
+pub fn infer(typechecker: *const Typechecker, this: TypeID, that: TypeID) Error!TypeID {
+    try typechecker.assertSuitable(this, that);
 
-    const thisType = std.meta.activeTag(self.typeTable.get(this));
-    const thatType = std.meta.activeTag(self.typeTable.get(that));
+    const thisType = std.meta.activeTag(typechecker.typeTable.get(this));
+    const thatType = std.meta.activeTag(typechecker.typeTable.get(that));
 
     const resType = switch (thatType) {
         .Noreturn => that,
@@ -902,14 +915,14 @@ pub fn infer(self: *const Typechecker, this: TypeID, that: TypeID) Error!TypeID 
     return resType;
 }
 
-pub fn expectType(self: *Typechecker, exprPtr: defines.ExpressionPtr) Error!TypeID {
+pub fn expectType(typechecker: *Typechecker, exprPtr: defines.ExpressionPtr) Error!TypeID {
     return
-        if (self.executer.expectType(exprPtr)) |val| val.Type 
+        if (typechecker.executer.expectType(exprPtr)) |val| val.Type 
         else |err| err;
 }
 
-pub fn mutable(self: *const Typechecker, typeID: TypeID) bool {
-    return switch (self.typeTable.get(typeID)) {
+pub fn mutable(typechecker: *const Typechecker, typeID: TypeID) bool {
+    return switch (typechecker.typeTable.get(typeID)) {
         .Any => |any| any,
         .Bool => |b| b,
         .Float => |fl| fl,
@@ -927,12 +940,12 @@ pub fn mutable(self: *const Typechecker, typeID: TypeID) bool {
     };
 }
 
-pub fn canBeMutable(self: *const Typechecker, typeID: TypeID) bool {
-    return switch (self.typeTable.get(typeID)) {
+pub fn canBeMutable(typechecker: *const Typechecker, typeID: TypeID) bool {
+    return switch (typechecker.typeTable.get(typeID)) {
         .Any, .Bool, .Float,
         .Struct, .Union, .Enum,
         .Integer, .Pointer, .Array,
-        .Function => !self.mutable(typeID),
+        .Function => !typechecker.mutable(typeID),
         else => false,
     };
 }
@@ -1014,8 +1027,8 @@ pub fn makeMutable(_: *const Typechecker, info: TypeInfo) TypeInfo {
 }
 
 /// In bytes
-pub fn sizeOf(self: *const Typechecker, of: TypeID) u32 {
-    return ret: switch (self.typeTable.get(of)) {
+pub fn sizeOf(typechecker: *const Typechecker, of: TypeID) u32 {
+    return ret: switch (typechecker.typeTable.get(of)) {
         .Pointer => @sizeOf(*void),
         .Function => @sizeOf(@TypeOf(&sizeOf)),
         .Enum => @sizeOf(u32),
@@ -1023,12 +1036,12 @@ pub fn sizeOf(self: *const Typechecker, of: TypeID) u32 {
         .Integer => |int| int.size,
         .Bool => @sizeOf(bool),
         .Void, .Noreturn, .EnumLiteral, .Type, .Any => 0,
-        .Array => |arr| arr.len * self.sizeOf(arr.child),
+        .Array => |arr| arr.len * typechecker.sizeOf(arr.child),
         .ComptimeInt => @sizeOf(i64),
         .Struct => |str| {
             var size: u32 = 0;
             for (str.fields) |field| {
-                size += self.sizeOf(field.valueType);
+                size += typechecker.sizeOf(field.valueType);
             }
 
             return size;
@@ -1040,7 +1053,7 @@ pub fn sizeOf(self: *const Typechecker, of: TypeID) u32 {
             };
             var size: u32 = 0;
             for (fields) |field| {
-                size = @max(size, self.sizeOf(field.valueType));
+                size = @max(size, typechecker.sizeOf(field.valueType));
             }
 
             break :ret switch (uni) {
@@ -1051,7 +1064,7 @@ pub fn sizeOf(self: *const Typechecker, of: TypeID) u32 {
     };
 }
 
-pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) []const u8 {
+pub fn typeName(typechecker: *const Typechecker, allocator: Allocator, typeID: TypeID) []const u8 {
     const typename = struct {
         fn typename(this: *const Typechecker, alc: Allocator, tid: TypeID) []const u8 {
             const prefix = if (this.mutable(tid)) "mut " else "";
@@ -1073,10 +1086,10 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
 
     return
         if (Comptime.Builtin.isBuiltinType(typeID)) Comptime.Builtin.TypeName(typeID)
-        else ret: switch (self.typeTable.get(typeID)) {
+        else ret: switch (typechecker.typeTable.get(typeID)) {
             .Pointer => {
-                const ptr: Types.Pointer = self.typeTable.get(typeID).Pointer;
-                const child = self.typeName(allocator, ptr.child);
+                const ptr: Types.Pointer = typechecker.typeTable.get(typeID).Pointer;
+                const child = typechecker.typeName(allocator, ptr.child);
 
                 const mut = if (ptr.mutable) "mut " else "";
                 const prefix = switch (ptr.size) {
@@ -1089,8 +1102,8 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
                 break :ret std.fmt.bufPrint(res, "{s}{s}{s}", .{mut, prefix, child}) catch unreachable;
             },
             .Array => {
-                const arr: Types.Array = self.typeTable.get(typeID).Array;
-                const child = self.typeName(allocator, arr.child);
+                const arr: Types.Array = typechecker.typeTable.get(typeID).Array;
+                const child = typechecker.typeName(allocator, arr.child);
 
                 const prefix = if (arr.mutable) "mut " else "";
                 const size = std.fmt.allocPrint(allocator, "[{d}]", .{arr.len})
@@ -1099,14 +1112,14 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
                 const res = allocator.alloc(u8, child.len + prefix.len + size.len) catch break :ret "AllocatorFailure";
                 break :ret std.fmt.bufPrint(res, "{s}{s}{s}", .{prefix, size, child}) catch unreachable;
             },
-            .Struct, .Union, .Enum => typename(self, allocator, typeID),
+            .Struct, .Union, .Enum => typename(typechecker, allocator, typeID),
             .Function => |func| {
                 var res: []const u8 = if (func.mutable) "mut *fn (" else "*fn (";
 
                 for (0..func.argTypes.len) |index| {
                     res = std.fmt.allocPrint(allocator, "{s}{s}{s}", .{
                         res,
-                        self.typeName(allocator, func.argTypes[index]),
+                        typechecker.typeName(allocator, func.argTypes[index]),
                         if (index == func.argTypes.len - 1) "" else ", ",
                     }) catch return "AllocatorFailure";
                 }
@@ -1114,7 +1127,7 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
 
                 res = std.fmt.allocPrint(allocator, "{s}) -> {s}", .{
                     res,
-                    self.typeName(allocator, func.returnType),
+                    typechecker.typeName(allocator, func.returnType),
                 }) catch return "AllocatorFailure";
 
                 break :ret res;
@@ -1143,11 +1156,11 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
         };
 }
 
-pub fn extendExtra(self: *Typechecker, size: usize) common.CompilerError!TypeID {
-    const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-    _ = self.extra.addManyAsSlice(self.arena.allocator(), size) catch return error.AllocatorFailure;
+pub fn extendExtra(typechecker: *Typechecker, size: usize) common.CompilerError!TypeID {
+    const start: defines.OpaquePtr = @intCast(typechecker.extra.items.len);
+    _ = typechecker.extra.addManyAsSlice(typechecker.arena.allocator(), size) catch return error.AllocatorFailure;
     return .{
         .start = start,
-        .end = @intCast(self.extra.items.len),
+        .end = @intCast(typechecker.extra.items.len),
     };
 }

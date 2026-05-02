@@ -52,27 +52,27 @@ pub const Token = struct {
         .end = 0,
     };
 
-    pub fn toString(lexer: *const Token, gpa: std.mem.Allocator, context: *const common.CompilerContext, file: defines.FilePtr) []const u8 {
-        const string = lexer.lexeme(context, file);
-        const length =  @tagName(lexer.type).len + string.len + 16;
-        const pos = lexer.position(context, file);
+    pub fn toString(token: *const Token, gpa: std.mem.Allocator, context: *const common.CompilerContext, file: defines.FilePtr) []const u8 {
+        const string = token.lexeme(context, file);
+        const length =  @tagName(token.type).len + string.len + 16;
+        const pos = token.position(context, file);
         const buffer = gpa.alloc(u8, length) catch return @errorName(error.AllocatorFailure);
         return std.fmt.bufPrint(buffer, "<{s}: {s} at ({d}:{d})>", .{
-            @tagName(lexer.type),
+            @tagName(token.type),
             string,
             pos.line,
             pos.column,
         }) catch unreachable;
     }
 
-    pub fn lexeme(lexer: *const Token, context: *const common.CompilerContext, file: defines.FilePtr) []const u8 {
-        assert(lexer.start <= lexer.end);
+    pub fn lexeme(token: *const Token, context: *const common.CompilerContext, file: defines.FilePtr) []const u8 {
+        assert(token.start <= token.end);
 
-        return context.getFile(file)[lexer.start..lexer.end];
+        return context.getFile(file)[token.start..token.end];
     }
 
-    pub fn position(lexer: *const Token, context: *const common.CompilerContext, file: defines.FilePtr) Position {
-        var source = context.getFile(file)[0..lexer.start];
+    pub fn position(token: *const Token, context: *const common.CompilerContext, file: defines.FilePtr) Position {
+        var source = context.getFile(file)[0..token.start];
 
         var line: defines.Offset = 1;
         while (std.mem.indexOfScalar(u8, source, '\n')) |newline| {
@@ -86,6 +86,51 @@ pub const Token = struct {
             .line = line,
             .column = col,
         };
+    }
+
+    pub fn errIdentifier(token: *const Token, context: *const common.CompilerContext, file: defines.FilePtr) []const u8 {
+        const pos = token.position(context, file);
+
+        var source = context.getFile(file);
+        var line: defines.Offset = 1;
+        const end = while (std.mem.indexOfScalar(u8, source, '\n')) |newLine| {
+            if (line == pos.line) {
+                break newLine;
+            }
+
+            source = source[(newLine + 1)..];
+            line += 1;
+        } else unreachable;
+
+        return source[0..end];
+    }
+
+
+    pub fn printLocation(
+        token: Token,
+        gpa: std.mem.Allocator,
+        context: *const common.CompilerContext,
+        file: defines.FilePtr,
+        pos: Position,
+        last: bool
+    ) void {
+        // TODO: Optimize
+        const errLine = token.errIdentifier(context, file);
+        common.log.err("{s}", .{errLine});
+        var locationIdentifier: []const u8 = "";
+        for (0..pos.column - 1) |_| {
+            locationIdentifier = std.fmt.allocPrint(
+                gpa,
+                "{s} ",
+                .{locationIdentifier}
+            ) catch "AllocatorFailure";
+        }
+        locationIdentifier = std.fmt.allocPrint(
+            gpa,
+            "{s}^ Here.",
+            .{locationIdentifier}
+        ) catch "AllocatorFailure";
+        common.log.err("{s}{s}", .{locationIdentifier, if (last) "\n" else ""});
     }
 };
 
@@ -326,7 +371,7 @@ fn scanToken(lexer: *Lexer) common.CompilerError!void {
                 break :blk lexer.addToken(.EnumLiteral);
             }
             else {
-                lexer.report("Unexpected character {c}", .{ch});
+                lexer.report("Unexpected character '{c}'", .{ch});
                 break :blk error.UnexpectedCharacter;
             }
         },
@@ -370,7 +415,7 @@ fn scanToken(lexer: *Lexer) common.CompilerError!void {
                 break :blk lexer.addToken(getType(str));
             }
             else {
-                lexer.report("Unexpected character {c}", .{ch});
+                lexer.report("Unexpected character '{c}'", .{ch});
                 return error.UnexpectedCharacter;
             }
         }
@@ -468,6 +513,7 @@ fn report(lexer: *Lexer, comptime fmt: []const u8, args: anytype) void {
 
     common.log.err(fmt, args);
     common.log.err(("." ** 4) ++ " In {s} {d}:{d}", .{lexer.context.getFileName(lexer.file), pos.line, pos.column});
+    errToken.printLocation(lexer.allocator(), lexer.context, lexer.file, pos, true);
 }
 
 //

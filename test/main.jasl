@@ -1,5 +1,3 @@
 import std;
 
-let Errc = std::ErrorCode;
-
-let main = Errc::Ok;
+let main: *fn void -> i32 = ?;

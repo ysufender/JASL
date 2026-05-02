@@ -427,8 +427,10 @@ fn report(prepasser: *Prepass, comptime fmt: []const u8, args: anytype, file: u3
     ) {
         const t_idx = token orelse 0;
         if (t_idx < prepasser.context.getTokens(prepasser.context.getAST(file).tokens).len) {
-            const position = prepasser.context.getTokens(prepasser.context.getAST(file).tokens).get(t_idx).position(prepasser.context, file);
-            common.log.err(("." ** 4) ++ " In {s} {d}:{d}\n", .{prepasser.context.getFileName(file), position.line, position.column});
+            const tt = prepasser.context.getTokens(prepasser.context.getAST(file).tokens).get(t_idx);
+            const position = tt.position(prepasser.context, file);
+            common.log.err(("." ** 4) ++ " In {s} {d}:{d}", .{prepasser.context.getFileName(file), position.line, position.column});
+            tt.printLocation(prepasser.arena.allocator(), prepasser.context, file, position, true);
             return;
         }
     }

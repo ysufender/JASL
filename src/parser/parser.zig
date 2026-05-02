@@ -1586,9 +1586,10 @@ fn match(self: *Parser, comptime args: []const Lexer.TokenType) bool {
 
 fn report(self: *Parser, comptime fmt: []const u8, args: anytype) void {
     common.log.err(fmt, args);
-    const token = self.tokens.get(self.previous());
+    const token = self.tokens.get(self.current);
     const position = token.position(self.context, self.file);
     common.log.err(("." ** 4) ++ " In {s} {d}:{d}", .{ self.context.getFileName(self.file), position.line, position.column});
+    token.printLocation(self.arena.allocator(), self.context, self.file, position, true);
 }
 
 //

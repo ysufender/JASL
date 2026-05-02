@@ -95,12 +95,12 @@ pub const Resolution = struct {
     lookup: LookupMap,
     scopes: ScopeList.Slice,
 
-    pub fn getDecl(resolver: *const Resolution, key: defines.DeclPtr) Declaration {
-        return resolver.declarations.get(key);
+    pub fn getDecl(resolution: *const Resolution, key: defines.DeclPtr) Declaration {
+        return resolution.declarations.get(key);
     }
 
-    pub fn findDecl(resolver: *const Resolution, key: ResolutionKey) defines.DeclPtr {
-        return resolver.resolutionMap.get(key).?;
+    pub fn findDecl(resolution: *const Resolution, key: ResolutionKey) defines.DeclPtr {
+        return resolution.resolutionMap.get(key).?;
     }
 };
 
@@ -1115,6 +1115,7 @@ fn report(resolver: *Resolver, comptime fmt: []const u8, args: anytype) void {
     const token = resolver.context.getTokens(resolver.dataIndex()).get(resolver.lastToken);
     const position = token.position(resolver.context, resolver.dataIndex());
     common.log.err(("." ** 4) ++ " In {s} {d}:{d}", .{ resolver.context.getFileName(resolver.dataIndex()), position.line, position.column});
+    token.printLocation(resolver.arena.allocator(), resolver.context, resolver.dataIndex(), position, true);
 }
 
 fn dataIndex(resolver: *const Resolver) u32 {

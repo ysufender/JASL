@@ -79,5 +79,6 @@ pub const CompilerError = error {
     FieldNotFound,
     ShouldBeImpossible,
     AccessSpecifierMismatch,
+    NamespaceAsValue,
     Terminate,
 };
