@@ -47,229 +47,229 @@ pub const PrintContext = struct {
         common.log.print(fmt, args);
     }
 
-    fn indent(self: *PrintContext, depth: u32) void {
+    fn indent(printer: *PrintContext, depth: u32) void {
         var i: u32 = 0;
         while (i < depth) : (i += 1) {
-            self.write(" ");
+            printer.write(" ");
         }
     }
 
-    fn tokenLexeme(self: *PrintContext, ptr: defines.TokenPtr) []const u8 {
-        return self.tokens.get(ptr).lexeme(self.context, self.file);
+    fn tokenLexeme(printer: *PrintContext, ptr: defines.TokenPtr) []const u8 {
+        return printer.tokens.get(ptr).lexeme(printer.context, printer.file);
     }
 
-    pub fn printStmt(self: *PrintContext, si: defines.StatementPtr, depth: u32) void {
-        const stmts = self.ast.statements;
+    pub fn printStmt(printer: *PrintContext, si: defines.StatementPtr, depth: u32) void {
+        const stmts = printer.ast.statements;
         const stype = stmts.items(.type)[si];
         const val   = stmts.items(.value)[si];
-        const ex    = self.ast.extra;
+        const ex    = printer.ast.extra;
 
-        self.indent(depth);
-        defer self.write("\n");
+        printer.indent(depth);
+        defer printer.write("\n");
 
         switch (stype) {
             .Block => {
-                self.write("Block {\n");
+                printer.write("Block {\n");
                 const start = ex[val];
                 const end   = ex[val + 1];
                 for (ex[start..end]) |child| {
-                    self.printStmt(@intCast(child), depth + 1);
+                    printer.printStmt(@intCast(child), depth + 1);
                 }
-                self.indent(depth);
-                self.write("}\n");
+                printer.indent(depth);
+                printer.write("}\n");
             },
 
             .Return => {
-                self.write("Return ");
-                self.printExpr(@intCast(val), depth + 1);
-                self.write(";");
+                printer.write("Return ");
+                printer.printExpr(@intCast(val), depth + 1);
+                printer.write(";");
             },
 
             .Discard => {
-                self.write("Discard ");
-                self.printExpr(@intCast(val), depth + 1);
-                self.write(";");
+                printer.write("Discard ");
+                printer.printExpr(@intCast(val), depth + 1);
+                printer.write(";");
             },
 
             .Expression => {
-                self.write("ExprStmt ");
-                self.printExpr(@intCast(val), depth + 1);
-                self.write(";");
+                printer.write("ExprStmt ");
+                printer.printExpr(@intCast(val), depth + 1);
+                printer.write(";");
             },
 
             .Defer => {
-                self.write("Defer ");
-                self.printExpr(@intCast(val), depth + 1);
-                self.write(";");
+                printer.write("Defer ");
+                printer.printExpr(@intCast(val), depth + 1);
+                printer.write(";");
             },
 
             .VariableDefinition => {
                 const sig_start = ex[val];
                 const expr_idx  = ex[val + 1];
-                const is_pub = self.ast.signatures.items(.public)[sig_start];
-                self.print("Let {s}", .{if (is_pub) "pub " else ""});
-                self.printSig(sig_start, depth);
-                self.indent(depth);
-                self.write(" = ");
-                self.printExpr(@intCast(expr_idx), depth + 2);
-                self.write(";");
+                const is_pub = printer.ast.signatures.items(.public)[sig_start];
+                printer.print("Let {s}", .{if (is_pub) "pub " else ""});
+                printer.printSig(sig_start, depth);
+                printer.indent(depth);
+                printer.write(" = ");
+                printer.printExpr(@intCast(expr_idx), depth + 2);
+                printer.write(";");
             },
 
             .Conditional => {
                 const cond     = ex[val];
                 const body     = ex[val + 1];
                 const has_else = ex[val + 2];
-                self.write("If ");
-                self.indent(depth + 1);
-                self.printExpr(@intCast(cond), depth + 2);
-                self.indent(depth + 1);
-                self.write("then ");
-                self.printStmt(@intCast(body), depth + 2);
+                printer.write("If ");
+                printer.indent(depth + 1);
+                printer.printExpr(@intCast(cond), depth + 2);
+                printer.indent(depth + 1);
+                printer.write("then ");
+                printer.printStmt(@intCast(body), depth + 2);
                 if (has_else != 0) {
-                    self.indent(depth + 1);
-                    self.write(" else ");
-                    self.printStmt(@intCast(ex[val + 3]), depth + 2);
+                    printer.indent(depth + 1);
+                    printer.write(" else ");
+                    printer.printStmt(@intCast(ex[val + 3]), depth + 2);
                 }
             },
 
             .While, .For => |loop| {
-                self.write(if (loop == .While) "While " else "For ");
-                self.indent(depth + 1);
-                self.printExpr(@intCast(ex[val]), depth + 2);
-                self.indent(depth + 1);
-                self.write("do ");
-                self.printStmt(@intCast(ex[val + 1]), depth + 2);
+                printer.write(if (loop == .While) "While " else "For ");
+                printer.indent(depth + 1);
+                printer.printExpr(@intCast(ex[val]), depth + 2);
+                printer.indent(depth + 1);
+                printer.write("do ");
+                printer.printStmt(@intCast(ex[val + 1]), depth + 2);
             },
 
             .Switch => {
-                self.write("Switch ");
-                self.indent(depth + 1);
-                self.printExpr(@intCast(ex[val]), depth + 2);
-                self.printCases(ex, ex[val + 1], ex[val + 2], depth, true);
+                printer.write("Switch ");
+                printer.indent(depth + 1);
+                printer.printExpr(@intCast(ex[val]), depth + 2);
+                printer.printCases(ex, ex[val + 1], ex[val + 2], depth, true);
             },
 
-            .Break    => self.write("Break;"),
-            .Continue => self.write("Continue;"),
+            .Break    => printer.write("Break;"),
+            .Continue => printer.write("Continue;"),
 
             .Import => {
                 const module    = ex[val];
                 const has_alias = ex[val + 1];
-                self.write("Import ");
-                self.printExpr(@intCast(module), depth + 1);
+                printer.write("Import ");
+                printer.printExpr(@intCast(module), depth + 1);
                 if (has_alias != 0) {
-                    self.indent(depth + 1);
-                    self.print("as {s}", .{self.tokenLexeme(@intCast(ex[val + 2]))});
+                    printer.indent(depth + 1);
+                    printer.print("as {s}", .{printer.tokenLexeme(@intCast(ex[val + 2]))});
                 }
-                self.write(";");
+                printer.write(";");
             },
 
             .InlineAssembly => {
-                self.print("Asm {s} ", .{self.tokenLexeme(val)});
-                self.write(";");
+                printer.print("Asm {s} ", .{printer.tokenLexeme(val)});
+                printer.write(";");
             },
 
             .Mark => {
-                self.write("Mark(");
+                printer.write("Mark(");
                 for (ex[ex[val]..ex[val + 1]]) |hint| {
-                    self.printExpr(@intCast(hint), depth + 1);
+                    printer.printExpr(@intCast(hint), depth + 1);
                 }
-                self.indent(depth);
-                self.write(")");
-                self.printStmt(@intCast(ex[val + 2]), depth);
+                printer.indent(depth);
+                printer.write(")");
+                printer.printStmt(@intCast(ex[val + 2]), depth);
             },
         }
     }
 
-    pub fn printExpr(self: *PrintContext, ei: defines.ExpressionPtr, depth: u32) void {
-        const exprs = self.ast.expressions;
+    pub fn printExpr(printer: *PrintContext, ei: defines.ExpressionPtr, depth: u32) void {
+        const exprs = printer.ast.expressions;
         const etype = exprs.items(.type)[ei];
         const val   = exprs.items(.value)[ei];
-        const ex    = self.ast.extra;
+        const ex    = printer.ast.extra;
 
         switch (etype) {
             .Literal => {
-                self.print("Literal({s})", .{self.tokenLexeme(val)});
+                printer.print("Literal({s})", .{printer.tokenLexeme(val)});
             },
 
             .Identifier => {
-                self.print("Ident({s})", .{self.tokenLexeme(val)});
+                printer.print("Ident({s})", .{printer.tokenLexeme(val)});
             },
 
             .Binary => {
-                self.print("Binary({s}) ", .{opSymbol(@intCast(ex[val + 1]))});
-                self.printExpr(@intCast(ex[val]),     depth + 1);
-                self.printExpr(@intCast(ex[val + 2]), depth + 1);
+                printer.print("Binary({s}) ", .{opSymbol(@intCast(ex[val + 1]))});
+                printer.printExpr(@intCast(ex[val]),     depth + 1);
+                printer.printExpr(@intCast(ex[val + 2]), depth + 1);
             },
 
             .Unary => {
-                self.print("Unary({s}) ", .{opSymbol(@intCast(ex[val]))});
-                self.printExpr(@intCast(ex[val + 1]), depth + 1);
+                printer.print("Unary({s}) ", .{opSymbol(@intCast(ex[val]))});
+                printer.printExpr(@intCast(ex[val + 1]), depth + 1);
             },
 
             .Assignment => {
-                self.write("Assign ");
-                self.printExpr(@intCast(ex[val]),     depth + 1);
-                self.printExpr(@intCast(ex[val + 1]), depth + 1);
+                printer.write("Assign ");
+                printer.printExpr(@intCast(ex[val]),     depth + 1);
+                printer.printExpr(@intCast(ex[val + 1]), depth + 1);
             },
 
             .Call => {
-                self.write("Call ");
-                self.printExpr(@intCast(ex[val]), depth + 1);
-                self.printExpr(@intCast(ex[val + 1]), depth + 1);
+                printer.write("Call ");
+                printer.printExpr(@intCast(ex[val]), depth + 1);
+                printer.printExpr(@intCast(ex[val + 1]), depth + 1);
             },
 
             .ExpressionList => {
-                self.write("(");
+                printer.write("(");
                 const expl = ex[ex[val]..ex[val + 1]];
                 for (expl, 0..) |child, i| {
-                    self.printExpr(@intCast(child), depth + 1);
-                    self.print("{s}", .{
+                    printer.printExpr(@intCast(child), depth + 1);
+                    printer.print("{s}", .{
                         if (i == expl.len - 1) "" else ", ",
                     });
                 }
-                self.write(")");
+                printer.write(")");
             },
 
             .Dot => {
-                self.print("Dot({s}) ", .{self.tokenLexeme(@intCast(ex[val + 1]))});
-                self.printExpr(@intCast(ex[val]), depth + 1);
+                printer.print("Dot({s}) ", .{printer.tokenLexeme(@intCast(ex[val + 1]))});
+                printer.printExpr(@intCast(ex[val]), depth + 1);
             },
 
             .Scoping => {
-                self.write("Scope(");
-                self.printExpr(@intCast(ex[val]), depth + 1);
-                self.print(", {s})", .{self.tokenLexeme(@intCast(ex[val + 1]))});
+                printer.write("Scope(");
+                printer.printExpr(@intCast(ex[val]), depth + 1);
+                printer.print(", {s})", .{printer.tokenLexeme(@intCast(ex[val + 1]))});
             },
 
             .Indexing => {
-                self.write("Index ");
-                self.printExpr(@intCast(ex[val]), depth + 1);
-                self.write(" at: ");
-                self.printExpr(@intCast(ex[val + 1]), depth + 2);
+                printer.write("Index ");
+                printer.printExpr(@intCast(ex[val]), depth + 1);
+                printer.write(" at: ");
+                printer.printExpr(@intCast(ex[val + 1]), depth + 2);
             },
 
             .Slicing => {
-                self.write("Slice ");
-                self.printExpr(@intCast(ex[val]), depth + 1);
-                self.write("from: ");
-                self.printExpr(@intCast(ex[val + 1]), depth + 2);
-                self.write("to: ");
-                self.printExpr(@intCast(ex[val + 2]), depth + 2);
+                printer.write("Slice ");
+                printer.printExpr(@intCast(ex[val]), depth + 1);
+                printer.write("from: ");
+                printer.printExpr(@intCast(ex[val + 1]), depth + 2);
+                printer.write("to: ");
+                printer.printExpr(@intCast(ex[val + 2]), depth + 2);
             },
 
             .Conditional => {
-                self.write("IfExpr ");
-                self.printExpr(@intCast(ex[val]),     depth + 2);
-                self.write(" then ");
-                self.printExpr(@intCast(ex[val + 1]), depth + 2);
-                self.write(" else ");
-                self.printExpr(@intCast(ex[val + 2]), depth + 2);
+                printer.write("IfExpr ");
+                printer.printExpr(@intCast(ex[val]),     depth + 2);
+                printer.write(" then ");
+                printer.printExpr(@intCast(ex[val + 1]), depth + 2);
+                printer.write(" else ");
+                printer.printExpr(@intCast(ex[val + 2]), depth + 2);
             },
 
             .Switch => {
-                self.write("SwitchExpr ");
-                self.printExpr(@intCast(ex[val]), depth + 2);
-                self.printCases(ex, ex[val + 1], ex[val + 2], depth, false);
+                printer.write("SwitchExpr ");
+                printer.printExpr(@intCast(ex[val]), depth + 2);
+                printer.printCases(ex, ex[val + 1], ex[val + 2], depth, false);
             },
 
             .FunctionDefinition => {
@@ -277,28 +277,28 @@ pub const PrintContext = struct {
                 const param_end   = ex[val + 1];
                 const ret         = ex[val + 2];
                 const body        = ex[val + 3];
-                self.write("FnDef (\n");
+                printer.write("FnDef (\n");
                 for (ex[param_start..param_end]) |raw_sig| {
-                    self.indent(depth + 1);
-                    self.printSig(@intCast(raw_sig), depth + 2);
+                    printer.indent(depth + 1);
+                    printer.printSig(@intCast(raw_sig), depth + 2);
                 }
-                self.indent(depth + 1);
-                self.write(" -> ");
-                self.printExpr(@intCast(ret), depth + 2);
-                self.write("{\n");
-                self.printStmt(@intCast(body), depth + 2);
-                self.write("}");
+                printer.indent(depth + 1);
+                printer.write(" -> ");
+                printer.printExpr(@intCast(ret), depth + 2);
+                printer.write("{\n");
+                printer.printStmt(@intCast(body), depth + 2);
+                printer.write("}");
             },
 
             .Lambda => {
                 const capture_start = ex[val];
                 const capture_end   = ex[val + 1];
                 const body          = ex[val + 2];
-                self.write("Lambda ");
+                printer.write("Lambda ");
                 for (ex[capture_start..capture_end]) |tok| {
-                    self.print("capture: {s} ", .{self.tokenLexeme(@intCast(tok))});
+                    printer.print("capture: {s} ", .{printer.tokenLexeme(@intCast(tok))});
                 }
-                self.printExpr(@intCast(body), depth + 2);
+                printer.printExpr(@intCast(body), depth + 2);
             },
 
             .StructDefinition => {
@@ -306,15 +306,15 @@ pub const PrintContext = struct {
                 const field_end   = ex[val + 1];
                 const def_start   = ex[val + 2];
                 const def_end     = ex[val + 3];
-                self.write("Struct {\n");
+                printer.write("Struct {\n");
                 for (ex[field_start..field_end]) |raw_sig| {
-                    self.printSig(@intCast(raw_sig), depth + 1);
+                    printer.printSig(@intCast(raw_sig), depth + 1);
                 }
                 for (ex[def_start..def_end]) |raw_stmt| {
-                    self.printStmt(@intCast(raw_stmt), depth + 1);
+                    printer.printStmt(@intCast(raw_stmt), depth + 1);
                 }
-                self.indent(depth);
-                self.write("}");
+                printer.indent(depth);
+                printer.write("}");
             },
 
             .EnumDefinition => {
@@ -322,16 +322,16 @@ pub const PrintContext = struct {
                 const var_end   = ex[val + 1];
                 const def_start = ex[val + 2];
                 const def_end   = ex[val + 3];
-                self.write("Enum {\n");
+                printer.write("Enum {\n");
                 for (ex[var_start..var_end]) |tok| {
-                    self.indent(depth + 1);
-                    self.print("{s},\n", .{self.tokenLexeme(@intCast(tok))});
+                    printer.indent(depth + 1);
+                    printer.print("{s},\n", .{printer.tokenLexeme(@intCast(tok))});
                 }
                 for (ex[def_start..def_end]) |raw_stmt| {
-                    self.printStmt(@intCast(raw_stmt), depth + 1);
+                    printer.printStmt(@intCast(raw_stmt), depth + 1);
                 }
-                self.indent(depth);
-                self.write("}");
+                printer.indent(depth);
+                printer.write("}");
             },
 
             .UnionDefinition => {
@@ -341,77 +341,77 @@ pub const PrintContext = struct {
                     const has_tag = ex[off];
                     off += 1;
                     if (has_tag != 0) {
-                        self.write("Union(");
-                        self.printExpr(@intCast(ex[off]), 0);
+                        printer.write("Union(");
+                        printer.printExpr(@intCast(ex[off]), 0);
                         off += 1;
-                        self.indent(depth);
-                        self.write(") {\n");
+                        printer.indent(depth);
+                        printer.write(") {\n");
                     } else {
-                        self.write("Union(enum) {\n");
+                        printer.write("Union(enum) {\n");
                     }
                 } else {
-                    self.write("Union {\n");
+                    printer.write("Union {\n");
                 }
                 const var_start = ex[off];
                 const var_end   = ex[off + 1];
                 const def_start = ex[off + 2];
                 const def_end   = ex[off + 3];
                 for (ex[var_start..var_end]) |raw_sig| {
-                    self.printSig(@intCast(raw_sig), depth + 1);
+                    printer.printSig(@intCast(raw_sig), depth + 1);
                 }
                 for (ex[def_start..def_end]) |raw_stmt| {
-                    self.printStmt(@intCast(raw_stmt), depth + 1);
+                    printer.printStmt(@intCast(raw_stmt), depth + 1);
                 }
-                self.indent(depth);
-                self.write("}");
+                printer.indent(depth);
+                printer.write("}");
             },
 
-            .PointerType  => { self.write("*");     self.printExpr(val, depth); },
-            .CPointerType => { self.write("[@c]");  self.printExpr(val, depth); },
-            .SliceType    => { self.write("[]");    self.printExpr(val, depth); },
-            .MutableType  => { self.write("mut ");  self.printExpr(val, depth); },
+            .PointerType  => { printer.write("*");     printer.printExpr(val, depth); },
+            .CPointerType => { printer.write("[@c]");  printer.printExpr(val, depth); },
+            .SliceType    => { printer.write("[]");    printer.printExpr(val, depth); },
+            .MutableType  => { printer.write("mut ");  printer.printExpr(val, depth); },
 
             .ArrayType => {
                 const size_ei = ex[val];
-                self.write("[");
-                self.printExpr(size_ei, depth + 1);
-                self.write("]");
-                self.printExpr(@intCast(ex[val + 1]), depth);
+                printer.write("[");
+                printer.printExpr(size_ei, depth + 1);
+                printer.write("]");
+                printer.printExpr(@intCast(ex[val + 1]), depth);
             },
 
             .FunctionType => {
-                self.write("*fn ");
-                self.printExpr(@intCast(ex[val]),     depth);
-                self.indent(depth);
-                self.write(" -> ");
-                self.printExpr(@intCast(ex[val + 1]), depth);
+                printer.write("*fn ");
+                printer.printExpr(@intCast(ex[val]),     depth);
+                printer.indent(depth);
+                printer.write(" -> ");
+                printer.printExpr(@intCast(ex[val + 1]), depth);
             },
 
             .Mark => {
-                self.write("Mark(");
+                printer.write("Mark(");
                 for (ex[ex[val]..ex[val + 1]]) |hint| {
-                    self.printExpr(@intCast(hint), depth + 1);
-                    self.write(" ");
+                    printer.printExpr(@intCast(hint), depth + 1);
+                    printer.write(" ");
                 }
-                self.indent(depth);
-                self.write(")");
-                self.printExpr(@intCast(ex[val + 2]), depth);
+                printer.indent(depth);
+                printer.write(")");
+                printer.printExpr(@intCast(ex[val + 2]), depth);
             },
         }
     }
 
-    pub fn printSig(self: *PrintContext, si: defines.SignaturePtr, depth: u32) void {
-        const sigs = self.ast.signatures;
+    pub fn printSig(printer: *PrintContext, si: defines.SignaturePtr, depth: u32) void {
+        const sigs = printer.ast.signatures;
         const sig  = sigs.get(si);
-        self.indent(depth);
-        if (sig.public) self.write("pub ");
-        self.print("{s}", .{self.tokenLexeme(sig.name)});
-        self.write(": ");
-        self.printExpr(sig.type, 0);
+        printer.indent(depth);
+        if (sig.public) printer.write("pub ");
+        printer.print("{s}", .{printer.tokenLexeme(sig.name)});
+        printer.write(": ");
+        printer.printExpr(sig.type, 0);
     }
 
     fn printCases(
-        self: *PrintContext,
+        printer: *PrintContext,
         ex: []const defines.OpaquePtr,
         case_start: defines.OpaquePtr,
         case_end: defines.OpaquePtr,
@@ -423,22 +423,22 @@ pub const PrintContext = struct {
             const case_expr = ex[i];
             const capture   = ex[i + 1];
             const case_body = ex[i + 2];
-            self.indent(depth + 1);
+            printer.indent(depth + 1);
             if (case_expr == 0) {
-                self.write("else");
+                printer.write("else");
             } else {
-                self.write("case: ");
-                self.printExpr(@intCast(case_expr), depth + 2);
-                self.indent(depth + 1);
+                printer.write("case: ");
+                printer.printExpr(@intCast(case_expr), depth + 2);
+                printer.indent(depth + 1);
             }
             if (capture != 0) {
-                self.print(" |{s}|", .{self.tokenLexeme(@intCast(capture))});
+                printer.print(" |{s}|", .{printer.tokenLexeme(@intCast(capture))});
             }
-            self.write(" -> ");
+            printer.write(" -> ");
             if (is_stmt) {
-                self.printStmt(@intCast(case_body), depth + 2);
+                printer.printStmt(@intCast(case_body), depth + 2);
             } else {
-                self.printExpr(@intCast(case_body), depth + 2);
+                printer.printExpr(@intCast(case_body), depth + 2);
             }
         }
     }

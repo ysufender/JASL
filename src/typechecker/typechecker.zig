@@ -521,7 +521,7 @@ pub fn typecheckCast(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpec
             error.MismatchingSliceChildType => self.report("Cast from slice type '{s}' to '{s}' will alter the length of the slice.", rargs),
             error.InferenceError => self.report("Illegal cast from '{s}' to unknown type '{s}'.", rargs),
             error.RedundantCast => self.report("Unnecessary cast from type '{s}' to '{s}'.", rargs),
-            else => return error.ShouldBeImpossible,
+            else => return common.debug.ShouldBeImpossible(@src()),
         }
 
         return err;
@@ -742,7 +742,7 @@ pub fn assertCastable(self: *Typechecker, from: TypeID, to: TypeID) Error!void {
             .Function => { },
             else => return error.IncompatibleTypes,
         },
-        .EnumLiteral => return error.ShouldBeImpossible,
+        .EnumLiteral => return common.debug.ShouldBeImpossible(@src()),
         .Any, .Type,
         .Noreturn, .Array,
         .Void => return error.IncompatibleTypes,
@@ -833,7 +833,7 @@ pub fn assertStructurallyIdentical(self: *const Typechecker, this: TypeID, that:
                 }
             }
         },
-        else => return error.ShouldBeImpossible,
+        else => return common.debug.ShouldBeImpossible(@src()),
     }
 }
 

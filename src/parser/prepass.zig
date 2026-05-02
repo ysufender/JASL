@@ -30,21 +30,21 @@ pub const Module = struct {
     symbols: SymbolList,
     dependencies: DependencyList,
 
-    pub fn print(self: *const Module, context: *Context) void {
-        const ast = context.getAST(self.dataIndex);
-        std.debug.print("\nModule {s}:\n", .{self.name});
-        std.debug.print("\tFile: {s}\n", .{context.getFileName(self.dataIndex)});
+    pub fn print(prepasser: *const Module, context: *Context) void {
+        const ast = context.getAST(prepasser.dataIndex);
+        std.debug.print("\nModule {s}:\n", .{prepasser.name});
+        std.debug.print("\tFile: {s}\n", .{context.getFileName(prepasser.dataIndex)});
         std.debug.print("\tAST:\n", .{});
         ast.print(context);
         std.debug.print("\tDependencies:\n", .{});
-        for (self.dependencies.items[0..@min(16, self.dependencies.items.len)]) |dependency| {
+        for (prepasser.dependencies.items[0..@min(16, prepasser.dependencies.items.len)]) |dependency| {
             std.debug.print("\t\t{s}\n", .{dependency});
         }
         std.debug.print("\tSymbols:\n", .{});
-        for (self.symbols.items(.name), 0..) |symbol, i| {
+        for (prepasser.symbols.items(.name), 0..) |symbol, i| {
             std.debug.print("\t\t{s}{s}\n", .{
-                if (self.symbols.items(.public)[i]) "pub " else "",
-                context.getTokens(ast.tokens).get(symbol).lexeme(context, self.dataIndex)
+                if (prepasser.symbols.items(.public)[i]) "pub " else "",
+                context.getTokens(ast.tokens).get(symbol).lexeme(context, prepasser.dataIndex)
             });
         }
     }
@@ -68,18 +68,18 @@ pub const ModuleList = struct {
         };
     }
 
-    pub fn get(self: *const ModuleList, name: []const u8) defines.ModulePtr {
-        return self.ids.get(name).?;
+    pub fn get(prepasser: *const ModuleList, name: []const u8) defines.ModulePtr {
+        return prepasser.ids.get(name).?;
     }
 
-    pub fn getItem(self: *const ModuleList, name: []const u8, comptime field: std.meta.FieldEnum(Module)) @FieldType(Module, @tagName(field)) {
-        return self.modules.items(field)[self.ids.get(name).?];
+    pub fn getItem(prepasser: *const ModuleList, name: []const u8, comptime field: std.meta.FieldEnum(Module)) @FieldType(Module, @tagName(field)) {
+        return prepasser.modules.items(field)[prepasser.ids.get(name).?];
     }
 
-    pub fn dupe(self: *const ModuleList, allocator: std.mem.Allocator) Error!ModuleList {
+    pub fn dupe(prepasser: *const ModuleList, allocator: std.mem.Allocator) Error!ModuleList {
         return .{
-            .modules = try collections.deepCopy(self.modules.mutableSlice(), allocator),
-            .ids= try collections.deepCopy(self.ids, allocator),
+            .modules = try collections.deepCopy(prepasser.modules.mutableSlice(), allocator),
+            .ids= try collections.deepCopy(prepasser.ids, allocator),
         };
     }
 };
@@ -111,36 +111,36 @@ pub fn init(context: *Context, initial: defines.ASTPtr, allocator: std.mem.Alloc
 }
 
 /// Returns a module list slice containing all modules. Releases the ownership.
-pub fn prepass(self: *Prepass, allocator: std.mem.Allocator) Error!ModuleList {
-    defer self.arena.deinit();
+pub fn prepass(prepasser: *Prepass, allocator: std.mem.Allocator) Error!ModuleList {
+    defer prepasser.arena.deinit();
 
     const bname: []const u8 = "builtin";
-    const builtin = try self.modules.modules.addOne(allocator);
-    self.modules.modules.set(builtin, .{
+    const builtin = try prepasser.modules.modules.addOne(allocator);
+    prepasser.modules.modules.set(builtin, .{
         .name = try collections.deepCopy(bname, allocator), 
         .dataIndex = 0,
         .dependencies = .empty,
         .symbolPtrs = .empty,
         .symbols = try .init(allocator, 0),
     });
-    self.modules.ids.putAssumeCapacityNoClobber(bname, builtin);
+    prepasser.modules.ids.putAssumeCapacityNoClobber(bname, builtin);
 
-    try self.prepassImpl(self.initial, "root");
+    try prepasser.prepassImpl(prepasser.initial, "root");
 
-    for (1..self.modules.modules.len) |i| {
-        self.modules.modules.items(.dependencies)[i].shrinkAndFree(
-            self.arena.allocator(),
-            self.modules.modules.items(.dependencies)[i].items.len
+    for (1..prepasser.modules.modules.len) |i| {
+        prepasser.modules.modules.items(.dependencies)[i].shrinkAndFree(
+            prepasser.arena.allocator(),
+            prepasser.modules.modules.items(.dependencies)[i].items.len
         );
     }
 
-    return collections.deepCopy(self.modules, allocator);
+    return collections.deepCopy(prepasser.modules, allocator);
 }
 
 /// Threaded recursive prepassing. Uses mutexes.
-fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!void {
-    const tokens = self.context.getTokens(ast.tokens);
-    const allocator = self.arena.allocator();
+fn prepassImpl(prepasser: *Prepass, ast: *const Parser.AST, name: []const u8) Error!void {
+    const tokens = prepasser.context.getTokens(ast.tokens);
+    const allocator = prepasser.arena.allocator();
 
     var file = Module{
         .dataIndex = tokens.items(.start)[0],
@@ -159,8 +159,8 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
     var first = true;
     var stmt: u32 = 0;
     statementLoop: while (stmt < ast.statementMask.len) {
-        if (errc == self.context.settings.maxErr) {
-            self.report("Too many errors, aborting the prepass of module '{s}'", .{
+        if (errc == prepasser.context.settings.maxErr) {
+            prepasser.report("Too many errors, aborting the prepass of module '{s}'\n", .{
                 name
             }, file.dataIndex, null);
 
@@ -173,12 +173,12 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
         }
 
         case: switch (statement.type) {
-            .Import => self.prepassImport(ast, statement.value, &file) catch |err| {
+            .Import => prepasser.prepassImport(ast, statement.value, &file) catch |err| {
                 lastErr = err;
                 errc += 1;
                 break :case;
             },
-            .VariableDefinition => self.prepassVariableDef(ast, tokens, &file, statement.value) catch |err| {
+            .VariableDefinition => prepasser.prepassVariableDef(ast, tokens, &file, statement.value) catch |err| {
                 lastErr = err;
                 errc += 1;
                 break :case;
@@ -188,7 +188,7 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
                 continue :statementLoop;
             },
             else => {
-                self.report(
+                prepasser.report(
                     "Only definitions are allowed at top-level. Received: {s}",
                     .{@tagName(statement.type)},
                     file.dataIndex,
@@ -212,30 +212,30 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
         return lastErr.?;
     }
 
-    const index = self.modules.modules.addOne(allocator) catch |e| return e;
+    const index = prepasser.modules.modules.addOne(allocator) catch |e| return e;
 
-    self.modules.ids.put(allocator, file.name, index) catch |e| return e;
-    self.modules.modules.set(index, file);
+    prepasser.modules.ids.put(allocator, file.name, index) catch |e| return e;
+    prepasser.modules.modules.set(index, file);
 
-    if (self.modules.ids.count() > defines.rehashLimit) {
-        self.modules.ids.rehash(std.hash_map.StringContext{});
+    if (prepasser.modules.ids.count() > defines.rehashLimit) {
+        prepasser.modules.ids.rehash(std.hash_map.StringContext{});
     }
 
-    self.context.registerModule(&file);
+    prepasser.context.registerModule(&file);
 }
 
 fn prepassImport(
-    self: *Prepass,
+    prepasser: *Prepass,
     ast: *const Parser.AST,
     stmt: defines.OpaquePtr,
     file: *Module,
 ) Error!void {
-    const module = getModuleName(stmt, ast, self.context);
-    file.dependencies.append(self.arena.allocator(), module)
+    const module = getModuleName(stmt, ast, prepasser.context);
+    file.dependencies.append(prepasser.arena.allocator(), module)
         catch return error.AllocatorFailure;
 
-    const path = getModulePathWithExtension(self.arena.allocator(), stmt, ast, self.context) catch |err| {
-        self.report("Couldn't get module path for {s}: {s}.",
+    const path = getModulePathWithExtension(prepasser.arena.allocator(), stmt, ast, prepasser.context) catch |err| {
+        prepasser.report("Couldn't get module path for {s}: {s}.",
             .{module, @errorName(err)},
             file.dataIndex,
             if (ast.expressions.items(.type)[ast.extra[stmt]] == .Identifier)
@@ -247,12 +247,12 @@ fn prepassImport(
         return err;
     };
 
-    if (self.context.isProcessed(path)) {
+    if (prepasser.context.isProcessed(path)) {
         return;
     }
 
-    var lexer = Lexer.init(self.arena.allocator(), self.context, path) catch |err| {
-        self.report("Couldn't scan module at path {s}.", .{path}, self.context.getFileId(path),
+    var lexer = Lexer.init(prepasser.arena.allocator(), prepasser.context, path) catch |err| {
+        prepasser.report("Couldn't scan module at path {s}.", .{path}, prepasser.context.getFileId(path),
             if (ast.expressions.items(.type)[ast.extra[stmt]] == .Identifier)
                 ast.expressions.items(.value)[ast.extra[stmt]]
             else
@@ -263,7 +263,7 @@ fn prepassImport(
     };
 
     const moduleTokens = lexer.lex() catch |err| {
-        self.report("Couldn't scan module at path {s}.", .{path}, file.dataIndex,
+        prepasser.report("Couldn't scan module at path {s}.", .{path}, file.dataIndex,
             if (ast.expressions.items(.type)[ast.extra[stmt]] == .Identifier)
                 ast.expressions.items(.value)[ast.extra[stmt]]
             else
@@ -273,8 +273,8 @@ fn prepassImport(
         return err;
     };
 
-    var prs = Parser.init(self.arena.allocator(), self.context, moduleTokens) catch |err| {
-        self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex,
+    var prs = Parser.init(prepasser.arena.allocator(), prepasser.context, moduleTokens) catch |err| {
+        prepasser.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex,
             if (ast.expressions.items(.type)[ast.extra[stmt]] == .Identifier)
                 ast.expressions.items(.value)[ast.extra[stmt]]
             else
@@ -285,7 +285,7 @@ fn prepassImport(
     };
 
     const imported = prs.parse() catch |err| {
-        self.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex,
+        prepasser.report("Couldn't parse module at path {s}.", .{path}, file.dataIndex,
             if (ast.expressions.items(.type)[ast.extra[stmt]] == .Identifier)
                 ast.expressions.items(.value)[ast.extra[stmt]]
             else
@@ -295,11 +295,11 @@ fn prepassImport(
         return err;
     };
 
-    return self.prepassImpl(self.context.getAST(imported), module);
+    return prepasser.prepassImpl(prepasser.context.getAST(imported), module);
 }
 
 fn prepassVariableDef(
-    self: *Prepass,
+    prepasser: *Prepass,
     ast: *const Parser.AST,
     tokens: *const Lexer.TokenList.Slice,
     file: *Module,
@@ -308,25 +308,25 @@ fn prepassVariableDef(
     const signature = ast.extra[stmt];
 
     const sig = ast.signatures.get(signature);
-    const sigName = tokens.get(sig.name).lexeme(self.context, file.dataIndex);
+    const sigName = tokens.get(sig.name).lexeme(prepasser.context, file.dataIndex);
 
     for (Resolver.builtins) |builtin| {
         if (std.mem.eql(u8, builtin, sigName)) {
-            self.report("Given symbol '{s}' collides with the builtin '{s}'.", .{
+            prepasser.report("Given symbol '{s}' collides with the builtin '{s}'.", .{
                 sigName, sigName,
             }, file.dataIndex, sig.name);
             return error.DuplicateSymbol;
         }
     }
 
-    const idx = file.symbols.addOne(self.arena.allocator()) catch
+    const idx = file.symbols.addOne(prepasser.arena.allocator()) catch
         return error.AllocatorFailure;
 
-    const res = file.symbolPtrs.getOrPut(self.arena.allocator(), sigName) catch
+    const res = file.symbolPtrs.getOrPut(prepasser.arena.allocator(), sigName) catch
         return error.AllocatorFailure;
 
     if (res.found_existing) {
-        self.report("Given symbol '{s}' collides with the previous definition of '{s}'.",
+        prepasser.report("Given symbol '{s}' collides with the previous definition of '{s}'.",
             .{sigName, sigName},
             file.dataIndex,
             sig.name,
@@ -419,19 +419,19 @@ fn getModuleNameStartIndex(id: defines.ExpressionPtr, ast: *const Parser.AST, co
     return start;
 }
 
-fn report(self: *Prepass, comptime fmt: []const u8, args: anytype, file: u32, token: ?u32) void {
+fn report(prepasser: *Prepass, comptime fmt: []const u8, args: anytype, file: u32, token: ?u32) void {
     common.log.err(fmt, args);
     if (
-        self.context.astMap.items.len > file
-        and self.context.getTokens(self.context.getAST(file).tokens).len > 0
+        prepasser.context.astMap.items.len > file
+        and prepasser.context.getTokens(prepasser.context.getAST(file).tokens).len > 0
     ) {
         const t_idx = token orelse 0;
-        if (t_idx < self.context.getTokens(self.context.getAST(file).tokens).len) {
-            const position = self.context.getTokens(self.context.getAST(file).tokens).get(t_idx).position(self.context, file);
-            common.log.err(("." ** 4) ++ " In {s} {d}:{d}\n", .{self.context.getFileName(file), position.line, position.column});
+        if (t_idx < prepasser.context.getTokens(prepasser.context.getAST(file).tokens).len) {
+            const position = prepasser.context.getTokens(prepasser.context.getAST(file).tokens).get(t_idx).position(prepasser.context, file);
+            common.log.err(("." ** 4) ++ " In {s} {d}:{d}\n", .{prepasser.context.getFileName(file), position.line, position.column});
             return;
         }
     }
     
-    common.log.err(("." ** 4) ++ " In {s} (no location available)\n", .{self.context.getFileName(file)});
+    common.log.err(("." ** 4) ++ " In {s} (no location available)\n", .{prepasser.context.getFileName(file)});
 }

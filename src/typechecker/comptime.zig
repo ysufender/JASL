@@ -595,8 +595,6 @@ fn evalScoping(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
         .get(ast.extra[extraPtr + 1])
         .lexeme(self.typechecker.context, ast.tokens);
 
-    std.debug.print("{s}\n", .{member});
-
     return switch (self.typechecker.typeTable.get(res)) {
         .Enum => |enm| Value{
             .Enum = .{
@@ -610,7 +608,7 @@ fn evalScoping(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
         },
         else => |o| {
             std.debug.print("{s} is not implemented.\n", .{@tagName(std.meta.activeTag(o))});
-            return error.ShouldBeImpossible;
+            return common.debug.NotImplemented(@src());
         },
     };
 }
@@ -975,7 +973,7 @@ fn castValue(self: *Comptime, value: Value, to: TypeID) Error!Value {
         .Undefined => .{
             .Undefined = to, 
         },
-        else => error.ShouldBeImpossible,
+        else => common.debug.ShouldBeImpossible(@src()),
     };
 }
 

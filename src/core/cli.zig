@@ -67,7 +67,7 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
     var maybeFile: ?[]const u8 = null;
     var workingDir: []const u8 = undefined;
     var includeDirs = NMap.empty;
-    var maxErr: u32 = 10;
+    var maxErr: u32 = 5;
     var settings = common.CompilerSettings{
         .flags = .empty,
         .workingDir = "",

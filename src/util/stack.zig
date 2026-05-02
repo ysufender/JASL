@@ -9,26 +9,26 @@ fn InnerStaticStack(comptime T: type, comptime Size: usize) type {
         values: [Size]T = undefined,
         index: u32 = 0,
 
-        pub fn push(self: *Self, value: T) Error!void {
-            if (self.index >= Size) {
+        pub fn push(stack: *Self, value: T) Error!void {
+            if (stack.index >= Size) {
                 return error.OutOfMemory;
             }
 
-            defer self.index += 1;
-            self.values[self.index] = value;
+            defer stack.index += 1;
+            stack.values[stack.index] = value;
         }
 
-        pub fn pop(self: *Self) ?T {
-            if (self.index <= 0) {
+        pub fn pop(stack: *Self) ?T {
+            if (stack.index <= 0) {
                 return null;
             }
 
-            defer self.index -= 1;
-            return self.values[self.index];
+            defer stack.index -= 1;
+            return stack.values[stack.index];
         }
 
-        pub fn empty(self: *const Self) bool {
-            return self.index == 0;
+        pub fn empty(stack: *const Self) bool {
+            return stack.index == 0;
         }
     };
 }
@@ -45,42 +45,42 @@ pub fn StaticRingStack(comptime T: type, comptime Size: usize) type {
         top: u32 = 0,
         size: u32 = 0,
 
-        pub fn push(self: *Self, value: T) void {
-            if (self.top >= Size) {
-                self.top = 0;
-                self.size -= 1;
+        pub fn push(stack: *Self, value: T) void {
+            if (stack.top >= Size) {
+                stack.top = 0;
+                stack.size -= 1;
             }
 
-            defer self.top += 1;
-            defer self.size += 1;
+            defer stack.top += 1;
+            defer stack.size += 1;
 
-            self.values[self.top] = value;
+            stack.values[stack.top] = value;
         }
 
-        pub fn pop(self: *Self) ?T {
-            if (self.top <= 0 and self.size > 0) {
-                self.top = Size - 1;
+        pub fn pop(stack: *Self) ?T {
+            if (stack.top <= 0 and stack.size > 0) {
+                stack.top = Size - 1;
             }
-            else if (self.top <= 0) {
+            else if (stack.top <= 0) {
                 return null;
             }
 
-            defer self.top -= 1;
-            defer self.size -= 1;
-            return self.peek();
+            defer stack.top -= 1;
+            defer stack.size -= 1;
+            return stack.peek();
         }
 
-        pub fn peek(self: *const Self) ?T {
+        pub fn peek(stack: *const Self) ?T {
             const top =
-                if (self.top <= 0 and self.size > 0) Size - 1
-                else if (self.top <= 0) return null
-                else self.top - 1;
+                if (stack.top <= 0 and stack.size > 0) Size - 1
+                else if (stack.top <= 0) return null
+                else stack.top - 1;
 
-            return self.values[top];
+            return stack.values[top];
         }
 
-        pub fn empty(self: *const Self) bool {
-            return self.size <= 0;
+        pub fn empty(stack: *const Self) bool {
+            return stack.size <= 0;
         }
     };
 }

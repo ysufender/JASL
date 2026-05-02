@@ -72,7 +72,7 @@ pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Context {
     var resolved = ResolveMap.empty;
     resolved.ensureTotalCapacity(allocator, 512) catch return error.AllocatorFailure;
 
-    const self = Context{
+    const context = Context{
         .filenameMap = FileNameMap.initCapacity(allocator, 512) catch return error.AllocatorFailure,
         .fileMap = FileMap.initCapacity(allocator, 512) catch return error.AllocatorFailure,
         .tokenMap = TokenMap.initCapacity(allocator, 512) catch return error.AllocatorFailure,
@@ -83,21 +83,21 @@ pub fn init(baseAllocator: std.mem.Allocator) CompilerError!Context {
         .counts = .{},
     };
 
-    return self;
+    return context;
 }
 
-pub fn deinit(self: *Context) void {
-    self.arena.deinit();
+pub fn deinit(context: *Context) void {
+    context.arena.deinit();
 }
 
-pub fn openRead(self: *Context, file: []const u8) CompilerError!defines.FilePtr {
-    const path = try self.realpath(file);
+pub fn openRead(context: *Context, file: []const u8) CompilerError!defines.FilePtr {
+    const path = try context.realpath(file);
 
-    if (self.resolved.get(path)) |id| {
+    if (context.resolved.get(path)) |id| {
         return id;
     }
 
-    self.filenameMap.append(self.arena.allocator(), path) catch return error.AllocatorFailure;
+    context.filenameMap.append(context.arena.allocator(), path) catch return error.AllocatorFailure;
 
     var sourceFile = std.fs.openFileAbsolute(path, .{.mode = .read_only}) catch {
         log.err("Couldn't open source file '{s}'.", .{file});
@@ -111,21 +111,21 @@ pub fn openRead(self: *Context, file: []const u8) CompilerError!defines.FilePtr 
         return error.IOError;
     };
 
-    self.fileMap.append(
-        self.arena.allocator(),
-        fileReader.interface.readAlloc(self.arena.allocator(), sourceSize) catch |err| {
+    context.fileMap.append(
+        context.arena.allocator(),
+        fileReader.interface.readAlloc(context.arena.allocator(), sourceSize) catch |err| {
             log.err("Couldn't read file {s}\n\tInfo: {s}", .{path, @errorName(err)});
             return error.IOError;
         }
     ) catch return error.AllocatorFailure;
 
-    self.resolved.putNoClobber(
-        self.arena.allocator(),
+    context.resolved.putNoClobber(
+        context.arena.allocator(),
         path,
-        @intCast(self.fileMap.items.len - 1)
+        @intCast(context.fileMap.items.len - 1)
     ) catch return error.AllocatorFailure;
 
-    return @intCast(self.fileMap.items.len - 1);
+    return @intCast(context.fileMap.items.len - 1);
 }
 
 pub fn openWrite(file: []const u8) CompilerError!std.fs.File {
@@ -135,72 +135,72 @@ pub fn openWrite(file: []const u8) CompilerError!std.fs.File {
     };
 }
 
-pub fn getFile(self: *const Context, file: defines.FilePtr) []const u8 {
-    assert(file < self.fileMap.items.len);
-    return self.fileMap.items[file];
+pub fn getFile(context: *const Context, file: defines.FilePtr) []const u8 {
+    assert(file < context.fileMap.items.len);
+    return context.fileMap.items[file];
 }
 
-pub fn getFileName(self: *const Context, file: defines.FilePtr) []const u8 {
-    assert(file < self.filenameMap.items.len);
-    return self.filenameMap.items[file];
+pub fn getFileName(context: *const Context, file: defines.FilePtr) []const u8 {
+    assert(file < context.filenameMap.items.len);
+    return context.filenameMap.items[file];
 }
 
-pub fn registerTokens(self: *Context, tokens: Lexer.TokenList.Slice) CompilerError!defines.TokenPtr {
-    self.counts.tokens += tokens.len;
+pub fn registerTokens(context: *Context, tokens: Lexer.TokenList.Slice) CompilerError!defines.TokenPtr {
+    context.counts.tokens += tokens.len;
 
-    self.tokenMap.append(self.arena.allocator(), try collections.deepCopy(tokens, self.arena.allocator())) catch return error.AllocatorFailure;
+    context.tokenMap.append(context.arena.allocator(), try collections.deepCopy(tokens, context.arena.allocator())) catch return error.AllocatorFailure;
 
-    return @intCast(self.tokenMap.items.len - 1);
+    return @intCast(context.tokenMap.items.len - 1);
 }
 
-pub fn getTokens(self: *const Context, tokens: defines.TokenPtr) *const Lexer.TokenList.Slice {
-    assert(tokens < self.tokenMap.items.len);
-    return &self.tokenMap.items[tokens];
+pub fn getTokens(context: *const Context, tokens: defines.TokenPtr) *const Lexer.TokenList.Slice {
+    assert(tokens < context.tokenMap.items.len);
+    return &context.tokenMap.items[tokens];
 }
 
-pub fn registerAST(self: *Context, ast: Parser.AST) CompilerError!defines.ASTPtr {
-    const ptr: defines.ASTPtr = @intCast(self.astMap.items.len);
-    _ = self.astMap.addOne(self.arena.allocator()) catch return error.AllocatorFailure;
+pub fn registerAST(context: *Context, ast: Parser.AST) CompilerError!defines.ASTPtr {
+    const ptr: defines.ASTPtr = @intCast(context.astMap.items.len);
+    _ = context.astMap.addOne(context.arena.allocator()) catch return error.AllocatorFailure;
 
-    self.counts.modules += 1;
-    self.counts.expressions += ast.expressions.len;
-    self.counts.statements += ast.statements.len;
-    self.counts.extras += @intCast(ast.extra.len);
+    context.counts.modules += 1;
+    context.counts.expressions += ast.expressions.len;
+    context.counts.statements += ast.statements.len;
+    context.counts.extras += @intCast(ast.extra.len);
 
-    self.counts.integer += ast.stats.integer;
-    self.counts.float += ast.stats.float;
-    self.counts.string += ast.stats.string;
-    self.counts.bool += ast.stats.bool;
-    self.counts.types += ast.stats.types;
+    context.counts.integer += ast.stats.integer;
+    context.counts.float += ast.stats.float;
+    context.counts.string += ast.stats.string;
+    context.counts.bool += ast.stats.bool;
+    context.counts.types += ast.stats.types;
 
-    self.counts.meta += ast.stats.meta;
+    context.counts.meta += ast.stats.meta;
 
-    self.astMap.items[ptr] = try collections.deepCopy(ast, self.arena.allocator());
+    context.astMap.items[ptr] = try collections.deepCopy(ast, context.arena.allocator());
 
     return ptr;
 }
 
-pub fn getAST(self: *const Context, ast: defines.ASTPtr) *const Parser.AST {
-    assert(ast < self.astMap.items.len);
-    return &self.astMap.items[ast];
+pub fn getAST(context: *const Context, ast: defines.ASTPtr) *const Parser.AST {
+    assert(ast < context.astMap.items.len);
+    return &context.astMap.items[ast];
 }
 
-pub fn registerModule(self: *Context, module: *const Prepass.Module) void {
-    self.counts.topLevels += module.symbols.len;
+pub fn registerModule(context: *Context, module: *const Prepass.Module) void {
+    context.counts.topLevels += module.symbols.len;
 }
 
-pub fn isProcessed(self: *Context, file: []const u8) bool {
-    return self.resolved.contains(file);
+pub fn isProcessed(context: *Context, file: []const u8) bool {
+    return context.resolved.contains(file);
 }
 
-pub fn realpath(self: *Context, file: []const u8) CompilerError![]const u8 {
+pub fn realpath(context: *Context, file: []const u8) CompilerError![]const u8 {
     var buf: [std.fs.max_path_bytes]u8 = undefined;
     var allocator = std.heap.FixedBufferAllocator.init(&buf);
 
     var path: []const u8 = undefined;
 
     path = std.fs.realpathAlloc(allocator.allocator(), file) catch pblk: {
-        loop: for (self.settings.includeDirs) |dir| {
+        loop: for (context.settings.includeDirs) |dir| {
             path = std.fs.path.join(allocator.allocator(), &.{dir, file}) catch return error.AllocatorFailure;
             defer allocator.allocator().free(path);
 
@@ -212,27 +212,27 @@ pub fn realpath(self: *Context, file: []const u8) CompilerError![]const u8 {
         return error.FileNotFound;
     };
 
-    return self.arena.allocator().dupe(u8, path) catch error.AllocatorFailure;
+    return context.arena.allocator().dupe(u8, path) catch error.AllocatorFailure;
 }
 
-pub fn getFileId(self: *Context, file: []const u8) defines.FilePtr {
-    assert(self.resolved.contains(file));
+pub fn getFileId(context: *Context, file: []const u8) defines.FilePtr {
+    assert(context.resolved.contains(file));
     return
-        if (self.resolved.get(file)) |f| f
+        if (context.resolved.get(file)) |f| f
         else unreachable;
 }
 
-pub fn stats(self: *Context) void {
+pub fn stats(context: *Context) void {
     log.info("Stats:", .{});
-    log.info("\tTotal Module Count:              {d}", .{self.counts.modules});
-    log.info("\tTotal Top-Level Signature Count: {d}", .{self.counts.topLevels});
-    log.info("\tTotal Tokens:                    {d}", .{self.counts.tokens});
-    log.info("\tTotal Expressions:               {d}", .{self.counts.expressions});
-    log.info("\tTotal Extras:                    {d}", .{self.counts.extras});
+    log.info("\tTotal Module Count:              {d}", .{context.counts.modules});
+    log.info("\tTotal Top-Level Signature Count: {d}", .{context.counts.topLevels});
+    log.info("\tTotal Tokens:                    {d}", .{context.counts.tokens});
+    log.info("\tTotal Expressions:               {d}", .{context.counts.expressions});
+    log.info("\tTotal Extras:                    {d}", .{context.counts.extras});
     log.info("", .{});
 
     log.info("\tProcessed Files:", .{});
-    for (self.filenameMap.items) |file| {
+    for (context.filenameMap.items) |file| {
         log.info("\t\t{s}", .{file});
     }
     log.info("", .{});

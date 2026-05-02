@@ -5,6 +5,8 @@ const builtin = @import("builtin");
 const defines = @import("defines.zig");
 
 pub const log = @import("log.zig");
+pub const debug = @import("../debug/debug.zig");
+
 pub const CompilerContext = @import("context.zig");
 pub const CompilerSettings = @import("settings.zig");
 
@@ -76,5 +78,6 @@ pub const CompilerError = error {
     ModuleNotInScope,
     FieldNotFound,
     ShouldBeImpossible,
+    AccessSpecifierMismatch,
     Terminate,
 };

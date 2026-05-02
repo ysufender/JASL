@@ -105,7 +105,7 @@ pub const AST = struct {
     pub fn print(self: *const AST, context: *common.CompilerContext) void {
         const tokens = context.getTokens(self.tokens);
         const file = tokens.items(.start)[0];
-        std.debug.print("\nTokens ({d}):    ", .{tokens.len});
+        common.log.debug("\nTokens ({d}):    ", .{tokens.len});
         var titerator = tokens.iterator();
         var i: u32 = 0;
         while (titerator.next()) |token| {
@@ -113,9 +113,9 @@ pub const AST = struct {
             if (i >= 16) {
                 break;
             }
-            std.debug.print("({d} {s}) ", .{titerator.idx - 1, @tagName(token.type)});
+            common.log.debug("({d} {s}) ", .{titerator.idx - 1, @tagName(token.type)});
         }
-        std.debug.print("\nExpressions ({d}):", .{self.expressions.len});
+        common.log.debug("\nExpressions ({d}):", .{self.expressions.len});
         var eiterator = self.expressions.iterator();
         i = 0;
         while (eiterator.next()) |expr| {
@@ -123,9 +123,9 @@ pub const AST = struct {
             if (i >= 16) {
                 break;
             }
-            std.debug.print("({s} {d}) ", .{@tagName(expr.type), expr.value});
+            common.log.debug("({s} {d}) ", .{@tagName(expr.type), expr.value});
         }
-        std.debug.print("\nStatements ({d}):", .{self.statements.len});
+        common.log.debug("\nStatements ({d}):", .{self.statements.len});
         var siterator = self.statements.iterator();
         i = 0;
         while (siterator.next()) |stmt| {
@@ -133,9 +133,9 @@ pub const AST = struct {
             if (i >= 16) {
                 break;
             }
-            std.debug.print("({s} {d}) ", .{@tagName(stmt.type), stmt.value});
+            common.log.debug("({s} {d}) ", .{@tagName(stmt.type), stmt.value});
         }
-        std.debug.print("\nSignatures ({d}):", .{self.signatures.len});
+        common.log.debug("\nSignatures ({d}):", .{self.signatures.len});
         var viterator = self.signatures.iterator();
         i = 0;
         while (viterator.next()) |sign| {
@@ -143,17 +143,17 @@ pub const AST = struct {
             if (i >= 16) {
                 break;
             }
-            std.debug.print("({s}{s} {d}) ", .{if (sign.public) "pub " else "", tokens.get(sign.name).lexeme(context, file), sign.type});
+            common.log.debug("({s}{s} {d}) ", .{if (sign.public) "pub " else "", tokens.get(sign.name).lexeme(context, file), sign.type});
         }
-        std.debug.print("\nMask ({d}):      ", .{self.statementMask.len});
+        common.log.debug("\nMask ({d}):      ", .{self.statementMask.len});
         for (self.statementMask[0..@min(16, self.statementMask.len)]) |stmt| {
-            std.debug.print("{d} ", .{stmt});
+            common.log.debug("{d} ", .{stmt});
         }
-        std.debug.print("\nExtra ({d}):     ", .{self.extra.len});
+        common.log.debug("\nExtra ({d}):     ", .{self.extra.len});
         for (self.extra[0..@min(16, self.extra.len)]) |extra| {
-            std.debug.print("{d} ", .{extra});
+            common.log.debug("{d} ", .{extra});
         }
-        std.debug.print("\n\n", .{});
+        common.log.debug("\n\n", .{});
     }
 };
 
@@ -234,7 +234,7 @@ pub fn parse(self: *Parser) common.CompilerError!defines.ASTPtr {
             common.log.err("Error: {d} <{s}>\n", .{ @intFromError(err), @errorName(err) });
             self.synchronize();
             if (errCount == self.context.settings.maxErr) {
-                common.log.err("Too many errors, aborting compilation.", .{});
+                common.log.err("Too many errors, aborting compilation.\n", .{});
                 return err;
             }
         }
