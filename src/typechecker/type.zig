@@ -47,6 +47,9 @@ pub const Struct = struct {
     name: []const u8,
     fields: []const FieldInfo,
     definitions: []const FieldInfo,
+
+    // @CompilerOnly
+    scope: defines.ScopePtr,
 };
 
 pub const Union = union(enum) {
@@ -56,6 +59,9 @@ pub const Union = union(enum) {
         name: []const u8,
         fields: []const FieldInfo,
         definitions: []const FieldInfo,
+
+        // @CompilerOnly
+        scope: defines.ScopePtr,
     },
     Plain: Struct,
 };
@@ -65,6 +71,9 @@ pub const Enum = struct {
     name: []const u8,
     fields: []const []const u8,
     definitions: []const FieldInfo,
+
+    // @CompilerOnly
+    scope: defines.ScopePtr,
 };
 
 pub const Pointer = struct {

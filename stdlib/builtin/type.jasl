@@ -1,9 +1,11 @@
-pub let Type = u32;
-
 pub let TypeInfo = union(enum) {
     Struct: Struct,
     Union: Union,
     Enum: Enum,
+
+    ComptimeInt: void, // Must be const 
+    ComptimeFloat: void, // Must be const
+    EnumLiteral: void, // Must be const and comptime
 
     Integer: Integer,
     Bool: bool, // mutability bool
@@ -11,16 +13,18 @@ pub let TypeInfo = union(enum) {
     Void: void,
 
     Pointer: Pointer,
-    Function: Function,
+    Function: Function, // is a pointer
     Noreturn: void,
-    Any: void,
+    Any: bool, // mutability bool
     Type: void,
+
+    Array: Array,
 };
 
 pub let FieldInfo = struct {
     public: bool,
     name: []u8,
-    valueType: Type,
+    valueType: type,
 };
 
 pub let Struct = struct {
@@ -30,7 +34,16 @@ pub let Struct = struct {
     definitions: []FieldInfo,
 };
 
-pub let Union = Struct;
+pub let Union = union(enum) {
+    Tagged: struct {
+        tag: type,
+        mutable: bool,
+        name: []u8,
+        fields: []FieldInfo,
+        definitions: []FieldInfo,
+    },
+    Plain: Struct,
+};
 
 pub let Enum = struct {
     mutable: bool,
@@ -41,18 +54,24 @@ pub let Enum = struct {
 
 pub let Pointer = struct {
     mutable: bool,
-    child: Type,
-    pointerType: enum {
+    child: type,
+    size: enum {
         Slice,
         Single,
+        C,
     },
+};
+
+pub let Array = struct {
+    mutable: bool,
+    child: type,
+    len: u32,
 };
 
 pub let Function = struct {
     mutable: bool,
-    name: []u8,
-    argTypes: []Type,
-    returnTypes: []Type,
+    argTypes: []type,
+    returnType: type,
 };
 
 pub let Integer = struct {

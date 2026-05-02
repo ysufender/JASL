@@ -13,6 +13,7 @@ fn Context(comptime Key: type) type {
 
             pub fn hash(_: Self, key: Key) u64 { 
                 var hasher = std.hash.Wyhash.init(0);
+                // TODO: Errors when used with unions, as in unions of JASL.
                 std.hash.autoHashStrat(&hasher, key, .DeepRecursive);
                 return hasher.final();
             }
