@@ -35,6 +35,14 @@ pub const Range = struct {
     pub fn get(self: Range, from: anytype, index: u32) @typeInfo(@TypeOf(from)).pointer.child {
         return from[self.at(index)];
     }
+
+    pub fn subRange(self: Range, from: u32) Range {
+        const start = self.start + from;
+        return .{
+            .start = start,
+            .end = start + self.len() - from,
+        };
+    }
 };
 
 pub const ExpressionPtr = u32;

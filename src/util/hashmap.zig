@@ -12,8 +12,7 @@ fn Context(comptime Key: type) type {
             const Self = @This();
 
             pub fn hash(_: Self, key: Key) u64 { 
-                var hasher = std.hash.Wyhash.init(0);
-                // TODO: Errors when used with unions, as in unions of JASL.
+                var hasher = std.hash.XxHash64.init(0);
                 std.hash.autoHashStrat(&hasher, key, .DeepRecursive);
                 return hasher.final();
             }

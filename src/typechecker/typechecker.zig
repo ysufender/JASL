@@ -19,7 +19,6 @@ const Context = common.CompilerContext;
 const Arena = std.heap.ArenaAllocator;
 const Allocator = std.mem.Allocator;
 const Callstack = collections.StaticRingStack(defines.DeclPtr, defines.stackLimit);
-const AnonMap = std.DynamicBitSetUnmanaged;
 
 const BuiltinIndex = Resolver.BuiltinIndex;
 const deepCopy = collections.deepCopy;
@@ -130,8 +129,6 @@ currentScope: defines.ScopePtr,
 lastToken: defines.TokenPtr,
 callstack: Callstack,
 
-anonymousMap: AnonMap,
-
 pub fn init(
     gpa: Allocator,
     context: *Context,
@@ -171,7 +168,6 @@ pub fn init(
         .typeMap = typeMap,
         .metadata = metadata,
         .lookup = lookup,
-        .anonymousMap = AnonMap.initEmpty(arena.allocator(), typeMap.capacity()) catch return error.AllocatorFailure,
         .constants = .{
             .all = try Constants.List.init(allocator, total * 2),
             .ints = Constants.Integer.initCapacity(allocator, (counts.integer * 3) / 2) catch return error.AllocatorFailure,
@@ -190,7 +186,18 @@ pub fn init(
     };
 }
 
+fn debugLog(self: *Typechecker) void {
+    common.log.debug("Registered types:", .{});
+    for (0..self.typeTable.len) |index| {
+        common.log.debug("    {s}", .{
+            self.typeName(self.arena.allocator(), @intCast(index)),
+        });
+    }
+}
+
 pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
+    // defer self.debugLog();
+
     if (!self.modules.getItem("root", .symbolPtrs).contains("main")) {
         self.report("Couldn't find an entry point in the root module.", .{});
         return error.MissingDefinition;
@@ -246,16 +253,16 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
     blk: switch (self.typeTable.get(initializer)) {
         .Type => {
             const newType = (try self.executer.eval(decl.node, expected)).Type;
-            switch (self.typeTable.get(newType)) {
-                .Union, .Enum, .Struct => { },
+            const name = switch (self.typeTable.get(newType)) {
+                .Union => |uni| uni.name,
+                .Struct => |str| str.name,
+                .Enum => |enm| enm.name,
                 else => break :blk,
-            }
+            };
 
-            if (self.anonymousMap.isSet(newType)) {
+            if (name[0] != '$') {
                 break :blk;
             }
-
-            self.anonymousMap.set(newType);
 
             const ast = self.context.getAST(self.currentFile);
             const tokens = self.context.getTokens(ast.tokens);
@@ -288,29 +295,15 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
                     },
                 },
 
-                .Union => |uni| switch (uni) {
-                    .Tagged => |tagged| .{
-                        .Union = .{
-                            .Tagged = .{
-                                .mutable = tagged.mutable,
-                                .name = newName,
-                                .tag = tagged.tag,
-                                .fields = tagged.fields,
-                                .definitions = tagged.definitions,
-                                .scope = tagged.scope,
-                            },
-                        },
-                    },
-                    .Plain => |plain| .{
-                        .Union = .{
-                            .Plain = .{
-                                .mutable = plain.mutable,
-                                .name = newName,
-                                .fields = plain.fields,
-                                .definitions = plain.definitions,
-                                .scope = plain.scope,
-                            },
-                        },
+                .Union => |uni| TypeInfo{
+                    .Union = .{
+                        .name = newName,
+                        .isTagged = uni.isTagged,
+                        .tag = uni.tag,
+                        .mutable = uni.mutable,
+                        .definitions = uni.definitions,
+                        .fields = uni.fields,
+                        .scope = uni.scope,
                     },
                 },
 
@@ -340,6 +333,20 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
         .Indexing => self.typecheckIndexing(expr.value),
         .Call => self.typecheckCall(expr.value, maybeExpected),
         .Scoping => self.typecheckScoping(expressionPtr),
+        .ExpressionList => self.typecheckExpressionList(expr.value, maybeExpected),
+        .Literal => self.typecheckValue(try self.executer.eval(expressionPtr, maybeExpected), maybeExpected),
+
+        .EnumDefinition, .UnionDefinition, .StructDefinition,
+        .ArrayType, .CPointerType, .FunctionType,
+        .MutableType, .PointerType, .SliceType,
+        .FunctionDefinition, .Lambda => self.typecheckValue(
+            try self.executer.eval(
+                expressionPtr,
+                Comptime.Builtin.Type("type")
+            ),
+            Comptime.Builtin.Type("type"),
+        ),
+
         else => |t| {
             self.report("Unable to typecheck expression '{s}'.", .{@tagName(t)});
             return error.TypecheckingFailure;
@@ -349,13 +356,13 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
 
 pub fn typecheckValue(self: *Typechecker, val: Comptime.Value, maybeExpected: ?TypeID) Error!TypeID {
     const expected =
-        if (maybeExpected) |expected| expected
+        if (determineExpected(maybeExpected)) |expected| expected
         else Comptime.Builtin.Type("any");
 
     return switch (val) {
-        .Int => self.infer(expected, Comptime.Builtin.Type("comptime_int"))
+        .Int => self.infer(Comptime.Builtin.Type("comptime_int"), expected)
             catch Comptime.Builtin.Type("comptime_int"),
-        .Float => self.infer(expected, Comptime.Builtin.Type("comptime_float"))
+        .Float => self.infer(Comptime.Builtin.Type("comptime_float"), expected)
             catch Comptime.Builtin.Type("comptime_float"),
         .Bool => Comptime.Builtin.Type("bool"),
         .Enum => |enumeration| enumeration.Type,
@@ -367,6 +374,219 @@ pub fn typecheckValue(self: *Typechecker, val: Comptime.Value, maybeExpected: ?T
         .Void => Comptime.Builtin.Type("void"),
         .Undefined => |undef| undef,
         .Slice => |slice| slice.Type,
+    };
+}
+
+pub fn typecheckExpressionList(self: *Typechecker, extra: defines.OpaquePtr, _maybeExpected: ?TypeID) Error!TypeID {
+    const maybeExpected = determineExpected(_maybeExpected);
+    const ast = self.context.getAST(self.currentFile);
+
+    const range = defines.Range{
+        .start = ast.extra[extra],
+        .end = ast.extra[extra + 1],
+    };
+
+    if (
+        range.len() == 0
+        and (
+            maybeExpected == null
+            or maybeExpected.? == Comptime.Builtin.Type("void")
+        )
+    ) {
+        return Comptime.Builtin.Type("void");
+    }
+
+    const expected =
+        if (maybeExpected) |expected| expected
+        else if (range.len() == 1) {
+            return self.typecheckExpression(ast.extra[range.at(0)], null);
+        }
+        else {
+            self.report("Couldn't infer the type of expression list.", .{});
+            return error.InferenceError;
+        };
+
+    return self.typecheckExpressionListRange(range, expected);
+}
+
+pub fn typecheckExpressionListRange(self: *Typechecker, range: defines.Range, expected: TypeID) Error!TypeID {
+    const ast = self.context.getAST(self.currentFile);
+
+    switch (self.typeTable.get(expected)) {
+        .Enum => |enm| try self.typecheckEnumInitialization(ast, &enm, range, expected),
+        .Struct => |str| try self.typecheckStructInitialization(ast, &str, range),
+        .Union => |uni| try self.typecheckUnionInitialization(ast, &uni, range),
+        .Array => |arr| try self.typecheckArrayInitialization(ast, &arr, range),
+        .Pointer => |ptr| switch (ptr.size) {
+            .Slice, .C => try self.typecheckGeneralInitialization(ast, ptr.child, range),
+            .Single => {
+                if (range.len() != 1) {
+                    self.report("Can't initialize '{s}' with {d} values.", .{
+                        self.typeName(self.arena.allocator(), expected),
+                        range.len(),
+                    });
+                    return error.InitializerCountMismatch;
+                }
+
+                try self.typecheckGeneralInitialization(ast, expected, range);
+            },
+        },
+        .Void, .Noreturn => try self.typecheckGeneralInitialization(ast, expected, range),
+        .Type, .Function,
+        .Bool, .Float, .Integer,
+        .ComptimeInt, .ComptimeFloat => {
+            if (range.len() != 1) {
+                self.report("Can't initialize '{s}' with {d} values.", .{
+                    self.typeName(self.arena.allocator(), expected),
+                    range.len(),
+                });
+                return error.InitializerCountMismatch;
+            }
+
+            try self.typecheckGeneralInitialization(ast, expected, range);
+        },
+        else => return common.debug.NotImplemented(@src()),
+    }
+
+    return expected;
+}
+
+fn typecheckGeneralInitialization(self: *Typechecker, ast: *const Parser.AST, expected: TypeID, range: defines.Range) Error!void {
+    for (range.start..range.end) |extraPtr| {
+        const elem = try self.typecheckExpression(ast.extra[extraPtr], Comptime.Builtin.Type("void"));
+
+        if (self.suitable(expected, elem)) {
+            continue;
+        }
+
+        self.report("Mismatching types in initialization. Expected '{s}', received '{s}'.", .{
+            self.typeName(self.arena.allocator(), expected),
+            self.typeName(self.arena.allocator(), elem),
+        });
+        return error.TypeMismatch;
+    }
+}
+
+fn typecheckEnumInitialization(self: *Typechecker, ast: *const Parser.AST, enm: *const Types.Enum, range: defines.Range, expected: TypeID) Error!void {
+    if (range.len() != 1) {
+        self.report("Expected an enum literal in enum initialization, received '{d}' expressions instead.", .{
+            range.len(),
+        });
+        return error.ArgumentCountMismatch;
+    }
+    else {
+        const rhs = try self.typecheckExpression(ast.extra[range.at(0)], expected);
+
+        if (!self.suitable(expected, rhs)) {
+            self.report("Expected an initializer of type '{s}', recieved '{s}' instead.", .{
+                enm.name,
+                self.typeName(self.arena.allocator(), rhs),
+            });
+            return error.TypeMismatch;
+        }
+
+        _ = try self.infer(expected, rhs);
+    }
+}
+
+fn typecheckStructInitialization(self: *Typechecker, ast: *const Parser.AST, str: *const Types.Struct, range: defines.Range) Error!void {
+    if (str.fields.len != range.len()) {
+        self.report("Type '{s}' expects {d} initializer{s}, received {d}.", .{
+            str.name,
+            str.fields.len,
+            if (str.fields.len > 1 or str.fields.len == 0) "s" else "",
+            range.len(),
+        });
+        return error.InitializerCountMismatch;
+    }
+
+    for (str.fields, 0..) |field, index| {
+        const initializerType = try self.typecheckExpression(
+            ast.extra[range.at(@intCast(index))],
+            field.valueType,
+        );
+
+        if (self.suitable(field.valueType, initializerType)) {
+            continue;
+        }
+
+        self.report("'{s}::{s}' expected an initializer of type '{s}'. Received '{s}'.", .{
+            str.name,
+            field.name,
+            self.typeName(self.arena.allocator(), field.valueType),
+            self.typeName(self.arena.allocator(), initializerType),
+        });
+        return error.TypeMismatch;
+    }
+}
+
+fn typecheckArrayInitialization(self: *Typechecker, ast: *const Parser.AST, arr: *const Types.Array, range: defines.Range) Error!void {
+    if (arr.len != range.len()) {
+        self.report("Mismatching elemen counts in array initialization. Expected {d}, received {d}.", .{
+            arr.len,
+            range.len(),
+        });
+        return error.InitializerCountMismatch;
+    }
+
+    for (0..arr.len) |index| {
+        const item = try self.typecheckValue(
+            try self.executer.eval(ast.extra[range.at(@intCast(index))], arr.child),
+            arr.child,
+        );
+
+        if (self.suitable(arr.child, item)) {
+            continue;
+        }
+
+        self.report(
+            "Mismatching element types in array initialization."
+            ++ " Expected '{s}', received '{s}' (at index {d})", .{
+            self.typeName(self.arena.allocator(), arr.child),
+            self.typeName(self.arena.allocator(), item),
+            index,
+        });
+        return error.TypeMismatch;
+    }
+}
+
+fn typecheckUnionInitialization(self: *Typechecker, ast: *const Parser.AST, uni: *const Types.Union, range: defines.Range) Error!void {
+    if (range.len() < 1) {
+        self.report("Expected a field enum in union initialization.", .{ });
+        return error.InitializerCountMismatch;
+    }
+
+    const findex = switch (try self.executer.eval(ast.extra[range.at(0)], uni.tag)) {
+        .Enum => |enm| blk: {
+            if (enm.Type != uni.tag) {
+                self.report("Expected field enum of type '{s}', received '{s}' instead.", .{
+                    self.typeName(self.arena.allocator(), uni.tag),
+                    self.typeName(self.arena.allocator(), enm.Type),
+                });
+                return error.TypeMismatch;
+            }
+
+            break :blk @as(u32, if (uni.isTagged) 1 else 0) + enm.Value;
+        },
+        else => |val| {
+            self.report("Expected field enum of type '{s}', received '{s}' instead.", .{
+                self.typeName(self.arena.allocator(), uni.tag),
+                self.typeName(self.arena.allocator(),
+                    try self.typecheckValue(val, null)
+                ),
+            });
+            return error.TypeMismatch;
+        }
+    };
+
+    const field = uni.fields[findex];
+    _ = self.typecheckExpressionListRange(range.subRange(1), field.valueType) catch |err| {
+        self.report("Error in union initialization '{s}::{s}' of type '{s}'.", .{
+            uni.name,
+            field.name,
+            self.typeName(self.arena.allocator(), field.valueType),
+        });
+        return err;
     };
 }
 
@@ -405,15 +625,9 @@ pub fn typecheckScoping(self: *Typechecker, expr: defines.ExpressionPtr) Error!T
             defs = str.definitions;
             scope = str.scope;
         },
-        .Union => |uni| switch (uni) {
-            .Tagged => {
-                defs = uni.Tagged.definitions;
-                scope = uni.Tagged.scope;
-            },
-            .Plain => {
-                defs = uni.Plain.definitions;
-                scope = uni.Plain.scope;
-            },
+        .Union => |uni| {
+            defs = uni.definitions;
+            scope = uni.scope;
         },
         else => return common.debug.NotImplemented(@src()),
     }
@@ -448,10 +662,7 @@ pub fn discoverScopeDef(self: *Typechecker, from: TypeID, member: *const Types.F
     const scope = switch (self.typeTable.get(from)) {
         .Enum => |enm| enm.scope,
         .Struct => |str| str.scope,
-        .Union => |uni| switch (uni) {
-            .Tagged => |tagged| tagged.scope,
-            .Plain => |plain| plain.scope,
-        },
+        .Union => |uni| uni.scope,
         else => return common.debug.ShouldBeImpossible(@src()),
     };
 
@@ -492,40 +703,21 @@ pub fn discoverScopeDef(self: *Typechecker, from: TypeID, member: *const Types.F
                 },
             });
         },
-        .Union => |uni| switch (uni) {
-            .Tagged => |tagged| {
-                var defs: []Types.FieldInfo = @constCast(tagged.definitions);
-                defs[memberIndex].valueType = discoveredType;
+        .Union => |uni| {
+            var defs: []Types.FieldInfo = @constCast(uni.definitions);
+            defs[memberIndex].valueType = discoveredType;
 
-                self.typeTable.set(from, .{
-                    .Union = .{
-                        .Tagged = .{
-                            .tag = tagged.tag,
-                            .name = tagged.name,
-                            .definitions = defs,
-                            .scope = tagged.scope,
-                            .fields = tagged.fields,
-                            .mutable = tagged.mutable,
-                        },
-                    },
-                });
-            },
-            .Plain => |plain| {
-                var defs: []Types.FieldInfo = @constCast(plain.definitions);
-                defs[memberIndex].valueType = discoveredType;
-
-                self.typeTable.set(from, .{
-                    .Union = .{
-                        .Plain = .{
-                            .name = plain.name,
-                            .definitions = defs,
-                            .scope = plain.scope,
-                            .fields = plain.fields,
-                            .mutable = plain.mutable,
-                        },
-                    },
-                });
-            },
+            self.typeTable.set(from, .{
+                .Union = .{
+                    .isTagged = uni.isTagged,
+                    .tag = uni.tag,
+                    .name = uni.name,
+                    .definitions = defs,
+                    .scope = uni.scope,
+                    .fields = uni.fields,
+                    .mutable = uni.mutable,
+                },
+            });
         },
         else => return common.debug.ShouldBeImpossible(@src()),
     }
@@ -536,22 +728,60 @@ pub fn discoverScopeDef(self: *Typechecker, from: TypeID, member: *const Types.F
 pub fn typecheckCall(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
     const ast = self.context.getAST(self.currentFile);
 
-    if (ast.expressions.items(.type)[ast.extra[extraPtr]] == .Identifier) {
+    if (ast.expressions.items(.type)[ast.extra[extraPtr]] == .Identifier) blk: {
         if (self.symbols.resolutionMap.get(.{
             .file = self.currentFile,
             .expr = ast.extra[extraPtr], 
         })) |builtinPtr| {
-            return self.typecheckBuiltinCall(extraPtr, builtinPtr, maybeExpected);
+            const decl = self.symbols.declarations.get(builtinPtr);
+
+            if (decl.kind != .Builtin) {
+                break :blk;
+            }
+
+            if (Comptime.Builtin.isBuiltinType(decl.type)) {
+                break :blk;
+            }
+
+            return self.typecheckBuiltinCall(extraPtr, decl.type, maybeExpected);
         }
     }
 
-    const func = switch (self.typeTable.get(try self.typecheckExpression(ast.extra[extraPtr], null))) {
+    const lhsType = try self.typecheckExpression(ast.extra[extraPtr], null);
+    const maybeFunction = self.typeTable.get(lhsType);
+    const func = switch (maybeFunction) {
+        .Type => {
+            const typeToInit = (try self.executer.eval(ast.extra[extraPtr], null)).Type;
+
+            return self.typecheckExpressionList(
+                ast.expressions.items(.value)[ast.extra[extraPtr + 1]],
+                switch (self.typeTable.get(typeToInit)) {
+                    .Type, .Noreturn, .Any,
+                    .Function, .EnumLiteral => {
+                        self.report("Given type '{s}' is not initializable.", .{
+                            self.typeName(self.arena.allocator(), typeToInit),
+                        });
+                        return error.TypeIsNotConstructible;
+                    },
+                    .Pointer => |ptr| switch (ptr.size) {
+                        .Single => {
+                            self.report("Given type '{s}' is not initializable.", .{
+                                self.typeName(self.arena.allocator(), typeToInit),
+                            });
+                            return error.TypeIsNotConstructible;
+                        },
+                        else => typeToInit,
+                    },
+                    else => typeToInit,
+                },
+            );
+        },
         .Function => |func| func,
         else => {
-            self.report("Attemp to call non-function type '{s}'.", .{
-                self.typeName(self.arena.allocator(), try self.typecheckExpression(ast.extra[extraPtr], null)),
+            self.report("Attempt to call non-function type '{s}'.", .{
+                self.typeName(self.arena.allocator(), lhsType),
             });
-            return error.IllegalSyntax;
+            return error.TypeIsNotCallable;
         },
     };
 
@@ -604,7 +834,7 @@ pub fn typecheckBuiltinCall(self: *Typechecker, extraPtr: defines.ExpressionPtr,
 
 pub fn typecheckCast(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
     const targetType =
-        if (maybeExpected) |target| target
+        if (determineExpected(maybeExpected)) |target| target
         else {
             self.report("Casting requires a known target type.", .{});
             return error.InferenceError;
@@ -667,16 +897,10 @@ pub fn typecheckTypeForwarding(self: *Typechecker, extraPtr: defines.OpaquePtr, 
 
     const typeToForward = try self.expectType(ast.extra[args.at(0)]);
 
-    if (maybeExpected) |expected| {
-        switch (expected) {
-            Comptime.Builtin.Type("any"),
-            Comptime.Builtin.Type("mut any") => { },
-            else => {
-                if (self.suitable(typeToForward, expected)) {
-                    self.report("Reduntant type forwarding in already inferable context.", .{ });
-                    return error.RedundantTypeForwarding;
-                }
-            },
+    if (determineExpected(maybeExpected)) |expected| {
+        if (self.suitable(typeToForward, expected)) {
+            self.report("Reduntant type forwarding in already inferable context.", .{ });
+            return error.RedundantTypeForwarding;
         }
     }
 
@@ -692,6 +916,7 @@ pub fn typecheckTypeForwarding(self: *Typechecker, extraPtr: defines.OpaquePtr, 
 }
 
 pub fn typecheckIndexing(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!TypeID {
+    // TODO: Finish this
     _ = self;
     _ = extraPtr;
     return error.NotImplemented;
@@ -721,10 +946,13 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
 
     if (isPresent.found_existing) {
         switch (isPresent.value_ptr.status) {
-            .Checked => return isPresent.value_ptr.types,
+            .Checked =>
+                if (isPresent.value_ptr.types != Comptime.Builtin.Type("incomplete"))
+                    return isPresent.value_ptr.types
+                else  { },
             .InProgress => {
                 if (!self.executer.flags.isSet(Comptime.Flags.flag(.CanCycle))) {
-                    self.report("Dependency cycle detected. '{s}' depends on ittypechecker.", .{
+                    self.report("Dependency cycle detected. '{s}' depends on itself.", .{
                         tokens.get(decl.token).lexeme(self.context, self.currentFile),
                     });
                 }
@@ -746,7 +974,7 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
             if (Comptime.Builtin.isBuiltinType(decl.type)) Comptime.Builtin.Type("type")
             else switch (decl.type) {
                 BuiltinIndex("undefined") =>
-                    if (maybeExpected) |expected| expected
+                    if (determineExpected(maybeExpected)) |expected| expected
                     else {
                         self.report("Unable to resolve the type of undefined value.", .{});
                         return error.MissingTypeSpecifier;
@@ -817,7 +1045,7 @@ fn dumpCallStack(self: *Typechecker) void {
             position.line,
             position.column,
         });
-        token.printLocation(self.arena.allocator(), self.context, self.currentFile, position, self.callstack.empty());
+        token.printLocation(self.arena.allocator(), self.context, module.dataIndex, position, self.callstack.empty());
     }
 }
 
@@ -928,36 +1156,17 @@ pub fn assertStructurallyIdentical(self: *const Typechecker, this: TypeID, that:
         },
         .Union => |fromUnion| {
             const toUnion = toType.Union;
-            if (std.meta.activeTag(fromUnion) != std.meta.activeTag(toUnion)) {
+            if (fromUnion.isTagged != toUnion.isTagged) {
                 return error.StructuralMismatch;
             }
 
-            switch (fromUnion) {
-                .Tagged => |fromTagged| {
-                    const toTagged = toUnion.Tagged;
+            if (fromUnion.fields.len != toUnion.fields.len) {
+                return error.StructuralMismatch;
+            }
 
-                    if (fromTagged.fields.len != toTagged.fields.len) {
-                        return error.StructuralMismatch;
-                    }
-
-                    for (fromTagged.fields, toTagged.fields) |fromField, toField| {
-                        if (!fromField.eql(toField)) {
-                            return error.StructuralMismatch;
-                        }
-                    }
-                },
-                .Plain => |fromPlain| {
-                    const toPlain = toUnion.Plain;
-
-                    if (fromPlain.fields.len != toPlain.fields.len) {
-                        return error.StructuralMismatch;
-                    }
-
-                    for (fromPlain.fields, toPlain.fields) |fromField, toField| {
-                        if (!fromField.eql(toField)) {
-                            return error.StructuralMismatch;
-                        }
-                    }
+            for (fromUnion.fields, toUnion.fields) |fromField, toField| {
+                if (!fromField.eql(toField)) {
+                    return error.StructuralMismatch;
                 }
             }
         },
@@ -1055,10 +1264,7 @@ pub fn mutable(self: *const Typechecker, typeID: TypeID) bool {
         .Bool => |b| b,
         .Float => |fl| fl,
         .Struct => |str| str.mutable,
-        .Union => |uni| switch (uni) {
-            .Tagged => |tagged| tagged.mutable,
-            .Plain => |plain| plain.mutable,
-        },
+        .Union => |uni| uni.mutable,
         .Enum => |enu| enu.mutable,
         .Integer => |int| int.mutable,
         .Pointer => |ptr| ptr.mutable,
@@ -1092,29 +1298,15 @@ pub fn makeMutable(_: *const Typechecker, info: TypeInfo) TypeInfo {
                 .scope = str.scope,
             },
         },
-        .Union => |uni| switch (uni) {
-            .Tagged => |tagged| .{
-                .Union = .{
-                    .Tagged = .{
-                        .mutable = true,
-                        .tag = tagged.tag,
-                        .name = tagged.name,
-                        .fields = tagged.fields,
-                        .definitions = tagged.definitions,
-                        .scope = tagged.scope,
-                    },
-                },
-            },
-            .Plain => |plain| .{
-                .Union = .{
-                    .Plain = .{
-                        .mutable = true,
-                        .name = plain.name,
-                        .fields = plain.fields,
-                        .definitions = plain.definitions,
-                        .scope = plain.scope,
-                    },
-                },
+        .Union => |uni| .{
+            .Union = .{
+                .mutable = true,
+                .isTagged = uni.isTagged,
+                .tag = uni.tag,
+                .name = uni.name,
+                .fields = uni.fields,
+                .definitions = uni.definitions,
+                .scope = uni.scope,
             },
         },
         .Enum => |enm| .{
@@ -1179,19 +1371,14 @@ pub fn sizeOf(self: *const Typechecker, of: TypeID) u32 {
             return size;
         },
         .Union => |uni| {
-            const fields = switch (uni) {
-                .Tagged => |t| t.fields,
-                .Plain => |p| p.fields,
-            };
+            const fields = uni.fields;
+
             var size: u32 = 0;
             for (fields) |field| {
                 size = @max(size, self.sizeOf(field.valueType));
             }
 
-            break :ret switch (uni) {
-                .Tagged => size + @sizeOf(u32),
-                .Plain => size,
-            };
+            break :ret size + @as(u32, if (uni.isTagged) @sizeOf(u32) else 0);
         },
     };
 }
@@ -1200,10 +1387,7 @@ pub fn tryGetDefinitionIndex(self: *Typechecker, from: TypeID, member: []const u
     const decls = switch (self.typeTable.get(from)) {
         .Enum => |enm| enm.definitions,
         .Struct => |str| str.definitions,
-        .Union => |uni| switch (uni) {
-            .Tagged => |tagged| tagged.definitions,
-            .Plain => |plain| plain.definitions,
-        },
+        .Union => |uni| uni.definitions,
         else => {
             self.report("Definition index can only be used for structs, enums and unions. Received '{s}' instead.", .{
                 self.typeName(self.arena.allocator(), from),
@@ -1236,10 +1420,7 @@ pub fn definitionIndex(self: *Typechecker, from: TypeID, member: []const u8) Err
 pub fn tryGetFieldIndex(self: *Typechecker, from: TypeID, fieldName: []const u8) Error!?defines.Offset {
     const fields = switch (self.typeTable.get(from)) {
         .Struct => |str| str.fields,
-        .Union => |uni| switch (uni) {
-            .Tagged => |tagged| tagged.fields,
-            .Plain => |plain| plain.fields,
-        },
+        .Union => |uni| uni.fields,
         .Enum => |enm| blk: {
             for (enm.fields, 0..) |field, index| {
                 if (std.mem.eql(u8, field, fieldName)) {
@@ -1285,10 +1466,7 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
 
             const name = switch (this.typeTable.get(tid)) {
                 .Struct => |str| str.name,
-                .Union => |uni| switch (uni) {
-                    .Tagged => |tagged| tagged.name,
-                    .Plain => |plain| plain.name,
-                },
+                .Union => |uni| uni.name,
                 .Enum => |enu| enu.name,
                 else => unreachable,
             };
@@ -1370,11 +1548,13 @@ pub fn typeName(self: *const Typechecker, allocator: Allocator, typeID: TypeID) 
         };
 }
 
-pub fn extendExtra(self: *Typechecker, size: usize) common.CompilerError!TypeID {
-    const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-    _ = self.extra.addManyAsSlice(self.arena.allocator(), size) catch return error.AllocatorFailure;
-    return .{
-        .start = start,
-        .end = @intCast(self.extra.items.len),
-    };
+pub fn determineExpected(maybeExpected: ?TypeID) ?TypeID {
+    return
+        if (maybeExpected) |expected|
+            if (
+                expected == Comptime.Builtin.Type("any")
+                or expected == Comptime.Builtin.Type("mut any")
+            ) null
+            else expected
+        else null;
 }

@@ -52,18 +52,18 @@ pub const Struct = struct {
     scope: defines.ScopePtr,
 };
 
-pub const Union = union(enum) {
-    Tagged: struct {
-        tag: TypeID,
-        mutable: bool,
-        name: []const u8,
-        fields: []const FieldInfo,
-        definitions: []const FieldInfo,
+pub const Union = struct {
+    isTagged: bool,
+    /// All unions must have field tags, but only
+    /// tagged unions contain them in their layout.
+    tag: TypeID,
+    mutable: bool,
+    name: []const u8,
+    fields: []const FieldInfo,
+    definitions: []const FieldInfo,
 
-        // @CompilerOnly
-        scope: defines.ScopePtr,
-    },
-    Plain: Struct,
+    // @CompilerOnly
+    scope: defines.ScopePtr,
 };
 
 pub const Enum = struct {

@@ -1187,9 +1187,8 @@ fn getModuleName(self: *Resolver, module: defines.ExpressionPtr) []const u8 {
 
 pub const builtins = [_][]const u8 {
     "u32", "i32", "u8", "i8", "bool",
-    "float", "void", "type", "noreturn",
-    "enum_literal", "comptime_int", "comptime_float",
-    "any",
+    "float", "void", "comptime_int", "comptime_float",
+    "type", "noreturn", "enum_literal", "any",
 
     "undefined", "typeInfo", "hasField", "compileError",
     "bitSizeOf", "unreachable", "enumStr", "typeOf",

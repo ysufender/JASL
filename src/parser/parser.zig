@@ -1261,7 +1261,6 @@ fn unionDefinition(self: *Parser) ExpressionResult {
                         try definitions.append(try self.variable(true));
                     },
                     else => {
-                        _ = self.advance();
                         self.report("Expected a definition after 'pub' specifier.", .{});
                         return error.InvalidToken;
                     },
@@ -1301,6 +1300,27 @@ fn unionDefinition(self: *Parser) ExpressionResult {
     self.extra.append(self.allocator(), variables.end) catch return error.AllocatorFailure;
     self.extra.append(self.allocator(), defs.start) catch return error.AllocatorFailure;
     self.extra.append(self.allocator(), defs.end) catch return error.AllocatorFailure;
+
+    // Layout tagged-manual:
+    // 0 isTagged
+    // 1 isManual
+    // 2 tag
+    // 3.. default
+    //
+    // Layout tagged-auto.
+    // 0 isTagged
+    // 1 isManual
+    // 2.. default
+    //
+    // Layout plain:
+    // 0 isTagged
+    // 1.. default
+    //
+    // Layout default:
+    // 0 fieldsStart
+    // 1 fieldsEnd
+    // 2 declsStart
+    // 3 declsEnd
 
     const expr = try self.alloc(Expression);
     self.expressionMap.set(expr, .{

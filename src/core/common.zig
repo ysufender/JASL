@@ -80,5 +80,9 @@ pub const CompilerError = error {
     ShouldBeImpossible,
     AccessSpecifierMismatch,
     NamespaceAsValue,
+    InitializerCountMismatch,
+    PointlessUnionDefinition,
+    TypeIsNotCallable,
+    TypeIsNotConstructible,
     Terminate,
 };
