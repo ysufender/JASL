@@ -73,6 +73,10 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     var prepass = try Prepass.init(&context, ast, allocator);
     const modules = try prepass.prepass(allocator);
 
+    if (context.settings.hasFlag("--print-ast-full")) {
+        debug.ASTPrinter.printASTs(&context, &modules);
+    }
+
     var resolver = try Resolver.init(allocator, &context, &modules);
     const resolved = try resolver.resolve(allocator);
 

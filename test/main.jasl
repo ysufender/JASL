@@ -1,3 +1,16 @@
-import scoping_test as s;
+import initialization as i;
 
-let main = s::TestStruct(true);
+let main = k;
+
+let a = i::Enum(@Field1);
+let b: i::Enum = (@Field1);
+let c = i::Enum::Field1;
+let d: i::Enum = @Field1;
+
+let e = i::Struct(true, @Field1, ());
+let f: i::Struct = (true, @Field1, ());
+let g: i::Struct = (true, i::Enum::Field1, ());
+let h: i::Struct = (true, i::Enum(@Field1), ());
+let j: i::Struct = (true, i::Enum(i::Enum::Field1), ());
+
+let k: i::Union = (@field2, false, @Field1, ());

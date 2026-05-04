@@ -1,0 +1,14 @@
+pub let Enum = enum {
+    Field1,
+};
+
+pub let Struct = struct {
+    field1: bool,
+    field2: Enum,
+    other: void,
+};
+
+pub let Union = union(enum) {
+    field1: void,
+    field2: Struct,
+};

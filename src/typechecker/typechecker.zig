@@ -501,10 +501,15 @@ fn typecheckStructInitialization(self: *Typechecker, ast: *const Parser.AST, str
     }
 
     for (str.fields, 0..) |field, index| {
-        const initializerType = try self.typecheckExpression(
-            ast.extra[range.at(@intCast(index))],
-            field.valueType,
-        );
+        const initializerType =
+            if (field.isComptime) try self.typecheckValue(try self.executer.eval(
+                ast.extra[range.at(@intCast(index))],
+                field.valueType,
+            ), null)
+            else try self.typecheckExpression(
+                ast.extra[range.at(@intCast(index))],
+                field.valueType,
+            );
 
         if (self.suitable(field.valueType, initializerType)) {
             continue;
@@ -580,14 +585,11 @@ fn typecheckUnionInitialization(self: *Typechecker, ast: *const Parser.AST, uni:
     };
 
     const field = uni.fields[findex];
-    _ = self.typecheckExpressionListRange(range.subRange(1), field.valueType) catch |err| {
-        self.report("Error in union initialization '{s}::{s}' of type '{s}'.", .{
-            uni.name,
-            field.name,
-            self.typeName(self.arena.allocator(), field.valueType),
-        });
-        return err;
-    };
+    _ = if (field.isComptime) try self.executer.constructFromList(
+            field.valueType,
+            range.subRange(1),
+        )
+        else try self.typecheckExpressionListRange(range.subRange(1), field.valueType);
 }
 
 pub fn typecheckScoping(self: *Typechecker, expr: defines.ExpressionPtr) Error!TypeID {
@@ -1032,7 +1034,7 @@ pub fn report(self: *Typechecker, comptime fmt: []const u8, args: anytype) void 
     self.dumpCallStack();
 }
 
-fn dumpCallStack(self: *Typechecker) void {
+pub fn dumpCallStack(self: *Typechecker) void {
     _ = self.callstack.pop();
     while (self.callstack.pop()) |declPtr| {
         const lastDecl = self.symbols.getDecl(declPtr);

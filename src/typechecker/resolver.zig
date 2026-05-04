@@ -433,6 +433,13 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
 
             if (isPresent.found_existing) {
                 self.report("Given symbol '{s}' collides with the previous definition of '{s}'.", .{name, name});
+
+                const found = self.decls.get(isPresent.value_ptr.*);
+                if (found.kind != .Builtin) {
+                    self.lastToken = found.token;
+                    self.report("Found here.", .{});
+                }
+
                 return error.DuplicateSymbol;
             }
 
@@ -467,7 +474,19 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                 catch return error.AllocatorFailure;
 
             if (isPresent.found_existing) {
-                self.report("Duplicate import of '{s}'.", .{lexeme});
+                const kind: Declaration.Kind = self.decls.items(.kind)[isPresent.value_ptr.*];
+
+                switch (kind) {
+                    .Namespace => self.report("Duplicate import of '{s}'.", .{lexeme}),
+                    else => self.report("Given definition '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme}),
+                }
+
+                const found = self.decls.get(isPresent.value_ptr.*);
+                if (found.kind != .Builtin) {
+                    self.lastToken = found.token;
+                    self.report("Found here.", .{});
+                }
+                
                 return error.DuplicateSymbol;
             }
 
@@ -1031,6 +1050,13 @@ fn prepassScope(self: *Resolver, declarations: defines.Range) Error!void {
 
         if (isPresent.found_existing) {
             self.report("Given definition '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
+
+            const found = self.decls.get(isPresent.value_ptr.*);
+            if (found.kind != .Builtin) {
+                self.lastToken = found.token;
+                self.report("Found here.", .{});
+            }
+
             return error.DuplicateSymbol;
         }
 

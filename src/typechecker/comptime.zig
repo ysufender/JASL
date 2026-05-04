@@ -50,7 +50,7 @@ pub const Value = union(enum) {
     },
     Struct: struct {
         Type: TypeID,
-        Fields: []const ValuePtr,
+        Fields: []const Value,
     },
     Type: TypeID,
     Pointer: struct {
@@ -126,7 +126,7 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
     const expr = ast.expressions.get(exprPtr);
     const value = switch (expr.type) {
         .Identifier =>
-            if (expr.value == 0) Value{ .Type = comptime Builtin.Type("any") }
+            if (expr.value == 0) Value{ .Type = Builtin.Type("any") }
             else try self.evalDecl(typechecker.symbols.findDecl(.{ .file = file, .expr = exprPtr }), maybeExpected),
         .Call => try self.evalCall(expr.value, maybeExpected),
         .Indexing => try self.evalIndexing(expr.value),
@@ -443,10 +443,13 @@ fn evalStructType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
         const symbolToken = tokens.get(symbol.name);
         const symbolName = symbolToken.lexeme(self.typechecker.context, self.typechecker.currentFile);
 
+        const fieldType = try self.typechecker.expectType(symbol.type);
+
         fields[index] = types.FieldInfo{
             .public = symbol.public,
             .name = symbolName,
-            .valueType = (try self.typechecker.expectType(symbol.type)),
+            .valueType = fieldType,
+            .isComptime = self.typechecker.typeTable.get(fieldType).isComptime(),
         };
     }
 
@@ -468,6 +471,11 @@ fn evalStructType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
 }
 
 fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
+    // TODO: Failed union evaluations cause DependencyCycle instead of
+    // their desired errors.
+
+    // @Beware manually tagged unions are banned, so some things are hardcoded here.
+
     const allocator = self.arena.allocator();
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
     const tokens = self.typechecker.context.getTokens(ast.tokens);
@@ -476,9 +484,7 @@ fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
 
     const tagged = ast.extra[extraPtr] == 1;
     const offset: u32 =
-        if (tagged)
-            if (ast.extra[extraPtr + 1] == 1) 3
-            else 2
+        if (tagged) 2
         else 1;
 
     const fieldRange = defines.Range{
@@ -494,7 +500,7 @@ fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
     var tags = allocator.alloc([]const u8, fieldRange.len()) catch return error.AllocatorFailure;
 
     for (0..fieldRange.len()) |index| {
-        const symbolTokenPtr = ast.signatures.items(.name)[
+        const symbolTokenPtr: defines.TokenPtr = ast.signatures.items(.name)[
             ast.extra[fieldRange.at(@intCast(index))]
         ];
         const symbolToken = tokens.get(symbolTokenPtr);
@@ -516,10 +522,6 @@ fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
         },
     };
 
-    // @Beware manually tagged unions are not supported so this is fine,
-    // however this must be properly handled when they are allowed.
-    const tag = try self.typechecker.registerType(tagType);
-
     if (fieldRange.len() <= 1) {
         self.report("Pointless definition of union type with {d} fields.", .{
             fieldRange.len(),
@@ -527,7 +529,37 @@ fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
         return error.PointlessUnionDefinition;
     }
 
-    const fields = try self.handleUnionFields(ast, tokens, fieldRange, if (tagged) tag else null);
+    // @Beware manually tagged unions are not supported so this is fine,
+    // however this must be properly handled when they are allowed.
+    const tag = try self.typechecker.registerType(tagType);
+
+    var fields = allocator.alloc(types.FieldInfo, fieldRange.len() + @intFromBool(tagged)) catch return error.AllocatorFailure;
+
+    if (tagged) {
+        fields[0] = .{
+            .public = true,
+            .name = "tag",
+            .valueType = tag,
+            .isComptime = false,
+        };
+    }
+
+    for (0..fieldRange.len()) |index| {
+        const symbol = ast.signatures.get(ast.extra[fieldRange.at(@intCast(index))]);
+
+        const symbolToken = tokens.get(symbol.name);
+        const symbolName = symbolToken.lexeme(self.typechecker.context, self.typechecker.currentFile);
+
+        const fieldType = try self.typechecker.expectType(symbol.type);
+
+        fields[index + @intFromBool(tagged)] = types.FieldInfo{
+            .public = symbol.public,
+            .name = symbolName,
+            .valueType = fieldType,
+            .isComptime = self.typechecker.typeTable.get(fieldType).isComptime(),
+        };
+    }
+
     const defs = try self.handleScopeDecls(ast, tokens, defRange);
 
     const newType = TypeInfo{
@@ -562,7 +594,7 @@ fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID
 
     if (thingToCastRange.len() != 1) {
         self.report("Multi-value type casting is not supported.", .{});
-        return common.debug.NotImplemented(@src());
+        return error.MultivalueCast;
     }
 
     const thingToCast = try self.eval(ast.extra[thingToCastRange.at(0)], null);
@@ -615,13 +647,50 @@ fn evalExpressionList(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpecte
         .end = ast.extra[extraPtr + 1],
     };
 
-    return switch (self.typechecker.typeTable.get(typeToInit)) {
+    return self.constructFromList(typeToInit, range);
+}
+
+pub fn constructFromList(self: *Comptime, typeID: TypeID, range: defines.Range) Error!Value {
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+
+    return ret: switch (self.typechecker.typeTable.get(typeID)) {
         .Void => {
             for (range.start..range.end) |extra| {
-                _ = try self.eval(ast.extra[extra], typeToInit);
+                _ = try self.eval(ast.extra[extra], typeID);
             }
 
             return .{ .Void = { } };
+        },
+        .Enum => self.eval(ast.extra[range.at(0)], typeID),
+        .Struct => |str| {
+            const start = self.memory.items.len;
+            for (0..range.len()) |idx| {
+                _ = try self.eval(
+                    ast.extra[range.at(@intCast(idx))],
+                    str.fields[idx].valueType
+                );
+            }
+
+            break :ret .{
+                .Struct = .{
+                    .Type = typeID,
+                    .Fields = self.memory.items[start..],
+                },
+            };
+        },
+        .Union => |uni| {
+            const tag = (try self.eval(ast.extra[range.at(0)], uni.tag)).Enum.Value;
+            const fieldType = uni.fields[tag].valueType;
+            const value = self.memory.items.len;
+            _ = try self.constructFromList(fieldType, range.subRange(1));
+
+            break :ret .{
+                .Union = .{
+                    .Type = typeID,
+                    .Tag = tag,
+                    .Value = @intCast(value),
+                },
+            };
         },
         else => common.debug.NotImplemented(@src())
     };
@@ -662,9 +731,11 @@ fn evalScoping(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
         },
         .Struct => |str| str.scope,
         .Union => |uni| uni.scope,
-        else => |o| {
-            std.debug.print("{s} is not implemented.\n", .{@tagName(std.meta.activeTag(o))});
-            return common.debug.NotImplemented(@src());
+        else => {
+            self.report("Attempt to scope on type '{s}', which contains no scope.", .{
+                self.typechecker.typeName(self.arena.allocator(), res),
+            });
+            return error.ScopingOnNonScopedType;
         },
     };
 
@@ -731,7 +802,7 @@ fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?Type
         return error.TypeMismatch;
     }
 
-    // @Unfinishedin
+    // @Unfinished
     return common.debug.NotImplemented(@src());
 }
 
@@ -901,7 +972,7 @@ fn evalArrType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
 
 pub fn expectType(self: *Comptime, exprPtr: defines.ExpressionPtr) Error!Value {
     return .{
-        .Type = switch (try self.eval(exprPtr, comptime Builtin.Type("type"))) {
+        .Type = switch (try self.eval(exprPtr, Builtin.Type("type"))) {
             .Type => |t| t,
             else => |otherwise| {
                 self.report("Expected a type expression, got '{s}' instead.", .{@tagName(otherwise)});
@@ -931,43 +1002,6 @@ fn generateRandomName(self: *Comptime, comptime mode: @TypeOf(.EnumLiteral)) Err
     }) catch error.AllocatorFailure;
 }
 
-fn handleUnionFields(
-    self: *Comptime,
-    ast: *const Parser.AST,
-    tokens: *const Lexer.TokenList.Slice,
-    fieldRange: defines.Range,
-    tag: ?TypeID,
-) Error![]types.FieldInfo {
-    const allocator = self.arena.allocator();
-
-    var fields = allocator.alloc(types.FieldInfo,
-        fieldRange.len() + @as(u32, if (tag) |_| 1 else 0),
-    ) catch return error.AllocatorFailure;
-
-    if (tag) |tagType| {
-        fields[0] = .{
-            .public = true,
-            .name = "tag",
-            .valueType = tagType,
-        };
-    }
-
-    for (0..fieldRange.len()) |index| {
-        const symbol = ast.signatures.get(ast.extra[fieldRange.at(@intCast(index))]);
-
-        const symbolToken = tokens.get(symbol.name);
-        const symbolName = symbolToken.lexeme(self.typechecker.context, self.typechecker.currentFile);
-
-        fields[index + @as(u32, if (tag != null) 1 else 0)] = .{
-            .public = symbol.public,
-            .name = symbolName,
-            .valueType = (try self.typechecker.expectType(symbol.type)),
-        };
-    }
-
-    return fields;
-}
-
 // @Note Beware, scope declarations must be comptime since they are technically
 // top-level declarations.
 fn handleScopeDecls(
@@ -995,6 +1029,7 @@ fn handleScopeDecls(
             .public = sig.public,
             .name = symbolName,
             .valueType = Builtin.Type("incomplete"),
+            .isComptime = false,
             // .valueType = (try self.typechecker.expectType(sig.type)),
         });
     }

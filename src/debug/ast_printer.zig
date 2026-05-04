@@ -12,6 +12,7 @@ const Error = common.CompilerError;
 
 pub fn printASTs(context: *common.CompilerContext, modules: *const ModuleList) void {
     var it = modules.modules.iterator();
+    _ = it.next();
     while (it.next()) |module| {
         printAST(module.dataIndex, context);
     }
@@ -108,7 +109,7 @@ pub const PrintContext = struct {
                 const expr_idx  = ex[val + 1];
                 const is_pub = printer.ast.signatures.items(.public)[sig_start];
                 printer.print("Let {s}", .{if (is_pub) "pub " else ""});
-                printer.printSig(sig_start, depth);
+                printer.printSignature(sig_start, depth);
                 printer.indent(depth);
                 printer.write(" = ");
                 printer.printExpr(@intCast(expr_idx), depth + 2);
@@ -280,7 +281,7 @@ pub const PrintContext = struct {
                 printer.write("FnDef (\n");
                 for (ex[param_start..param_end]) |raw_sig| {
                     printer.indent(depth + 1);
-                    printer.printSig(@intCast(raw_sig), depth + 2);
+                    printer.printSignature(@intCast(raw_sig), depth + 2);
                 }
                 printer.indent(depth + 1);
                 printer.write(" -> ");
@@ -308,7 +309,8 @@ pub const PrintContext = struct {
                 const def_end     = ex[val + 3];
                 printer.write("Struct {\n");
                 for (ex[field_start..field_end]) |raw_sig| {
-                    printer.printSig(@intCast(raw_sig), depth + 1);
+                    printer.printSignature(@intCast(raw_sig), depth + 1);
+                    printer.write("\n");
                 }
                 for (ex[def_start..def_end]) |raw_stmt| {
                     printer.printStmt(@intCast(raw_stmt), depth + 1);
@@ -357,7 +359,8 @@ pub const PrintContext = struct {
                 const def_start = ex[off + 2];
                 const def_end   = ex[off + 3];
                 for (ex[var_start..var_end]) |raw_sig| {
-                    printer.printSig(@intCast(raw_sig), depth + 1);
+                    printer.printSignature(@intCast(raw_sig), depth + 1);
+                    printer.write("\n");
                 }
                 for (ex[def_start..def_end]) |raw_stmt| {
                     printer.printStmt(@intCast(raw_stmt), depth + 1);
@@ -400,7 +403,7 @@ pub const PrintContext = struct {
         }
     }
 
-    pub fn printSig(printer: *PrintContext, si: defines.SignaturePtr, depth: u32) void {
+    pub fn printSignature(printer: *PrintContext, si: defines.SignaturePtr, depth: u32) void {
         const sigs = printer.ast.signatures;
         const sig  = sigs.get(si);
         printer.indent(depth);

@@ -84,5 +84,7 @@ pub const CompilerError = error {
     PointlessUnionDefinition,
     TypeIsNotCallable,
     TypeIsNotConstructible,
+    MultivalueCast,
+    ScopingOnNonScopedType,
     Terminate,
 };

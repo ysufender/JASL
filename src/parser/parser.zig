@@ -1109,7 +1109,7 @@ fn structDefinition(self: *Parser) ExpressionResult {
 
     // Check unionDefinition for details.
     // TODO: Fix this. Maybe two loops using scratch would be better...
-    var fieldList = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
+    var fieldList = collections.StaticStack(defines.OpaquePtr, 512);
     var definitions = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
 
     while (!self.check(.RBrace)) {
@@ -1122,7 +1122,7 @@ fn structDefinition(self: *Parser) ExpressionResult {
                         try definitions.append(try self.variable(true));
                     },
                     .Identifier => {
-                        try fieldList.append(try self.variableSignature(true, true));
+                        try fieldList.push(try self.variableSignature(true, true));
                         if (!self.match(&.{.Comma})) break;
                     },
                     else => {
@@ -1137,7 +1137,7 @@ fn structDefinition(self: *Parser) ExpressionResult {
                 try definitions.append(try self.variable(false));
             },
             .Identifier => {
-                try fieldList.append(try self.variableSignature(false, true));
+                try fieldList.push(try self.variableSignature(false, true));
                 if (!self.match(&.{.Comma})) break;
             },
             else => {

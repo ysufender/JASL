@@ -1,6 +1,6 @@
 pub let TestUnion = union(enum) {
-    field1: TestEnum,
-    field2: TestStruct,
+    dummy: void,
+    dummy2: void,
     
     pub let someDef = struct {
         pub let someInnerDef = TestStruct;

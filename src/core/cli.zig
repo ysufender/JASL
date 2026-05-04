@@ -31,6 +31,7 @@ const flags = std.StaticStringMap(Flags).initComptime(&.{
     .{ "-I", .Include },
 
     .{ "--print-ast", .Flag },
+    .{ "--print-ast-full", .Flag },
 
     .{ "--parse-only", .Flag },
 
@@ -51,6 +52,7 @@ const descriptions = std.StaticStringMap([]const u8).initComptime(&.{
     .{ "--include, -I", " <path>: Add <path> to the searchpath of the compiler. Can be relative or absolute." },
 
     .{ "--print-ast", ": Print a pretty(!) formatted AST dump to stdout." },
+    .{ "--print-ast-full", ": Print a pretty(!) formatted AST dump to stdout, after parsing every used module." },
 
     .{ "--parse-only", ": Parse the project, do not compile." },
     .{ "--typecheck-only", ": Typecheck the project, do not compile." },
@@ -123,14 +125,10 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
                 }
             },
 
+            .Flag => try settings.setFlag(flag),
+
             else =>
-                if (
-                    std.mem.startsWith(u8, flag, "--")
-                    or std.mem.startsWith(u8, flag, "-")
-                ) {
-                    try settings.setFlag(flag);
-                }
-                else if (maybeFile != null) {
+                if (maybeFile != null) {
                     common.log.err("Unexpected commandline option {s}", .{flag});
                     return error.UnknownFlag;
                 }

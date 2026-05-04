@@ -8,12 +8,14 @@ fn InnerStaticStack(comptime T: type, comptime Size: usize) type {
 
         values: [Size]T = undefined,
         index: u32 = 0,
+        items: []T = &.{},
 
         pub fn push(stack: *Self, value: T) Error!void {
             if (stack.index >= Size) {
                 return error.OutOfMemory;
             }
 
+            defer stack.items = stack.values[0..stack.index];
             defer stack.index += 1;
             stack.values[stack.index] = value;
         }
@@ -23,6 +25,7 @@ fn InnerStaticStack(comptime T: type, comptime Size: usize) type {
                 return null;
             }
 
+            defer stack.items = stack.values[0..stack.index];
             defer stack.index -= 1;
             return stack.values[stack.index];
         }

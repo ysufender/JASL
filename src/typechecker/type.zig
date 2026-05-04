@@ -25,12 +25,21 @@ pub const TypeInfo = union(enum) {
     Type,
 
     Array: Array,
+
+    /// Like type, comptime_int, comptime_float, enum_literal
+    pub fn isComptime(self: TypeInfo) bool {
+        return switch (self) {
+            .Type, .ComptimeInt, .ComptimeFloat, .EnumLiteral => true,
+            else => false,
+        };
+    }
 };
 
 pub const FieldInfo = struct {
     public: bool,
     name: []const u8,
     valueType: TypeID,
+    isComptime: bool,
 
     // @CompilerOnly 
     pub fn eql(this: *const FieldInfo, that: FieldInfo) bool {
