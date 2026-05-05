@@ -5,6 +5,8 @@ pub const ASTPrinter = @import("ast_printer.zig");
 
 const Error = common.CompilerError;
 
+pub const isDebug = @import("config").isDebug;
+
 pub fn NotImplemented(comptime src: std.builtin.SourceLocation) Error {
     common.log.err(std.fmt.comptimePrint("Unimplemented in {s} at {d}:{d}", .{
         src.file,

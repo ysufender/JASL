@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const common = @import("common.zig");
 
 pub fn info(comptime fmt: []const u8, args: anytype) void {
     if (!builtin.is_test) {
@@ -20,7 +21,7 @@ pub fn err(comptime fmt: []const u8, args: anytype) void {
 }
 
 pub fn debug(comptime fmt: []const u8, args: anytype) void {
-    if (!builtin.is_test) {
+    if (!builtin.is_test and common.debug.isDebug) {
         std.log.debug(fmt, args);
     }
 }

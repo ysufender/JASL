@@ -660,7 +660,7 @@ pub fn constructFromList(self: *Comptime, typeID: TypeID, range: defines.Range) 
                 _ = try self.eval(ast.extra[extra], typeID);
             }
 
-            return .{ .Void = { } };
+            break :ret .{ .Void = { } };
         },
         .Enum => self.eval(ast.extra[range.at(0)], typeID),
         .Struct => |str| {
@@ -693,7 +693,43 @@ pub fn constructFromList(self: *Comptime, typeID: TypeID, range: defines.Range) 
                 },
             };
         },
-        else => common.debug.NotImplemented(@src())
+        .Array => |arr| self.constructArrayFromList(typeID, arr.child, range),
+        .Pointer => |ptr| switch (ptr.size) {
+            .Slice => self.constructArrayFromList(typeID, ptr.child, range),
+            else => {
+                const address = self.memory.items.len;
+                _ = try self.eval(ast.extra[range.at(0)], ptr.child);
+                break :ret Value{
+                    .Pointer = .{
+                        .Type = typeID,
+                        .To = @intCast(address),
+                    },
+                };
+            },
+        },
+        .Noreturn,
+        .Type, .Function,
+        .Bool, .Float, .Integer,
+        .ComptimeInt, .ComptimeFloat => self.eval(ast.extra[range.at(0)], typeID),
+        else => common.debug.ShouldBeImpossible(@src())
+    };
+}
+
+fn constructArrayFromList(self: *Comptime, arr: TypeID, child: TypeID, range: defines.Range) Error!Value {
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+
+    const address = self.memory.items.len;
+
+    for (range.start..range.end) |ptr| {
+        _ = try self.eval(ast.extra[ptr], child);
+    }
+
+    return Value{
+        .Slice = .{
+            .Type = arr,
+            .To = @intCast(address),
+            .Size = range.len(),
+        },
     };
 }
 

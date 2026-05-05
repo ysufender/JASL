@@ -196,14 +196,13 @@ fn debugLog(self: *Typechecker) void {
 }
 
 pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
-    // defer self.debugLog();
+    defer self.arena.deinit();
 
     if (!self.modules.getItem("root", .symbolPtrs).contains("main")) {
         self.report("Couldn't find an entry point in the root module.", .{});
         return error.MissingDefinition;
     }
 
-    defer self.arena.deinit();
     self.executer = try Comptime.init(self, allocator);
 
     // TODO:                                             This part is not really nice, fix it.
@@ -431,7 +430,8 @@ pub fn typecheckExpressionListRange(self: *Typechecker, range: defines.Range, ex
                 try self.typecheckGeneralInitialization(ast, expected, range);
             },
         },
-        .Void, .Noreturn => try self.typecheckGeneralInitialization(ast, expected, range),
+        .Void => try self.typecheckGeneralInitialization(ast, expected, range),
+        .Noreturn,
         .Type, .Function,
         .Bool, .Float, .Integer,
         .ComptimeInt, .ComptimeFloat => {
@@ -1135,6 +1135,7 @@ pub fn assertCastablePtr(self: *const Typechecker, this: Types.Pointer, that: Ty
     try functional.throwIf(!self.mutable(this.child) and self.mutable(that.child), error.MutabilityViolation);
 }
 
+/// Assert that 'this' is structurally identical to 'this'
 /// Does no mutability check
 pub fn assertStructurallyIdentical(self: *const Typechecker, this: TypeID, that: TypeID) Error!void {
     const fromType = self.typeTable.get(this);
@@ -1189,16 +1190,19 @@ pub fn assertStructurallyIdentical(self: *const Typechecker, this: TypeID, that:
     }
 }
 
+/// Check if 'this' is structurally identical to 'this'
 pub fn structurallyIdentical(self: *const Typechecker, this: TypeID, that: TypeID) bool {
     self.assertStructurallyIdentical(this, that) catch return false;
     return true;
 }
 
+/// Check if 'expected' can be assigned to 'got'
 pub fn suitable(self: *const Typechecker, expected: TypeID, got: TypeID) bool {
     self.assertSuitable(expected, got) catch return false;
     return true;
 }
 
+/// Assert that 'this' can be assigned to 'that'
 pub fn assertSuitable(self: *const Typechecker, this: TypeID, that: TypeID) Error!void {
     const thisType = self.typeTable.get(this);
     const thatType = self.typeTable.get(that);

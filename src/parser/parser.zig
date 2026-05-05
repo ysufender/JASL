@@ -23,28 +23,28 @@ pub const Expression = struct {
     pub const Type = enum {
         Assignment,
         Binary,
-        Literal,
-        Indexing,
+        Literal, // comptime done
+        Indexing, // comptime done
         Slicing,
-        Identifier,
+        Identifier, // comptime done
         Unary,
-        StructDefinition,
-        EnumDefinition,
-        UnionDefinition,
+        StructDefinition, // comptime done
+        EnumDefinition, // comptime done
+        UnionDefinition, // comptime done
         FunctionDefinition,
         Mark,
         Lambda,
         Call,
         Conditional,
         Switch,
-        MutableType,
-        CPointerType,
-        PointerType,
-        SliceType,
-        ArrayType,
-        FunctionType,
-        Scoping,
-        ExpressionList,
+        MutableType, // comptime done
+        CPointerType, // comptime done
+        PointerType, // comptime done
+        SliceType, // comptime done
+        ArrayType, // comptime done
+        FunctionType, // comptime done
+        Scoping, // comptime done
+        ExpressionList, // comptime done
         Dot,
     };
 

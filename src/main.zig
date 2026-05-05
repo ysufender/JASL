@@ -4,6 +4,7 @@ const perfAllc = @import("util/allocator.zig");
 const collections = @import("util/collections.zig");
 const defines = @import("core/defines.zig");
 const debug = @import("debug/debug.zig");
+const platform = @import("core/platform.zig");
 
 const Lexer = @import("lexer/lexer.zig");
 const Parser = @import("parser/parser.zig");
@@ -13,15 +14,15 @@ const Typechecker = @import("typechecker/typechecker.zig");
 
 pub fn main(init: std.process.Init) void {
     MainProcInit = init;
-    // const hugepage = null;
-    var hugepage = perfAllc.PerformanceAllocator(init.gpa);
-    const allocator = if (hugepage) |*alc| alc.allocator() else init.gpa;
 
-    if (hugepage) |_| {
-        common.log.debug("Using huge pages", .{});
-    }
-
-    innerMain(allocator, init) catch |err| blk: {
+    innerMain(
+        if (platform.isPosix) blk: {
+            var hugepage = perfAllc.HugePageAllocator.init(init.gpa);
+            common.log.debug("Using huge pages.", .{});
+            break :blk hugepage.allocator();
+        } else init.gpa,
+        init
+    ) catch |err| blk: {
         switch (err) {
             error.ShouldBeImpossible => common.log.err(
                 "This is a compiler bug, a part of impossible branch has been reached."

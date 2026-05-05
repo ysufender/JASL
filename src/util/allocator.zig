@@ -11,14 +11,8 @@ const windows = std.os.windows;
 const Allocator = std.mem.Allocator;
 
 /// Attempts to utilize a huge page allocator on posix
-/// compliant platforms to minimize page faults. Fallbacks
-/// to standard C allocator.
-pub fn PerformanceAllocator(fallback: std.mem.Allocator) ?HugePageAllocator {
-    return if (platform.isPosix) HugePageAllocator.init(fallback)
-    else null;
-}
-
-const HugePageAllocator = struct {
+/// compliant platforms to minimize page faults.
+pub const HugePageAllocator = struct {
     fallingBack: bool = false,
     fallback: std.mem.Allocator,
 

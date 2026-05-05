@@ -40,24 +40,7 @@ const flags = std.StaticStringMap(Flags).initComptime(&.{
     .{ "--resolve-only", .Flag },
 });
 
-const descriptions = std.StaticStringMap([]const u8).initComptime(&.{
-    .{ "--help, -h", ": Print this help message." },
-
-    .{ "--version, -v", ": Print version info." },
-
-    .{ "--working, -w", " <path>: Set working directory." },
-
-    .{ "--max-err, -m", " <count>: Set max error count before terminating the compilation. Defaults to 10." },
-
-    .{ "--include, -I", " <path>: Add <path> to the searchpath of the compiler. Can be relative or absolute." },
-
-    .{ "--print-ast", ": Print a pretty(!) formatted AST dump to stdout." },
-    .{ "--print-ast-full", ": Print a pretty(!) formatted AST dump to stdout, after parsing every used module." },
-
-    .{ "--parse-only", ": Parse the project, do not compile." },
-    .{ "--typecheck-only", ": Typecheck the project, do not compile." },
-    .{ "--resolve-only", ": Resolve the project, do not compile." },
-});
+const helpText = @embedFile("help.txt");
 
 pub fn parseCLI(allocator: std.mem.Allocator, _args: std.process.Args, io: std.Io) common.CompilerError!common.CompilerSettings {
     const NMap = std.StringHashMapUnmanaged(void);
@@ -181,12 +164,7 @@ fn printHeader() common.CompilerError {
 
 fn printHelp() common.CompilerError {
     printHeader() catch { };
-    common.log.info("\n\tUsage:\n\tjaslc <input_file> [flags]\n\n\tFlags:", .{});
-
-    for (descriptions.keys()) |flag| {
-        common.log.info("\t\t{s}{s}", .{flag, descriptions.get(flag).?});
-    }
-
+    common.log.info(helpText, .{});
     return error.Terminate; 
 }  
 
