@@ -13,4 +13,4 @@ let g: i::Struct = (true, i::Enum::Field1, ());
 let h: i::Struct = (true, i::Enum(@Field1), ());
 let j: i::Struct = (true, i::Enum(i::Enum::Field1), ());
 
-let k: i::Union = (@field2, false, @Field1, ());
+let k: i::Union = (@field2, false);

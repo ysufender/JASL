@@ -523,8 +523,9 @@ fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
     };
 
     if (fieldRange.len() <= 1) {
-        self.report("Pointless definition of union type with {d} fields.", .{
+        self.report("Pointless definition of union type with {d} field{s}.", .{
             fieldRange.len(),
+            if (fieldRange.len() == 0) "s" else ""
         });
         return error.PointlessUnionDefinition;
     }

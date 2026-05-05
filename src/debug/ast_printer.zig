@@ -40,12 +40,12 @@ pub const PrintContext = struct {
     context: *common.CompilerContext,
     file: defines.FilePtr,
 
-    fn write(_: *PrintContext, bytes: []const u8) void {
-        common.log.print("{s}", .{bytes});
+    fn write(self: *PrintContext, bytes: []const u8) void {
+        common.log.print(self.context.io, "{s}", .{bytes});
     }
 
-    fn print(_: *PrintContext, comptime fmt: []const u8, args: anytype) void {
-        common.log.print(fmt, args);
+    fn print(self: *PrintContext, comptime fmt: []const u8, args: anytype) void {
+        common.log.print(self.context.io, fmt, args);
     }
 
     fn indent(printer: *PrintContext, depth: u32) void {

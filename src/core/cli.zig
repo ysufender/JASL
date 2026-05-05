@@ -59,10 +59,10 @@ const descriptions = std.StaticStringMap([]const u8).initComptime(&.{
     .{ "--resolve-only", ": Resolve the project, do not compile." },
 });
 
-pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.CompilerSettings {
+pub fn parseCLI(allocator: std.mem.Allocator, _args: std.process.Args, io: std.Io) common.CompilerError!common.CompilerSettings {
     const NMap = std.StringHashMapUnmanaged(void);
 
-    var args = std.process.argsWithAllocator(allocator) catch return error.AllocatorFailure;
+    var args = _args.iterateAllocator(allocator) catch return error.AllocatorFailure;
 
     _ = args.skip();
 
@@ -89,12 +89,12 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
             .Working => {
                 const dir = if (args.next()) |next| next else return error.MissingFlag;
 
-                std.process.changeCurDir(dir) catch |err| {
+                std.process.setCurrentPath(io, dir) catch |err| {
                     common.log.err("Failed to set working directory to '{s}',\n\tProvided information: {s}", .{dir, @errorName(err)});
                     return error.IOError;
                 };
 
-                workingDir = std.process.getCwdAlloc(allocator) catch return error.AllocatorFailure;
+                workingDir = std.process.currentPathAlloc(io, allocator) catch return error.AllocatorFailure;
             },
             .MaxErr => {
                 const max = if (args.next()) |next| next else {
@@ -110,7 +110,7 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
             },
             .Include => {
                 if (args.next()) |arg| {
-                    const path = std.fs.realpathAlloc(allocator, arg) catch |err| switch (err) {
+                    const path = std.Io.Dir.cwd().realPathFileAlloc(io, arg, allocator) catch |err| switch (err) {
                         error.OutOfMemory => return error.AllocatorFailure,
                         else => {
                             common.log.info("Given path '{s}' couldn't be resolved.", .{arg});
@@ -118,7 +118,7 @@ pub fn parseCLI(allocator: std.mem.Allocator) common.CompilerError!common.Compil
                         }
                     };
 
-                    _ = includeDirs.getOrPutValue(allocator, path, {}) catch return error.AllocatorFailure;
+                    includeDirs.put(allocator, path, {}) catch return error.AllocatorFailure;
                 }
                 else {
                     common.log.err("Expected a path after include flag.", .{});

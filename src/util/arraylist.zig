@@ -8,7 +8,7 @@ const CompilerError = @import("../core/common.zig").CompilerError;
 
 /// Faster for structs compared to std.MultiArrayList, not tested for unions
 pub fn MultiArrayList(comptime T: type) type {
-    return comptime switch (@typeInfo(T)) {
+    return switch (@typeInfo(T)) {
         .@"struct" => StructMultiArrayList(T),
         else => @compileError("MultiArrayList is only available to structs."),
     };
@@ -19,27 +19,28 @@ fn StructMultiArrayList(comptime T: type) type {
 
     const fields = info.fields;
 
-    comptime var newFields: [fields.len]std.builtin.Type.StructField = undefined;
+    comptime var newFieldsNames: [fields.len][]const u8 = undefined;
+    comptime var newFieldsTypes: [fields.len]type = undefined;
+    comptime var newFieldsAttrs: [fields.len]std.builtin.Type.StructField.Attributes = undefined;
     
     for (fields, 0..) |field, i| {
-        newFields[i] = .{
-            .name = field.name,
-            .type = []field.type,
+        newFieldsNames[i] = field.name;
+        newFieldsTypes[i] = []field.type;
+        newFieldsAttrs[i] = std.builtin.Type.StructField.Attributes{
+            .@"align" = @alignOf([]field.type),
+            .@"comptime" = false,
             .default_value_ptr = null,
-            .is_comptime = false,
-            .alignment = @alignOf([]field.type),
         };
     }
 
-    const Inner = @Type(.{
-        .@"struct" = .{
-            .fields = &newFields,
-            .layout = .auto,
-            .is_tuple = false,
-            .backing_integer = null,
-            .decls = &.{}
-        }
-    });
+
+    const Inner = @Struct(
+        .auto,
+        null,
+        &newFieldsNames,
+        &newFieldsTypes,
+        &newFieldsAttrs,
+    );
 
     return struct {
         const Self = @This();
@@ -162,7 +163,7 @@ fn StructMultiArrayList(comptime T: type) type {
 
             return self;
         }
-
+        
         pub fn ensureTotalCapacity(self: *Self, allocator: Allocator, cap: usize) CompilerError!void {
             if (self.capacity() >= cap) {
                 return;

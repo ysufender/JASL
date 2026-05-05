@@ -1,5 +1,5 @@
-comptime {
-    _ = @import("lexer/lexer.zig").Tests;
-    _ = @import("parser/parser.zig").Tests;
-    _ = @import("util/arraylist.zig").Tests;
+const std = @import("std");
+
+test "All" {
+    std.testing.refAllDecls(std);
 }

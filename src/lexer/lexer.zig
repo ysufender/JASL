@@ -185,6 +185,7 @@ pub fn init(base: std.mem.Allocator, context: *common.CompilerContext, file: []c
     const len: u32 = @intCast(src.len);
 
     var arena = std.heap.ArenaAllocator.init(base);
+    errdefer arena.deinit();
     var tokens = try TokenList.init(arena.allocator(), len + 2);
 
     tokens.appendAssumeCapacity(.{
@@ -193,7 +194,7 @@ pub fn init(base: std.mem.Allocator, context: *common.CompilerContext, file: []c
         .end = fileHandle,
     });
     
-    var lexer = Lexer{
+    var self = Lexer{
         .start = 0,
         .current = 0,
         .end = len,
@@ -204,43 +205,45 @@ pub fn init(base: std.mem.Allocator, context: *common.CompilerContext, file: []c
         .context = context,
     };
 
-    lexer.skipWhitespace();
-    return lexer;
+    self.skipWhitespace();
+    return self;
 }
 
-pub fn lex(lexer: *Lexer) common.CompilerError!defines.TokenListPtr {
-    while (!lexer.isAtEnd()) {
-        try lexer.scanToken();
-        lexer.skipWhitespace();
+pub fn lex(self: *Lexer) common.CompilerError!defines.TokenListPtr {
+    defer self.arena.deinit();
+
+    while (!self.isAtEnd()) {
+        try self.scanToken();
+        self.skipWhitespace();
     }
 
-    lexer.tokens.append(
-        lexer.allocator(),
+    self.tokens.append(
+        self.allocator(),
         .{
             .type = .EOF,
-            .start = lexer.start,
-            .end = lexer.current,
+            .start = self.start,
+            .end = self.current,
         }
     ) catch return error.InternalError;
 
-    lexer.start = 0;
-    lexer.current = 0;
+    self.start = 0;
+    self.current = 0;
 
-    return lexer.context.registerTokens(lexer.tokens.slice());
+    return self.context.registerTokens(self.tokens.slice());
 }
 
-pub fn lexToken(lexer: *Lexer) common.CompilerError!Token {
-    if (lexer.isAtEnd()) {
+pub fn lexToken(self: *Lexer) common.CompilerError!Token {
+    if (self.isAtEnd()) {
         return .{
             .type = .EOF,
-            .start = lexer.end,
-            .end = lexer.end,
+            .start = self.end,
+            .end = self.end,
         };
     }
     else {
-        try lexer.scanToken();
-        assert(lexer.tokens.len > 0);
-        return lexer.tokens[lexer.tokens.len - 1];
+        try self.scanToken();
+        assert(self.tokens.len > 0);
+        return self.tokens[self.tokens.len - 1];
     }
 }
 
@@ -248,130 +251,130 @@ pub fn lexToken(lexer: *Lexer) common.CompilerError!Token {
 // Private Implementation
 //
 
-fn scanToken(lexer: *Lexer) common.CompilerError!void {
-    lexer.start = lexer.current;
+fn scanToken(self: *Lexer) common.CompilerError!void {
+    self.start = self.current;
 
-    return blk: switch (lexer.advance()) {
-        '(' => lexer.addToken(.LParen),
-        ')' => lexer.addToken(.RParen),
-        '{' => lexer.addToken(.LBrace),
-        '}' => lexer.addToken(.RBrace),
-        '[' => lexer.addToken(.LBracket),
-        ']' => lexer.addToken(.RBracket),
-        ',' => lexer.addToken(.Comma),
-        '~' => lexer.addToken(.Tilde),
-        '^' => lexer.addToken(.Xor),
+    return blk: switch (self.advance()) {
+        '(' => self.addToken(.LParen),
+        ')' => self.addToken(.RParen),
+        '{' => self.addToken(.LBrace),
+        '}' => self.addToken(.RBrace),
+        '[' => self.addToken(.LBracket),
+        ']' => self.addToken(.RBracket),
+        ',' => self.addToken(.Comma),
+        '~' => self.addToken(.Tilde),
+        '^' => self.addToken(.Xor),
         '.' => 
-            if (std.ascii.isDigit(lexer.peek())) {
-                lexer.report("Dot (.) prefixed numeric literals are not allowed.", .{});
+            if (std.ascii.isDigit(self.peek())) {
+                self.report("Dot (.) prefixed numeric literals are not allowed.", .{});
                 break :blk error.DotPrefixedNumericLiteral;
             }
-            else if (lexer.match('.')) lexer.addToken(.Range) 
-            else lexer.addToken(.Dot),
+            else if (self.match('.')) self.addToken(.Range) 
+            else self.addToken(.Dot),
         ':' =>
-            if (lexer.match(':')) lexer.addToken(.DoubleColon)
-            else lexer.addToken(.Colon),
-        ';' => lexer.addToken(.Semicolon),
+            if (self.match(':')) self.addToken(.DoubleColon)
+            else self.addToken(.Colon),
+        ';' => self.addToken(.Semicolon),
         '-' => 
-            if (lexer.match('>')) lexer.addToken(.Arrow)
-            else lexer.addToken(.Minus),
-        '+' => lexer.addToken(.Plus),
+            if (self.match('>')) self.addToken(.Arrow)
+            else self.addToken(.Minus),
+        '+' => self.addToken(.Plus),
         '/' => 
-            if (lexer.match('/')) {
+            if (self.match('/')) {
                 const index =
-                    if (std.mem.indexOfScalarPos(u8, lexer.source, lexer.current, '\n'))
+                    if (std.mem.indexOfScalarPos(u8, self.source, self.current, '\n'))
                         |idx| idx
                     else
-                        lexer.end;
+                        self.end;
 
-                lexer.current = @intCast(index);
+                self.current = @intCast(index);
             }
-            else if (lexer.match('*')) {
+            else if (self.match('*')) {
                 var ident: u32 = 1;
 
                 // Rewrite SIMD
-                while (ident > 0 and !lexer.isAtEnd()) {
-                    const ch = lexer.advance();
+                while (ident > 0 and !self.isAtEnd()) {
+                    const ch = self.advance();
 
-                    if (ch == '*' and lexer.match('/')) {
+                    if (ch == '*' and self.match('/')) {
                         ident -= 1;
                     }
-                    else if (ch == '/' and lexer.match('*')) {
+                    else if (ch == '/' and self.match('*')) {
                         ident += 1;
                    }
                 }
 
-                if (lexer.isAtEnd()) {
-                    lexer.report("Unterminated multiline comment", .{});
+                if (self.isAtEnd()) {
+                    self.report("Unterminated multiline comment", .{});
                     break :blk error.UnterminatedComment;
                 }
             }
-            else lexer.addToken(.Slash),
-        '*' => lexer.addToken(.Star),
+            else self.addToken(.Slash),
+        '*' => self.addToken(.Star),
         '!' =>
-            if (lexer.match('=')) lexer.addToken(.BangEqual)
-            else lexer.addToken(.Bang),
+            if (self.match('=')) self.addToken(.BangEqual)
+            else self.addToken(.Bang),
         '=' =>
-            if (lexer.match('=')) lexer.addToken(.EqualEqual)
-            else lexer.addToken(.Equal),
+            if (self.match('=')) self.addToken(.EqualEqual)
+            else self.addToken(.Equal),
         '>' =>
-            if (lexer.match('=')) lexer.addToken(.GreaterEqual)
-            else if (lexer.match('>')) lexer.addToken(.RightShift)
-            else lexer.addToken(.Greater),
+            if (self.match('=')) self.addToken(.GreaterEqual)
+            else if (self.match('>')) self.addToken(.RightShift)
+            else self.addToken(.Greater),
         '<' =>
-            if (lexer.match('=')) lexer.addToken(.LesserEqual)
-            else if (lexer.match('<')) lexer.addToken(.LeftShift)
-            else lexer.addToken(.Lesser),
-        '|' => lexer.addToken(.Pipe),
-        '&' => lexer.addToken(.Ampersand),
+            if (self.match('=')) self.addToken(.LesserEqual)
+            else if (self.match('<')) self.addToken(.LeftShift)
+            else self.addToken(.Lesser),
+        '|' => self.addToken(.Pipe),
+        '&' => self.addToken(.Ampersand),
         '\'' => {
-            const ch = lexer.advance();
+            const ch = self.advance();
 
             if (ch == '\'') {
-                lexer.report("Empty character literals are not allowed.", .{});
+                self.report("Empty character literals are not allowed.", .{});
                 break :blk error.EmptyCharLiteral;
             }
 
-            _ = try lexer.consume('\'', "Expected closing single quote (')");
-            lexer.start += 1;
-            try lexer.addToken(.Integer);
+            _ = try self.consume('\'', "Expected closing single quote (')");
+            self.start += 1;
+            try self.addToken(.Integer);
         },
         '"' => {
             const index =
-                if (std.mem.indexOfScalarPos(u8, lexer.source, lexer.current, '"'))
+                if (std.mem.indexOfScalarPos(u8, self.source, self.current, '"'))
                     |idx| idx
                 else
-                    lexer.end;
+                    self.end;
 
-            lexer.current = @intCast(index);
+            self.current = @intCast(index);
 
-            if (lexer.isAtEnd()) {
-                lexer.report("Unterminated string literal", .{});
+            if (self.isAtEnd()) {
+                self.report("Unterminated string literal", .{});
                 break :blk error.UnterminatedStringLiteral;
             }
 
-            lexer.start += 1;
-            try lexer.addToken(.String);
+            self.start += 1;
+            try self.addToken(.String);
         },
         '@' => {
-            const ch = lexer.advance();
+            const ch = self.advance();
             if (std.ascii.isAlphabetic(ch) or ch == '_'){
                 const alpha = comptime "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_";
                 const num = comptime "0123456789";
                 const alphanum = comptime (alpha ++ num);
 
                 const index =
-                    if (std.mem.indexOfNonePos(u8, lexer.source, lexer.current, alphanum))
+                    if (std.mem.indexOfNonePos(u8, self.source, self.current, alphanum))
                         |idx| idx 
                     else
-                        lexer.end;
+                        self.end;
 
-                lexer.current = @intCast(index);
+                self.current = @intCast(index);
 
-                break :blk lexer.addToken(.EnumLiteral);
+                break :blk self.addToken(.EnumLiteral);
             }
             else {
-                lexer.report("Unexpected character '{c}'", .{ch});
+                self.report("Unexpected character '{c}'", .{ch});
                 break :blk error.UnexpectedCharacter;
             }
         },
@@ -381,41 +384,41 @@ fn scanToken(lexer: *Lexer) common.CompilerError!void {
             const alphanum = comptime (alpha ++ num);
 
             if (std.mem.containsAtLeastScalar(u8, num, 1, ch)) {
-                while (std.mem.containsAtLeastScalar(u8, num, 1, lexer.peek())) {
-                    _ = lexer.advance();
+                while (std.mem.containsAtLeastScalar(u8, num, 1, self.peek())) {
+                    _ = self.advance();
                 }
 
-                if (lexer.check('.') and std.mem.containsAtLeastScalar(u8, num, 1, lexer.peekn(1))) {
-                    _ = lexer.advance();
+                if (self.check('.') and std.mem.containsAtLeastScalar(u8, num, 1, self.peekn(1))) {
+                    _ = self.advance();
 
-                    while (std.mem.containsAtLeastScalar(u8, num, 1, lexer.peek())) {
-                        _ = lexer.advance();
+                    while (std.mem.containsAtLeastScalar(u8, num, 1, self.peek())) {
+                        _ = self.advance();
                     }
 
-                    break :blk lexer.addToken(.Float);
+                    break :blk self.addToken(.Float);
                 }
-                //else if (lexer.check('.')) {
-                //    _ = lexer.advance();
-                //    lexer.report("Trailing dots (.) after numeric literals are not allowed.", .{});
+                //else if (self.check('.')) {
+                //    _ = self.advance();
+                //    self.report("Trailing dots (.) after numeric literals are not allowed.", .{});
                 //    break :blk error.DotPostfixedNumericLiteral;
                 //}
 
-                break :blk lexer.addToken(.Integer);
+                break :blk self.addToken(.Integer);
             }
             else if (std.mem.containsAtLeastScalar(u8, alpha, 1, ch) or ch == '_'){
                 const index =
-                    if (std.mem.indexOfNonePos(u8, lexer.source, lexer.current, alphanum))
+                    if (std.mem.indexOfNonePos(u8, self.source, self.current, alphanum))
                         |idx| idx 
                     else
-                        lexer.end;
+                        self.end;
 
-                lexer.current = @intCast(index);
+                self.current = @intCast(index);
 
-                const str = lexer.source[lexer.start..lexer.current];
-                break :blk lexer.addToken(getType(str));
+                const str = self.source[self.start..self.current];
+                break :blk self.addToken(getType(str));
             }
             else {
-                lexer.report("Unexpected character '{c}'", .{ch});
+                self.report("Unexpected character '{c}'", .{ch});
                 return error.UnexpectedCharacter;
             }
         }
@@ -426,75 +429,75 @@ fn scanToken(lexer: *Lexer) common.CompilerError!void {
 // Helpers
 //
 
-fn allocator(lexer: *Lexer) std.mem.Allocator {
-    return lexer.arena.allocator();
+fn allocator(self: *Lexer) std.mem.Allocator {
+    return self.arena.allocator();
 }
 
-fn skipWhitespace(lexer: *Lexer) void {
+fn skipWhitespace(self: *Lexer) void {
     const index =
-        if(std.mem.indexOfNonePos(u8, lexer.source, lexer.current, " \n\t\r")) |idx|
+        if(std.mem.indexOfNonePos(u8, self.source, self.current, " \n\t\r")) |idx|
             idx
         else
-            lexer.end;
+            self.end;
 
-    lexer.current = @intCast(index);
+    self.current = @intCast(index);
 }
 
-fn check(lexer: *const Lexer, expected: u8) bool {
+fn check(self: *const Lexer, expected: u8) bool {
     return
-        if (lexer.isAtEnd()) false
-        else lexer.source[lexer.current] == expected;
+        if (self.isAtEnd()) false
+        else self.source[self.current] == expected;
 }
 
-fn match(lexer: *Lexer, expected: u8) bool {
-    if (lexer.isAtEnd()) return false;
-    if (lexer.source[lexer.current] != expected) return false;
+fn match(self: *Lexer, expected: u8) bool {
+    if (self.isAtEnd()) return false;
+    if (self.source[self.current] != expected) return false;
 
-    _ = lexer.advance();
+    _ = self.advance();
     return true;
 }
 
-fn previous(lexer: *const Lexer) u8 {
-    assert(lexer.current > 0);
-    return lexer.source[lexer.current-1];
+fn previous(self: *const Lexer) u8 {
+    assert(self.current > 0);
+    return self.source[self.current-1];
 }
 
-fn peek(lexer: *const Lexer) u8 {
+fn peek(self: *const Lexer) u8 {
     return
-        if (lexer.isAtEnd()) 0
-        else lexer.source[lexer.current];
+        if (self.isAtEnd()) 0
+        else self.source[self.current];
 }
 
-fn peekn(lexer: *const Lexer, n: u32) u8 {
-    assert(lexer.current + n < lexer.source.len);
-    return lexer.source[lexer.current + n];
+fn peekn(self: *const Lexer, n: u32) u8 {
+    assert(self.current + n < self.source.len);
+    return self.source[self.current + n];
 }
 
-fn advance(lexer: *Lexer) u8 {
-    defer lexer.current += 1;
-    return lexer.source[lexer.current];
+fn advance(self: *Lexer) u8 {
+    defer self.current += 1;
+    return self.source[self.current];
 }
 
-fn consume(lexer: *Lexer, expected: u8, message: []const u8) common.CompilerError!u8 {
-    if (lexer.peek() == expected) return lexer.advance();
+fn consume(self: *Lexer, expected: u8, message: []const u8) common.CompilerError!u8 {
+    if (self.peek() == expected) return self.advance();
 
-    lexer.report("{s}\n\tExpected '{c}' got '{c}'", .{message, expected, lexer.peek()});
+    self.report("{s}\n\tExpected '{c}' got '{c}'", .{message, expected, self.peek()});
     return error.UnexpectedCharacter;
 }
 
-fn addToken(lexer: *Lexer, tokenType: TokenType) common.CompilerError!void {
-    lexer.tokens.append(lexer.allocator(), .{
+fn addToken(self: *Lexer, tokenType: TokenType) common.CompilerError!void {
+    self.tokens.append(self.allocator(), .{
         .type = tokenType,
-        .start = lexer.start,
-        .end = lexer.current,
+        .start = self.start,
+        .end = self.current,
     }) catch return error.InvalidToken;
 
     if (tokenType == .String)
-        _ = lexer.advance();
+        _ = self.advance();
 }
 
-fn isAtEnd(lexer: *const Lexer) bool {
-    return lexer.current >= lexer.end;
+fn isAtEnd(self: *const Lexer) bool {
+    return self.current >= self.end;
 }
 
 fn getType(str: []const u8) TokenType {
@@ -503,17 +506,17 @@ fn getType(str: []const u8) TokenType {
         else .Identifier;
 }
 
-fn report(lexer: *Lexer, comptime fmt: []const u8, args: anytype) void {
+fn report(self: *Lexer, comptime fmt: []const u8, args: anytype) void {
     const errToken = Token {
         .type = .EOF,
-        .start = lexer.start,
-        .end = lexer.start + 1,
+        .start = self.start,
+        .end = self.start + 1,
     };
-    const pos = errToken.position(lexer.context, lexer.file);
+    const pos = errToken.position(self.context, self.file);
 
     common.log.err(fmt, args);
-    common.log.err(("." ** 4) ++ " In {s} {d}:{d}", .{lexer.context.getFileName(lexer.file), pos.line, pos.column});
-    errToken.printLocation(lexer.allocator(), lexer.context, lexer.file, pos, true);
+    common.log.err(("." ** 4) ++ " In {s} {d}:{d}", .{self.context.getFileName(self.file), pos.line, pos.column});
+    errToken.printLocation(self.allocator(), self.context, self.file, pos, true);
 }
 
 //
@@ -524,5 +527,6 @@ pub const Tests = struct {
     const gpa = debugAllocator.allocator();
 
     test "All" {
+        try std.testing.expect(false);
     }
 };

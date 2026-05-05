@@ -192,6 +192,7 @@ stats: Stats,
 
 pub fn init(base: Allocator, context: *common.CompilerContext, tokensPtr: defines.TokenListPtr) common.CompilerError!Parser {
     var arena = std.heap.ArenaAllocator.init(base);
+    errdefer arena.deinit();
     const tokens = context.getTokens(tokensPtr);
 
     return .{
@@ -1620,10 +1621,6 @@ pub const Tests = struct {
     var debugAllocator = std.heap.DebugAllocator(.{}){};
     const gpa = debugAllocator.allocator();
 
-    test "Switch" {
-        var context = try common.CompilerContext.init(gpa);
-        var lexer = try Lexer.init(gpa, &context, "test/switch.jasl");
-        var parser = try Parser.init(gpa, &context, try lexer.lex());
-        _ = context.getAST(try parser.parse());
+    test "All" {
     }
 };

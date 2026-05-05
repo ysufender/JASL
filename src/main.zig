@@ -11,10 +11,17 @@ const Prepass = @import("parser/prepass.zig");
 const Resolver = @import("typechecker/resolver.zig");
 const Typechecker = @import("typechecker/typechecker.zig");
 
-pub fn main() !void {
-    const allocator = perfAllc.performanceAllocator;
+pub fn main(init: std.process.Init) void {
+    MainProcInit = init;
+    // const hugepage = null;
+    var hugepage = perfAllc.PerformanceAllocator(init.gpa);
+    const allocator = if (hugepage) |*alc| alc.allocator() else init.gpa;
 
-    innerMain(allocator) catch |err| blk: {
+    if (hugepage) |_| {
+        common.log.debug("Using huge pages", .{});
+    }
+
+    innerMain(allocator, init) catch |err| blk: {
         switch (err) {
             error.ShouldBeImpossible => common.log.err(
                 "This is a compiler bug, a part of impossible branch has been reached."
@@ -27,10 +34,8 @@ pub fn main() !void {
             else => { }, 
         }
 
-        if (!@import("builtin").strip_debug_info) {
-            if (@errorReturnTrace()) |trace| {
-                std.debug.dumpStackTrace(trace.*);
-            }
+        if (@errorReturnTrace()) |trace| {
+            std.debug.dumpErrorReturnTrace(@ptrCast(trace));
         }
 
         return common.log.err(
@@ -43,9 +48,14 @@ pub fn main() !void {
     common.log.info("Compiler exited successfully.", .{});
 }
 
-fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
+fn innerMain(allocator: std.mem.Allocator, init: std.process.Init) common.CompilerError!void {
+    var globalArena = std.heap.ArenaAllocator.init(allocator);
+    const safe = globalArena.allocator();
+    // const allocator = globalArena.allocator();
+    defer globalArena.deinit();
+
     // Init Context
-    var context = try common.CompilerContext.init(allocator);
+    var context = try common.CompilerContext.init(allocator, init);
     defer context.deinit();
 
     var lexer = try Lexer.init(
@@ -71,14 +81,18 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     }
 
     var prepass = try Prepass.init(&context, ast, allocator);
-    const modules = try prepass.prepass(allocator);
+    const modules = try prepass.prepass(safe);
+    //const modules = try prepass.prepass(allocator);
+    //defer collections.deepFree(modules, allocator) catch { };
 
     if (context.settings.hasFlag("--print-ast-full")) {
         debug.ASTPrinter.printASTs(&context, &modules);
     }
 
     var resolver = try Resolver.init(allocator, &context, &modules);
-    const resolved = try resolver.resolve(allocator);
+    const resolved = try resolver.resolve(safe);
+    //const resolved = try resolver.resolve(allocator);
+    //defer collections.deepFree(resolved, allocator) catch { };
 
     if (context.settings.hasFlag("--print-resolution")) {
         common.log.info("--print-resolution: Not implemented.", .{});
@@ -89,7 +103,7 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     }
 
     var typechecker = try Typechecker.init(allocator, &context, &modules, &resolved);
-    _ = try typechecker.typecheck(allocator);
+    _ = try typechecker.typecheck(safe);
 
     if (context.settings.hasFlag("--typecheck-only")) {
         return;
@@ -122,17 +136,20 @@ fn innerMain(allocator: std.mem.Allocator) common.CompilerError!void {
     }
 }
 
+pub var MainProcInit: std.process.Init = undefined;
 pub const panic = std.debug.FullPanic(panicHandler);
+fn panicHandler(msg: []const u8, _: ?usize) noreturn {
+    const _stderr = std.Io.File.stderr().writer(MainProcInit.io, &common.log.wbuf);
+    var stderr = _stderr.interface;
 
-fn panicHandler(msg: []const u8, trace: ?usize) noreturn {
-    std.fs.File.stderr().writeAll("\nRuntime invoked panic:\n") catch {};
-    std.fs.File.stderr().writeAll(msg) catch {};
-    std.fs.File.stderr().writeAll("\n") catch {};
+    stderr.writeAll("\nRuntime invoked panic:\nInfo: ") catch {};
+    stderr.writeAll(msg) catch {};
+    stderr.writeAll("\n") catch {};
 
-    if (trace) |traceStart| {
-        std.debug.dumpCurrentStackTrace(traceStart);
+    if (std.debug.sys_can_stack_trace) {
+        std.debug.dumpCurrentStackTrace(.{});
     }
 
-    std.fs.File.stderr().writeAll("\n") catch {};
+    stderr.writeAll("\n") catch {};
     std.process.exit(1);
 }

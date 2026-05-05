@@ -127,3 +127,93 @@ pub fn deepCopy(item: anytype, allocator: Allocator) Error!@TypeOf(item) {
 
     unreachable;
 }
+
+/// Attempts to deep free a value,
+/// - If value is a pointer/slice, calls deepFreePtr
+/// - If value is a struct, and contains a method with name "deinit"
+/// with signature 'fn (*Self, Allocator) void' or 'fn (*Self, Allocator) void',
+/// calls it.
+/// - Otherwise performs a default free.
+pub fn deepFree(_item: anytype, allocator: Allocator) Error!void {
+    var item = _item;
+    const T = @TypeOf(_item);
+    const info = @typeInfo(T);
+
+    switch (info) {
+        .pointer => return deepFreePtr(item, allocator),
+        .@"struct" => |obj| {
+            const free = @as(?[]const u8,
+                if (std.meta.hasMethod(T, "deinit")) "deinit"
+                else null
+            );
+
+            if (free) |func| {
+                const freeFunc = @TypeOf(@field(T, func));
+                const args = std.meta.ArgsTuple(freeFunc);
+
+                if (@typeInfo(args).@"struct".fields[0].type == *T) {
+                    @call(.auto, @field(T, func), .{&item, allocator});
+                }
+                else {
+                    @call(.auto, @field(T, func), .{item, allocator});
+                }
+
+            }
+            else {
+                inline for (obj.fields) |field| {
+                    try deepFree(@field(item, field.name), allocator);
+                }
+            }
+        },
+        .optional => {
+            if (item) |underlying| {
+                try deepFree(underlying, allocator);
+            }
+        },
+        .array => |arr| {
+            if (arr.len <= 5) {
+                inline for (0..arr.len) |i| {
+                    try deepFree(item[i], allocator);
+                }
+            }
+            else {
+                for (0..arr.len) |i| {
+                    try deepFree(item[i], allocator);
+                }
+            }
+        },
+        .@"union" => |uni| {
+            const tag = std.meta.activeTag(item);
+            inline for (uni.fields) |field| {
+                if (std.mem.eql(u8, @tagName(tag), field.name)) {
+                    return deepFree(@field(item, field.name), allocator);
+                }
+            }
+        },
+        else => { },
+    }
+}
+
+/// Attempts deep free depending on the passed ptr type
+/// - One: deep free
+/// - Slice: Deep free each element
+/// - Many: default free 
+/// - C: default free
+pub fn deepFreePtr(ptr: anytype, allocator: Allocator) Error!void {
+    const info = determine(@TypeOf(ptr));
+
+    switch (info.PtrType) {
+        .one => {
+            try deepFree(ptr.*, allocator);
+            allocator.destroy(ptr);
+        },
+        .many => allocator.free(ptr),
+        .slice => {
+            for (0..ptr.len) |i| {
+                try deepFree(ptr[i], allocator);
+            }
+            allocator.free(ptr);
+        },
+        .c => allocator.free(ptr),
+    }
+}

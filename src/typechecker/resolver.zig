@@ -135,6 +135,7 @@ lastToken: defines.TokenPtr,
 
 pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error!Resolver {
     var arena = Arena.init(gpa);
+    errdefer arena.deinit();
     const allocator = arena.allocator();
 
     const scopeCap = (context.counts.statements / 4) + context.counts.modules;
