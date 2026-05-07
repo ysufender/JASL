@@ -14,7 +14,7 @@ const Flags = enum {
     Flag,
 };
 
-const flags = std.StaticStringMap(Flags).initComptime(&.{
+const flags = std.StaticStringMap(Flags).initComptime(&(.{
     .{ "--help", .Help },
     .{ "-h", .Help },
 
@@ -30,15 +30,21 @@ const flags = std.StaticStringMap(Flags).initComptime(&.{
     .{ "--include", .Include },
     .{ "-I", .Include },
 
-    .{ "--print-ast", .Flag },
-    .{ "--print-ast-full", .Flag },
-
     .{ "--parse-only", .Flag },
 
     .{ "--typecheck-only", .Flag },
 
     .{ "--resolve-only", .Flag },
-});
+
+} ++ if (common.debug.isDebug) .{
+
+    .{ "--print-ast", .Flag },
+    .{ "--print-ast-full", .Flag },
+
+    .{ "--dump-memory", .Flag },
+
+} else .{ })
+);
 
 const helpText = @embedFile("help.txt");
 

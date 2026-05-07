@@ -139,7 +139,7 @@ fn innerMain(allocator: std.mem.Allocator, init: std.process.Init) common.Compil
 
 pub var MainProcInit: std.process.Init = undefined;
 pub const panic = std.debug.FullPanic(panicHandler);
-fn panicHandler(msg: []const u8, _: ?usize) noreturn {
+fn panicHandler(msg: []const u8, stack: ?usize) noreturn {
     const _stderr = std.Io.File.stderr().writer(MainProcInit.io, &common.log.wbuf);
     var stderr = _stderr.interface;
 
@@ -148,7 +148,18 @@ fn panicHandler(msg: []const u8, _: ?usize) noreturn {
     stderr.writeAll("\n") catch {};
 
     if (std.debug.sys_can_stack_trace) {
-        std.debug.dumpCurrentStackTrace(.{});
+        if (stack) |addr| {
+            var addrBuf: [512]usize = undefined;
+            const trace = std.debug.captureCurrentStackTrace(.{
+                    .first_address = addr,
+                },
+                &addrBuf,
+            );
+            std.debug.dumpStackTrace(&trace);
+        }
+        else {
+            std.debug.dumpCurrentStackTrace(.{});
+        }
     }
 
     stderr.writeAll("\n") catch {};

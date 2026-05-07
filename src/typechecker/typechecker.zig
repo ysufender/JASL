@@ -197,6 +197,7 @@ fn debugLog(self: *Typechecker) void {
 
 pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
     defer self.arena.deinit();
+    defer self.executer.deinit();
 
     if (!self.modules.getItem("root", .symbolPtrs).contains("main")) {
         self.report("Couldn't find an entry point in the root module.", .{});
@@ -417,7 +418,11 @@ pub fn typecheckExpressionListRange(self: *Typechecker, range: defines.Range, ex
         .Union => |uni| try self.typecheckUnionInitialization(ast, &uni, range),
         .Array => |arr| try self.typecheckArrayInitialization(ast, &arr, range),
         .Pointer => |ptr| switch (ptr.size) {
-            .Slice, .C => try self.typecheckGeneralInitialization(ast, ptr.child, range),
+            .Slice, .C => {
+                // try self.typecheckGeneralInitialization(ast, ptr.child, range)
+                self.report("Initialization of slice/cpointer types via expression lists are not allowed. Use addressing instead.", .{ });
+                return error.SliceInitializationWithExpressionList;
+            },
             .Single => {
                 if (range.len() != 1) {
                     self.report("Can't initialize '{s}' with {d} values.", .{

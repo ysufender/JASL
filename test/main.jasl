@@ -1,6 +1,8 @@
+import std;
+
 import initialization as i;
 
-let main = k;
+let main = (([4]u32(1, 2, 3, 4)))[0];
 
 let a = i::Enum(@Field1);
 let b: i::Enum = (@Field1);
@@ -13,4 +15,3 @@ let g: i::Struct = (true, i::Enum::Field1, ());
 let h: i::Struct = (true, i::Enum(@Field1), ());
 let j: i::Struct = (true, i::Enum(i::Enum::Field1), ());
 
-let k: i::Union = (@field2, false);

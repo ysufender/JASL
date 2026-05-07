@@ -86,5 +86,6 @@ pub const CompilerError = error {
     TypeIsNotConstructible,
     MultivalueCast,
     ScopingOnNonScopedType,
+    SliceInitializationWithExpressionList,
     Terminate,
 };

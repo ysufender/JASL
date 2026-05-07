@@ -144,7 +144,16 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
         .StructDefinition => try self.evalStructType(exprPtr),
         .UnionDefinition => try self.evalUnionType(exprPtr),
 
-        .Lambda => try self.evalLambda(expr.value, maybeExpected),
+        .Lambda,
+        .Assignment,
+        .Binary,
+        .Conditional,
+        .Dot,
+        .Mark,
+        .Slicing,
+        .Switch,
+        .Unary,
+        .FunctionDefinition => return common.debug.NotImplemented(@src()),
 
         else => |t| {
             self.report("Unable to resolve comptime expression. ({s})", .{
@@ -154,9 +163,11 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
         },
     };
 
+    defer self.dumpMem();
+    const addr = self.memory.items.len;
     const ptr = try self.memory.addOne(self.arena.allocator());
     ptr.* = value;
-    self.cache.putNoClobber(self.arena.allocator(), key, @intCast(self.memory.items.len - 1))
+    self.cache.putNoClobber(self.arena.allocator(), key, @intCast(addr))
         catch return error.AllocatorFailure;
     return value;
 }
@@ -190,12 +201,10 @@ fn evalDecl(self: *Comptime, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) E
 fn evalBuiltinCall(self: *Comptime, extraPtr: defines.ExpressionPtr, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!Value {
     const BI = Resolver.BuiltinIndex;
 
-    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
-
     return switch (declPtr) {
         BI("cast") => self.evalCast(extraPtr, maybeExpected),
         BI("as") => self.evalTypeForwarding(extraPtr, maybeExpected),
-        BI("typeOf") => self.evalTypeOf(ast.expressions.items(.value)[ast.extra[extraPtr + 1]]),
+        BI("typeOf") => self.evalTypeOf(extraPtr),
         else => {
             self.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[declPtr]});
             return error.ComptimeNotPossible;
@@ -606,11 +615,12 @@ fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID
 pub fn evalTypeOf(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
+    const expressionList = ast.expressions.items(.value)[ast.extra[extraPtr + 1]];
     const args = defines.Range{
-        .start = ast.extra[extraPtr],
-        .end = ast.extra[extraPtr + 1],
+        .start = ast.extra[expressionList],
+        .end = ast.extra[expressionList + 1],
     };
-
+    
     if (args.len() != 1) {
         self.report("'typeOf' expects a single expression argument, received {d}.", .{
             args.len(),
@@ -651,8 +661,9 @@ fn evalExpressionList(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpecte
     return self.constructFromList(typeToInit, range);
 }
 
-pub fn constructFromList(self: *Comptime, typeID: TypeID, range: defines.Range) Error!Value {
+pub fn constructFromList(self: *Comptime, typeID: TypeID, _range: defines.Range) Error!Value {
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+    var range = _range;
 
     return ret: switch (self.typechecker.typeTable.get(typeID)) {
         .Void => {
@@ -693,7 +704,23 @@ pub fn constructFromList(self: *Comptime, typeID: TypeID, range: defines.Range) 
                 },
             };
         },
-        .Array => |arr| self.constructArrayFromList(typeID, arr.child, range),
+        .Array => |arr| {
+            while (range.len() != arr.len) {
+                // @Beware trusting the typechecker to only allow
+                // single item expression lists here.
+                const exprPtr = ast.extra[range.at(0)];
+                const expr = ast.expressions.get(exprPtr);
+                range = switch (expr.type) {
+                    .ExpressionList => .{
+                        .start = ast.extra[expr.value],
+                        .end = ast.extra[expr.value + 1],
+                    },
+                    else => return self.eval(exprPtr, typeID),
+                };
+            }
+
+            return self.constructArrayFromList(typeID, arr.child, range);
+        },
         .Pointer => |ptr| switch (ptr.size) {
             .Slice => self.constructArrayFromList(typeID, ptr.child, range),
             else => {
@@ -718,10 +745,15 @@ pub fn constructFromList(self: *Comptime, typeID: TypeID, range: defines.Range) 
 fn constructArrayFromList(self: *Comptime, arr: TypeID, child: TypeID, range: defines.Range) Error!Value {
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
-    const address = self.memory.items.len;
+    var address: i64 = -1;
 
     for (range.start..range.end) |ptr| {
         _ = try self.eval(ast.extra[ptr], child);
+
+        address = if (address == -1) self.cache.get(.{
+            .file = self.typechecker.currentFile,
+            .expr = ast.extra[ptr],
+        }).? else address;
     }
 
     return Value{
@@ -1157,6 +1189,18 @@ fn getFlag(self: *Comptime, comptime flag: Flags) bool {
 
 pub fn deinit(self: *Comptime) void {
     self.arena.deinit();
+}
+
+pub fn dumpMem(self: *const Comptime) void {
+    if (common.debug.isDebug and self.typechecker.context.settings.hasFlag("--dump-memory")) {
+        for (self.memory.items, 0..) |item, addr| {
+            common.log.debug("{d}: {any}{s}", .{
+                addr,
+                item,
+                if (addr == self.memory.items.len - 1) "\n" else "",
+            });
+        }
+    }
 }
 
 pub const Builtin = struct {
