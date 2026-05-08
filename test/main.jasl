@@ -2,7 +2,7 @@ import std;
 
 import initialization as i;
 
-let main = (([4]u32(1, 2, 3, 4)))[0];
+let main = false;
 
 let a = i::Enum(@Field1);
 let b: i::Enum = (@Field1);

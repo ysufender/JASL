@@ -17,6 +17,8 @@ pub const StatementMap = collections.MultiArrayList(Statement);
 
 const assert = std.debug.assert;
 
+pub const AnyType = 0;
+
 // Because manually tagged unions are more
 // performant with collections.MultiArrayList(T)
 pub const Expression = struct {
@@ -402,7 +404,7 @@ fn switchStatement(self: *Parser) StatementResult {
     const scratchStart = self.scratch.items.len;
     while (!self.check(.RBrace)) {
         if (self.match(&.{.Else})) {
-            self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
+            self.scratch.append(self.allocator(), AnyType) catch return error.AllocatorFailure;
         }
         else {
             self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
@@ -411,13 +413,34 @@ fn switchStatement(self: *Parser) StatementResult {
         _ = try self.consume(.Arrow, error.MissingArrow, "Expected '->' after switch case.");
 
         if (self.match(&.{.Pipe})) {
-            if (!self.match(&.{.Identifier, .Discard})) {
-                self.report("Expected a capture name.", .{});
-                return error.MissingIdentifier;
+            self.scratch.append(self.allocator(), 1) catch return error.AllocatorFailure;
+
+            var captureCount: u32 = 0;
+            const snapshot = self.current;
+            while (!self.match(&.{.Pipe})) {
+                if (!self.match(&.{.Identifier, .Discard})) {
+                    self.report("Expected a capture name.", .{});
+                    return error.MissingIdentifier;
+                }
+
+                captureCount += 1;
+                if (!self.match(&.{.Comma})) break;
+            }
+            _ = try self.consume(.Pipe, error.MissingPipe, "Expected an enclosing pipe '|' at case capture.");
+
+            if (captureCount == 0) {
+                self.report("Redundant empty capture list.", .{});
+                return error.RedundantEmptyCaptureList;
             }
 
-            self.scratch.append(self.allocator(), self.previous()) catch return error.AllocatorFailure;
-            _ = try self.consume(.Pipe, error.MissingPipe, "Expected an enclosing pipe '|' at case capture.");
+            self.scratch.append(self.allocator(), captureCount) catch return error.AllocatorFailure;
+
+            self.current = snapshot;
+            while (!self.match(&.{.Pipe})) {
+                self.scratch.append(self.allocator(), self.previous()) catch return error.AllocatorFailure;
+                if (!self.match(&.{.Comma})) break;
+            }
+            _ = try self.advance();
         }
         else {
             self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
@@ -428,7 +451,6 @@ fn switchStatement(self: *Parser) StatementResult {
 
     _ = try self.consume(.RBrace, error.MissingBrace, "Missing enclosing brace '}' after switch statement.");
 
-    // (<expr>, <binds>, <stmt>)
     const cases = try self.commitScratch(scratchStart);
 
     const start: defines.OpaquePtr = @intCast(self.extra.items.len);
@@ -674,7 +696,7 @@ fn switchExpression(self: *Parser) ExpressionResult {
     const scratchStart = self.scratch.items.len;
     while (!self.check(.RBrace)) {
         if (self.match(&.{.Else})) {
-            self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
+            self.scratch.append(self.allocator(), AnyType) catch return error.AllocatorFailure;
         }
         else {
             self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
@@ -683,13 +705,34 @@ fn switchExpression(self: *Parser) ExpressionResult {
         _ = try self.consume(.Arrow, error.MissingArrow, "Expected '->' after switch case.");
 
         if (self.match(&.{.Pipe})) {
-            if (!self.match(&.{.Identifier, .Discard})) {
-                self.report("Expected a capture name.", .{});
-                return error.MissingIdentifier;
+            self.scratch.append(self.allocator(), 1) catch return error.AllocatorFailure;
+
+            var captureCount: u32 = 0;
+            const snapshot = self.current;
+            while (!self.match(&.{.Pipe})) {
+                if (!self.match(&.{.Identifier, .Discard})) {
+                    self.report("Expected a capture name.", .{});
+                    return error.MissingIdentifier;
+                }
+
+                captureCount += 1;
+                if (!self.match(&.{.Comma})) break;
+            }
+            _ = try self.consume(.Pipe, error.MissingPipe, "Expected an enclosing pipe '|' at case capture.");
+
+            if (captureCount == 0) {
+                self.report("Redundant empty capture list.", .{});
+                return error.RedundantEmptyCaptureList;
             }
 
-            self.scratch.append(self.allocator(), self.previous()) catch return error.AllocatorFailure;
-            _ = try self.consume(.Pipe, error.MissingPipe, "Expected an enclosing pipe '|' at case capture.");
+            self.scratch.append(self.allocator(), captureCount) catch return error.AllocatorFailure;
+
+            self.current = snapshot;
+            while (!self.match(&.{.Pipe})) {
+                self.scratch.append(self.allocator(), self.previous()) catch return error.AllocatorFailure;
+                if (!self.match(&.{.Comma})) break;
+            }
+            _ = try self.advance();
         }
         else {
             self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
@@ -706,6 +749,18 @@ fn switchExpression(self: *Parser) ExpressionResult {
     self.extra.append(self.allocator(), item) catch return error.AllocatorFailure;
     self.extra.append(self.allocator(), cases.start) catch return error.AllocatorFailure;
     self.extra.append(self.allocator(), cases.end) catch return error.AllocatorFailure;
+
+    // Captured Case layout:
+    // 0 case
+    // 1 hasCapture
+    // 2 captureCount
+    // 3...n captures
+    // n expression
+    //
+    // Case Layout:
+    // 0 case
+    // 1 hasCapture
+    // 2 expression
 
     const result = try self.alloc(Expression);
     self.expressionMap.set(result, .{
@@ -1546,7 +1601,7 @@ fn variableSignature(self: *Parser, public: bool, enforceType: bool) common.Comp
         };
 
     const varType = 
-        if (!enforceType and !self.check(.Colon)) 0
+        if (!enforceType and !self.check(.Colon)) AnyType
         else res: {
             _ = try self.consume(.Colon, error.MissingColon, "Expected a separator colon ':' after identifier.");
             break :res try self.ifExpression();

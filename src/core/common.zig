@@ -87,5 +87,8 @@ pub const CompilerError = error {
     MultivalueCast,
     ScopingOnNonScopedType,
     SliceInitializationWithExpressionList,
+    DivergingBranches,
+    SwitchOnNonSwitchableValue,
+    RedundantEmptyCaptureList,
     Terminate,
 };

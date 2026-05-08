@@ -252,7 +252,7 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
 
     blk: switch (self.typeTable.get(initializer)) {
         .Type => {
-            const newType = (try self.executer.eval(decl.node, expected)).Type;
+            const newType = self.executer.getValue(try self.executer.eval(decl.node, expected)).Type;
             const name = switch (self.typeTable.get(newType)) {
                 .Union => |uni| uni.name,
                 .Struct => |str| str.name,
@@ -347,19 +347,88 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
             Comptime.Builtin.Type("type"),
         ),
 
-        else => |t| {
+        .Conditional => self.typecheckIfExpression(expr.value, maybeExpected),
+        .Switch => self.typecheckSwitchExpression(expr.value, maybeExpected),
+
+        .Assignment,
+        .Binary,
+        .Dot,
+        .Mark,
+        .Slicing,
+        .Unary => |t| {
             self.report("Unable to typecheck expression '{s}'.", .{@tagName(t)});
             return error.TypecheckingFailure;
         }
     };
 }
 
-pub fn typecheckValue(self: *Typechecker, val: Comptime.Value, maybeExpected: ?TypeID) Error!TypeID {
+pub fn typecheckSwitchExpression(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
+    const ast = self.context.getAST(self.currentFile);
+
+    const switchExpr = .{
+        .item = ast.extra[extraPtr],
+        .cases = defines.Range{
+            .start = ast.extra[extraPtr + 1],
+            .end = ast.extra[extraPtr + 2],
+        },
+    };
+
+    const itemType = try self.typecheckExpression(switchExpr.item, null);
+    const info =
+        if (self.maybeSwitchable(itemType)) |T| T
+        else {
+            self.report("Given type '{s}' can't be switched on.", .{
+                self.typeName(self.arena.allocator(), itemType),
+            });
+            return error.SwitchOnNonSwitchableValue;
+        };
+
+    return switch (info) {
+        .Enum => |enm| for (enm.fields, 0..) |field, index| {
+            // TODO: Complete.
+            const case = ast.extra[switchExpr.cases.at(@intCast(index * 3))];
+        } else common.debug.ShouldBeImpossible(@src()),
+    };
+}
+
+pub fn typecheckIfExpression(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
+    const ast = self.context.getAST(self.currentFile);
+
+    const conditional = .{
+        .condition = ast.extra[extraPtr],
+        .then = ast.extra[extraPtr + 1],
+        .otherwise = ast.extra[extraPtr + 2],
+    };
+
+    const condition = try self.typecheckExpression(conditional.condition, Comptime.Builtin.Type("bool"));
+    if (!self.suitable(Comptime.Builtin.Type("bool"), condition)) {
+        self.report("Expected a boolean for condition.", .{});
+        return error.TypeMismatch;
+    }
+
+    const thenBranch = try self.typecheckExpression(conditional.then, maybeExpected);
+    const elseBranch = try self.typecheckExpression(conditional.otherwise, maybeExpected);
+
+    if (!(
+        self.suitable(thenBranch, elseBranch)
+        and self.suitable(elseBranch, thenBranch)
+    )) {
+        self.report("Diverging result types '{s}' and '{s}' in conditional expression.", .{
+            self.typeName(self.arena.allocator(), thenBranch),
+            self.typeName(self.arena.allocator(), elseBranch),
+        });
+        return error.DivergingBranches;
+    }
+
+    return self.infer(thenBranch, elseBranch) catch common.debug.ShouldBeImpossible(@src());
+}
+
+pub fn typecheckValue(self: *Typechecker, val: Comptime.ValuePtr, maybeExpected: ?TypeID) Error!TypeID {
     const expected =
         if (determineExpected(maybeExpected)) |expected| expected
         else Comptime.Builtin.Type("any");
 
-    return switch (val) {
+    return switch (self.executer.getValue(val)) {
         .Int => self.infer(Comptime.Builtin.Type("comptime_int"), expected)
             catch Comptime.Builtin.Type("comptime_int"),
         .Float => self.infer(Comptime.Builtin.Type("comptime_float"), expected)
@@ -566,7 +635,8 @@ fn typecheckUnionInitialization(self: *Typechecker, ast: *const Parser.AST, uni:
         return error.InitializerCountMismatch;
     }
 
-    const findex = switch (try self.executer.eval(ast.extra[range.at(0)], uni.tag)) {
+    const ptr = try self.executer.eval(ast.extra[range.at(0)], uni.tag);
+    const findex = switch (self.executer.getValue(ptr)) {
         .Enum => |enm| blk: {
             if (enm.Type != uni.tag) {
                 self.report("Expected field enum of type '{s}', received '{s}' instead.", .{
@@ -578,11 +648,11 @@ fn typecheckUnionInitialization(self: *Typechecker, ast: *const Parser.AST, uni:
 
             break :blk @as(u32, if (uni.isTagged) 1 else 0) + enm.Value;
         },
-        else => |val| {
+        else => {
             self.report("Expected field enum of type '{s}', received '{s}' instead.", .{
                 self.typeName(self.arena.allocator(), uni.tag),
                 self.typeName(self.arena.allocator(),
-                    try self.typecheckValue(val, null)
+                    try self.typecheckValue(ptr, null)
                 ),
             });
             return error.TypeMismatch;
@@ -758,7 +828,7 @@ pub fn typecheckCall(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpec
     const maybeFunction = self.typeTable.get(lhsType);
     const func = switch (maybeFunction) {
         .Type => {
-            const typeToInit = (try self.executer.eval(ast.extra[extraPtr], null)).Type;
+            const typeToInit = self.executer.getValue(try self.executer.eval(ast.extra[extraPtr], null)).Type;
 
             return self.typecheckExpressionList(
                 ast.expressions.items(.value)[ast.extra[extraPtr + 1]],
@@ -831,7 +901,7 @@ pub fn typecheckBuiltinCall(self: *Typechecker, extraPtr: defines.ExpressionPtr,
     return switch (declPtr) {
         BI("cast") => self.typecheckCast(extraPtr, maybeExpected),
         BI("as") => self.typecheckTypeForwarding(extraPtr, maybeExpected),
-        BI("typeOf") => (try self.executer.evalTypeOf(extraPtr)).Type,
+        BI("typeOf") => self.executer.getValue(try self.executer.evalTypeOf(extraPtr)).Type,
         else => {
             self.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[declPtr]});
             return error.ComptimeNotPossible;
@@ -1245,6 +1315,19 @@ pub fn assignable(self: *const Typechecker, this: TypeID, that: TypeID) bool {
         else self.suitable(this, that);
 }
 
+pub fn switchable(self: *const Typechecker, this: TypeID) bool {
+    return self.maybeSwitchable(this) != null;
+}
+
+pub fn maybeSwitchable(self: *const Typechecker, this: TypeID) ?TypeInfo {
+    const info = self.typeTable.get(this);
+    return switch (info) {
+        .Enum => info,
+        .Union => |uni| if (uni.isTagged) info else null,
+        else => null,
+    };
+}
+
 pub fn infer(self: *const Typechecker, this: TypeID, that: TypeID) Error!TypeID {
     try self.assertSuitable(this, that);
 
@@ -1265,7 +1348,7 @@ pub fn infer(self: *const Typechecker, this: TypeID, that: TypeID) Error!TypeID 
 
 pub fn expectType(self: *Typechecker, exprPtr: defines.ExpressionPtr) Error!TypeID {
     return
-        if (self.executer.expectType(exprPtr)) |val| val.Type 
+        if (self.executer.expectType(exprPtr)) |val| self.executer.getValue(val).Type 
         else |err| err;
 }
 

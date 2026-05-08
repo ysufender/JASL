@@ -1,3 +1,5 @@
+// TODO: Garbage collecting
+
 const std = @import("std");
 const common = @import("../core/common.zig");
 const defines = @import("../core/defines.zig");
@@ -20,7 +22,11 @@ const FlagMap = std.bit_set.IntegerBitSet(8);
 const Cache = collections.HashMap(Resolver.ResolutionKey, ValuePtr);
 const Memory = std.ArrayList(Value);
 
-const ValuePtr = u32;
+pub const ValuePtr = u32;
+
+pub const AnyType = 0;
+pub const IncompleteType = 1;
+const VoidValue = 2;
 
 pub const Flags = enum(u3) {
     Attempting = 0,
@@ -91,24 +97,29 @@ pub fn init(typechecker: *Typechecker, gpa: Allocator) Error!Comptime {
     var cache = Cache.empty;
     cache.ensureTotalCapacity(allocator, typechecker.symbols.resolutionMap.count()) catch return error.AllocatorFailure;
 
+    var memory = Memory.initCapacity(allocator, 1024) catch return error.AllocatorFailure;
+    memory.appendAssumeCapacity(.{ .Type = Builtin.Type("any") });
+    memory.appendAssumeCapacity(.{ .Type = Builtin.Type("incomplete") });
+    memory.appendAssumeCapacity(.{ .Void = { } });
+
     return .{
         .typechecker = typechecker,
         .gpa = gpa,
         .cache = cache,
-        .memory = Memory.initCapacity(allocator, 1024) catch return error.AllocatorFailure,
+        .memory = memory,
         .flags = FlagMap.initEmpty(),
         .arena = arena,
         .rng = .init(5315),
     };
 }
 
-pub fn attemptEval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?TypeID) ?Value {
+pub fn attemptEval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?TypeID) ?ValuePtr {
     const prev = self.setFlag(.Attempting, true);
     defer _ = self.setFlag(.Attempting, prev);
     return self.eval(exprPtr, maybeExpected) catch null;
 }
 
-pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?TypeID) Error!Value {
+pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?TypeID) Error!ValuePtr {
     const typechecker = self.typechecker;
     const file = typechecker.currentFile;
     const ast = typechecker.context.getAST(self.typechecker.currentFile);
@@ -119,14 +130,14 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
     };
 
     if (self.cache.get(key)) |cached| {
-        return self.memory.items[cached];
+        return cached;
     }
 
     // TODO: Complete after proper typed AST
     const expr = ast.expressions.get(exprPtr);
-    const value = switch (expr.type) {
+    const addr = switch (expr.type) {
         .Identifier =>
-            if (expr.value == 0) Value{ .Type = Builtin.Type("any") }
+            if (expr.value == 0) AnyType
             else try self.evalDecl(typechecker.symbols.findDecl(.{ .file = file, .expr = exprPtr }), maybeExpected),
         .Call => try self.evalCall(expr.value, maybeExpected),
         .Indexing => try self.evalIndexing(expr.value),
@@ -143,19 +154,17 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
         .EnumDefinition => try self.evalEnumType(exprPtr),
         .StructDefinition => try self.evalStructType(exprPtr),
         .UnionDefinition => try self.evalUnionType(exprPtr),
+        .Conditional => try self.evalIfExpression(expr.value, maybeExpected),
+        .Switch => try self.evalSwitchExpression(expr.value, maybeExpected),
 
         .Lambda,
         .Assignment,
         .Binary,
-        .Conditional,
         .Dot,
         .Mark,
         .Slicing,
-        .Switch,
         .Unary,
-        .FunctionDefinition => return common.debug.NotImplemented(@src()),
-
-        else => |t| {
+        .FunctionDefinition => |t| {
             self.report("Unable to resolve comptime expression. ({s})", .{
                 @tagName(t)
             });
@@ -164,15 +173,33 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
     };
 
     defer self.dumpMem();
-    const addr = self.memory.items.len;
-    const ptr = try self.memory.addOne(self.arena.allocator());
-    ptr.* = value;
     self.cache.putNoClobber(self.arena.allocator(), key, @intCast(addr))
         catch return error.AllocatorFailure;
-    return value;
+    return addr;
 }
 
-fn evalDecl(self: *Comptime, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!Value {
+fn evalSwitchExpression(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
+}
+
+fn evalIfExpression(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
+    _ = try self.typechecker.typecheckIfExpression(extraPtr, maybeExpected);
+
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+
+    const conditional = .{
+        .condition = ast.extra[extraPtr],
+        .then = ast.extra[extraPtr + 1],
+        .otherwise = ast.extra[extraPtr + 2],
+    };
+
+    const condition = self.getValue(try self.eval(conditional.condition, Builtin.Type("bool"))).Bool;
+    
+    return
+        if (condition) self.eval(conditional.then, maybeExpected)
+        else self.eval(conditional.otherwise, maybeExpected);
+}
+
+fn evalDecl(self: *Comptime, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!ValuePtr {
     const decls = self.typechecker.symbols.declarations;
 
     const decl  = decls.get(declPtr);
@@ -198,7 +225,7 @@ fn evalDecl(self: *Comptime, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) E
     };
 }
 
-fn evalBuiltinCall(self: *Comptime, extraPtr: defines.ExpressionPtr, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!Value {
+fn evalBuiltinCall(self: *Comptime, extraPtr: defines.OpaquePtr, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!ValuePtr {
     const BI = Resolver.BuiltinIndex;
 
     return switch (declPtr) {
@@ -212,13 +239,11 @@ fn evalBuiltinCall(self: *Comptime, extraPtr: defines.ExpressionPtr, declPtr: de
     };
 }
 
-fn evalBuiltin(self: *Comptime, decl: *const Resolver.Declaration, maybeExpected: ?TypeID) Error!Value {
+fn evalBuiltin(self: *Comptime, decl: *const Resolver.Declaration, maybeExpected: ?TypeID) Error!ValuePtr {
     const BI = Resolver.BuiltinIndex;
 
     return
-        if (Builtin.isBuiltinType(decl.type)) .{
-            .Type = decl.type,
-        }
+        if (Builtin.isBuiltinType(decl.type)) self.appendValue( .{ .Type = decl.type })
         else switch (decl.type) {
             BI("undefined") =>
                 if (Typechecker.determineExpected(maybeExpected)) |expected|
@@ -241,10 +266,10 @@ fn evalBuiltin(self: *Comptime, decl: *const Resolver.Declaration, maybeExpected
         };
 }
 
-fn evalLiteral(self: *Comptime, tokenPtr: defines.TokenPtr, maybeExpected: ?TypeID) Error!Value {
+fn evalLiteral(self: *Comptime, tokenPtr: defines.TokenPtr, maybeExpected: ?TypeID) Error!ValuePtr {
     const token = self.typechecker.context.getTokens(self.typechecker.currentFile).get(tokenPtr);
     const lexeme = token.lexeme(self.typechecker.context, self.typechecker.currentFile);
-    return switch (token.type) {
+    const value: Value = switch (token.type) {
         .True, .False => .{ .Bool = token.type == .True },
         .Float => .{ .Float = std.fmt.parseFloat(f32, lexeme) catch unreachable },
         .Integer => .{ .Int = std.fmt.parseInt(u32, lexeme, 10) catch |err| switch (err) {
@@ -295,19 +320,19 @@ fn evalLiteral(self: *Comptime, tokenPtr: defines.TokenPtr, maybeExpected: ?Type
             },
         else => unreachable,
     };
+
+    return self.appendValue(value);
 }
 
 fn evalPtrType(
     self: *Comptime,
     comptime ptrType: @FieldType(types.Pointer, "size"),
     innerType: defines.ExpressionPtr
-) Error!Value {
+) Error!ValuePtr {
     const prev = self.setFlag(.CanCycle, true);
     defer _ = self.setFlag(.CanCycle, prev);
     const inner = self.expectType(innerType) catch |err| switch (err) {
-        error.DependencyCycle => Value{
-            .Type = comptime Builtin.Type("incomplete"),
-        },
+        error.DependencyCycle => IncompleteType,
         else => return err,
     };
 
@@ -315,19 +340,19 @@ fn evalPtrType(
         .Pointer = .{
             .size = ptrType,
             .mutable = false,
-            .child = inner.Type,
+            .child = self.getValue(inner).Type,
         },
     };
 
-    return .{
+    return self.appendValue(.{
         .Type = (try self.typechecker.registerType(newType)),
-    };
+    });
 }
 
-fn evalFuncType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
+fn evalFuncType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
-    const args = try self.eval(ast.extra[extraPtr], null);
+    const args = self.getValue(try self.eval(ast.extra[extraPtr], null));
     const argSize: u32 = ret: switch (args) {
         .Slice => |slice| {
             var sub: u32 = 0;
@@ -354,8 +379,6 @@ fn evalFuncType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
         },
     };
 
-    const returnType = try self.expectType(ast.extra[extraPtr + 1]);
-
     var argTypes = self.arena.allocator().alloc(TypeID, argSize) catch return error.AllocatorFailure;
 
     switch (args) {
@@ -372,6 +395,7 @@ fn evalFuncType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
         else => unreachable,
     }
 
+    const returnType = self.getValue(try self.expectType(ast.extra[extraPtr + 1]));
     const typeID = try self.typechecker.registerType(.{
         .Function = .{
             .mutable = false,
@@ -380,12 +404,12 @@ fn evalFuncType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
         },
     });
 
-    return .{
+    return self.appendValue(.{
         .Type = typeID,
-    };
+    });
 }
 
-fn evalEnumType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
+fn evalEnumType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
     const allocator = self.arena.allocator();
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
     const tokens = self.typechecker.context.getTokens(ast.tokens);
@@ -424,10 +448,12 @@ fn evalEnumType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
     };
 
     const typeID = try self.typechecker.registerType(newType);
-    return .{ .Type = typeID };
+    return self.appendValue(.{
+        .Type = typeID
+    });
 }
 
-fn evalStructType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
+fn evalStructType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
     const allocator = self.arena.allocator();
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
     const tokens = self.typechecker.context.getTokens(ast.tokens);
@@ -475,11 +501,12 @@ fn evalStructType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
         },
     };
 
-    const typeID = try self.typechecker.registerType(newType);
-    return .{ .Type = typeID };
+    return self.appendValue(.{
+        .Type = (try self.typechecker.registerType(newType)),
+    });
 }
 
-fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
+fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
     // TODO: Failed union evaluations cause DependencyCycle instead of
     // their desired errors.
 
@@ -587,11 +614,12 @@ fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
         }
     };
 
-    const typeID = try self.typechecker.registerType(newType);
-    return .{ .Type = typeID };
+    return self.appendValue(.{
+        .Type = (try self.typechecker.registerType(newType)),
+    });
 }
 
-fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!Value {
+fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
     const targetType = try self.typechecker.typecheckCast(extraPtr, maybeExpected);
 
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
@@ -612,7 +640,7 @@ fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID
     return self.castValue(thingToCast, targetType);
 }
 
-pub fn evalTypeOf(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
+pub fn evalTypeOf(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
     const expressionList = ast.expressions.items(.value)[ast.extra[extraPtr + 1]];
@@ -628,12 +656,12 @@ pub fn evalTypeOf(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
         return error.ArgumentCountMismatch;
     }
 
-    return .{
+    return self.appendValue(.{
         .Type = try self.typechecker.typecheckExpression(ast.extra[args.at(0)], Builtin.Type("type")),
-    };
+    });
 }
 
-fn evalTypeForwarding(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!Value {
+fn evalTypeForwarding(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
     _ = try self.typechecker.typecheckTypeForwarding(extraPtr, maybeExpected);
 
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
@@ -644,11 +672,11 @@ fn evalTypeForwarding(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpecte
         .end = ast.extra[expressionList + 1],
     };
 
-    const typeToForward = (try self.expectType(ast.extra[args.at(0)])).Type;
+    const typeToForward = self.getValue((try self.expectType(ast.extra[args.at(0)]))).Type;
     return self.eval(ast.extra[args.at(1)], typeToForward);
 }
 
-fn evalExpressionList(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!Value {
+fn evalExpressionList(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
     const typeToInit = try self.typechecker.typecheckExpressionList(extraPtr, maybeExpected);
 
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
@@ -661,7 +689,7 @@ fn evalExpressionList(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpecte
     return self.constructFromList(typeToInit, range);
 }
 
-pub fn constructFromList(self: *Comptime, typeID: TypeID, _range: defines.Range) Error!Value {
+pub fn constructFromList(self: *Comptime, typeID: TypeID, _range: defines.Range) Error!ValuePtr {
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
     var range = _range;
 
@@ -671,39 +699,11 @@ pub fn constructFromList(self: *Comptime, typeID: TypeID, _range: defines.Range)
                 _ = try self.eval(ast.extra[extra], typeID);
             }
 
-            break :ret .{ .Void = { } };
+            break :ret VoidValue;
         },
         .Enum => self.eval(ast.extra[range.at(0)], typeID),
-        .Struct => |str| {
-            const start = self.memory.items.len;
-            for (0..range.len()) |idx| {
-                _ = try self.eval(
-                    ast.extra[range.at(@intCast(idx))],
-                    str.fields[idx].valueType
-                );
-            }
-
-            break :ret .{
-                .Struct = .{
-                    .Type = typeID,
-                    .Fields = self.memory.items[start..],
-                },
-            };
-        },
-        .Union => |uni| {
-            const tag = (try self.eval(ast.extra[range.at(0)], uni.tag)).Enum.Value;
-            const fieldType = uni.fields[tag].valueType;
-            const value = self.memory.items.len;
-            _ = try self.constructFromList(fieldType, range.subRange(1));
-
-            break :ret .{
-                .Union = .{
-                    .Type = typeID,
-                    .Tag = tag,
-                    .Value = @intCast(value),
-                },
-            };
-        },
+        .Struct => |str| self.constructStruct(ast, typeID, &str, range),
+        .Union => |uni| self.constructUnion(ast, typeID, &uni, range),
         .Array => |arr| {
             while (range.len() != arr.len) {
                 // @Beware trusting the typechecker to only allow
@@ -721,19 +721,20 @@ pub fn constructFromList(self: *Comptime, typeID: TypeID, _range: defines.Range)
 
             return self.constructArrayFromList(typeID, arr.child, range);
         },
-        .Pointer => |ptr| switch (ptr.size) {
-            .Slice => self.constructArrayFromList(typeID, ptr.child, range),
-            else => {
-                const address = self.memory.items.len;
-                _ = try self.eval(ast.extra[range.at(0)], ptr.child);
-                break :ret Value{
-                    .Pointer = .{
-                        .Type = typeID,
-                        .To = @intCast(address),
-                    },
-                };
-            },
-        },
+        //Typechecker should reject this.
+        //.Pointer => |ptr| switch (ptr.size) {
+        //    .Slice => self.constructArrayFromList(typeID, ptr.child, range),
+        //    else => {
+        //        const address = self.memory.items.len;
+        //        _ = try self.eval(ast.extra[range.at(0)], ptr.child);
+        //        break :ret Value{
+        //            .Pointer = .{
+        //                .Type = typeID,
+        //                .To = @intCast(address),
+        //            },
+        //        };
+        //    },
+        //},
         .Noreturn,
         .Type, .Function,
         .Bool, .Float, .Integer,
@@ -742,30 +743,71 @@ pub fn constructFromList(self: *Comptime, typeID: TypeID, _range: defines.Range)
     };
 }
 
-fn constructArrayFromList(self: *Comptime, arr: TypeID, child: TypeID, range: defines.Range) Error!Value {
+fn constructStruct(
+    self: *Comptime,
+    ast: *const Parser.AST,
+    typeID: TypeID,
+    str: *const types.Struct,
+    range: defines.Range,
+) Error!ValuePtr {
+    const start = self.memory.items.len;
+    for (0..range.len()) |idx| {
+        _ = try self.eval(
+            ast.extra[range.at(@intCast(idx))],
+            str.fields[idx].valueType
+        );
+    }
+
+    return self.appendValue(.{
+        .Struct = .{
+            .Type = typeID,
+            .Fields = self.memory.items[start..],
+        },
+    });
+}
+
+fn constructUnion(
+    self: *Comptime,
+    ast: *const Parser.AST,
+    typeID: TypeID,
+    uni: *const types.Union,
+    range: defines.Range,
+) Error!ValuePtr {
+    const tag = self.getValue(try self.eval(ast.extra[range.at(0)], uni.tag)).Enum.Value;
+    const fieldType = uni.fields[tag].valueType;
+    const value = self.memory.items.len;
+    _ = try self.constructFromList(fieldType, range.subRange(1));
+
+    return self.appendValue(.{
+        .Union = .{
+            .Type = typeID,
+            .Tag = tag,
+            .Value = @intCast(value),
+        },
+    });
+}
+
+fn constructArrayFromList(self: *Comptime, arr: TypeID, child: TypeID, range: defines.Range) Error!ValuePtr {
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
     var address: i64 = -1;
 
     for (range.start..range.end) |ptr| {
-        _ = try self.eval(ast.extra[ptr], child);
+        const addr = try self.eval(ast.extra[ptr], child);
 
-        address = if (address == -1) self.cache.get(.{
-            .file = self.typechecker.currentFile,
-            .expr = ast.extra[ptr],
-        }).? else address;
+        address = if (address == -1) addr else address;
     }
 
-    return Value{
+    return self.appendValue(.{
         .Slice = .{
             .Type = arr,
             .To = @intCast(address),
             .Size = range.len(),
         },
-    };
+    });
 }
 
-fn evalScoping(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
+fn evalScoping(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
     if (self.typechecker.symbols.resolutionMap.get(.{
         .file = self.typechecker.currentFile,
         .expr = expr,
@@ -779,7 +821,7 @@ fn evalScoping(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
     const extraPtr = ast.expressions.items(.value)[expr];
 
     _ = try self.typechecker.typecheckScoping(expr);
-    const res = (try self.expectType(ast.extra[extraPtr])).Type;
+    const res = self.getValue(try self.expectType(ast.extra[extraPtr])).Type;
 
     const member = tokens
         .get(ast.extra[extraPtr + 1])
@@ -788,12 +830,12 @@ fn evalScoping(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
     const scope = switch (self.typechecker.typeTable.get(res)) {
         .Enum => |enm| ret: {
             if (try self.typechecker.tryGetFieldIndex(res, member)) |found| {
-                return .{
+                return self.appendValue(.{
                     .Enum = .{
                         .Type = res,
                         .Value = found,
                     },
-                };
+                });
             }
 
             break :ret enm.scope;
@@ -814,7 +856,7 @@ fn evalScoping(self: *Comptime, expr: defines.ExpressionPtr) Error!Value {
     }).?, null);
 }
 
-fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!Value {
+fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
     const expected =
         if (Typechecker.determineExpected(maybeExpected)) |expected| switch (self.typechecker.typeTable.get(expected)) {
             .Function => |func| func,
@@ -875,7 +917,7 @@ fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?Type
     return common.debug.NotImplemented(@src());
 }
 
-fn evalCall(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!Value {
+fn evalCall(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
     _ = try self.typechecker.typecheckCall(extraPtr, maybeExpected);
 
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
@@ -899,14 +941,14 @@ fn evalCall(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID
         }
     }
 
-    const maybeFunction = try self.eval(ast.extra[extraPtr], null);
+    const maybeFunction = self.getValue(try self.eval(ast.extra[extraPtr], null));
     const function = switch (maybeFunction) {
         .Type => |id| return self.evalExpressionList(
             ast.expressions.items(.value)[ast.extra[extraPtr + 1]],
             id,
         ),
         .Function => |func| func,
-        else => unreachable,
+        else => return common.debug.ShouldBeImpossible(@src()),
     };
 
     _ = function;
@@ -914,12 +956,13 @@ fn evalCall(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID
     return common.debug.NotImplemented(@src());
 }
 
-fn evalIndexing(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
+fn evalIndexing(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
     const lValue = !self.getFlag(.RValue);
 
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
-    const slice = try self.eval(ast.extra[extraPtr], null);
+    const slicePtr = try self.eval(ast.extra[extraPtr], null);
+    const slice = self.getValue(slicePtr);
     blk: switch (slice) {
         .Slice => { },
         .Undefined => {
@@ -932,19 +975,20 @@ fn evalIndexing(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
         },
         else => |t| {
             self.report("Given type '{s}' is not indexable. ({s})", .{
-                self.typechecker.typeName(self.arena.allocator(), try self.typechecker.typecheckValue(slice, null)),
+                self.typechecker.typeName(self.arena.allocator(), try self.typechecker.typecheckValue(slicePtr, null)),
                 @tagName(t),
             });
             return error.TypeMismatch;
         },
     }
 
-    const index = try self.eval(ast.extra[extraPtr + 1], null);
+    const indexPtr = try self.eval(ast.extra[extraPtr + 1], null);
+    const index = self.getValue(indexPtr);
     switch (index) {
         .Int => { },
         else => |t| {
             self.report("Given type '{s}' is not suitable to be an index. ({s})", .{
-                self.typechecker.typeName(self.arena.allocator(), try self.typechecker.typecheckValue(index, null)),
+                self.typechecker.typeName(self.arena.allocator(), try self.typechecker.typecheckValue(indexPtr, null)),
                 @tagName(t),
             });
             return error.TypeMismatch;
@@ -960,7 +1004,7 @@ fn evalIndexing(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
     }
 
     return
-        if (lValue) self.memory.items[slice.Slice.at(@intCast(index.Int))]
+        if (lValue) slice.Slice.at(@intCast(index.Int))
         else ret: {
             const ptrType = TypeInfo{
                 .Pointer = .{
@@ -971,25 +1015,25 @@ fn evalIndexing(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
             };
             const ptrTypeID = (try self.typechecker.registerType(ptrType));
 
-            break :ret .{
+            break :ret self.appendValue(.{
                 .Pointer = .{
                     .Type = ptrTypeID,
                     .To = slice.Slice.at(@intCast(index.Int)),
                 },
-            };
+            });
         };
 }
 
-fn evalMutType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
-    const inner = try self.expectType(extraPtr);
+fn evalMutType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
+    const inner = self.getValue(try self.expectType(extraPtr));
 
     if (self.typechecker.canBeMutable(inner.Type)) {
         const typeInfo = self.typechecker.typeTable.get(inner.Type);
         const typeID = try self.typechecker.registerType(self.typechecker.makeMutable(typeInfo));
 
-        return .{
+        return self.appendValue(.{
             .Type = typeID,
-        };
+        });
     }
     else {
         self.report("Redundant 'mut' specifier on already mutable type '{s}'.", .{
@@ -999,10 +1043,11 @@ fn evalMutType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
     }
 }
 
-fn evalArrType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
+fn evalArrType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
-    const size = switch (try self.eval(ast.extra[extraPtr], null)) {
+    const ptr = try self.eval(ast.extra[extraPtr], null);
+    const size = switch (self.getValue(ptr)) {
         .Int => |val|
             if (val <= std.math.maxInt(u32)) val
             else {
@@ -1014,17 +1059,17 @@ fn evalArrType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
                     });
                 return error.SizeViolation;
             },
-        else => |val| {
+        else => {
             self.report("Expected a 'comptime_int' value as size specifier. Got '{s}' instead.", .{
                 self.typechecker.typeName(self.arena.allocator(),
-                    try self.typechecker.typecheckValue(val, null),
+                    try self.typechecker.typecheckValue(ptr, null),
                 ),
             });
             return error.TypeMismatch;
         },
     };
 
-    const inner = try self.expectType(ast.extra[extraPtr + 1]);
+    const inner = self.getValue(try self.expectType(ast.extra[extraPtr + 1]));
 
     const newType = TypeInfo{
         .Array = .{
@@ -1034,24 +1079,24 @@ fn evalArrType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!Value {
         },
     };
 
-    return .{
+    return self.appendValue(.{
         .Type = (try self.typechecker.registerType(newType)),
-    };
+    });
 }
 
-pub fn expectType(self: *Comptime, exprPtr: defines.ExpressionPtr) Error!Value {
-    return .{
-        .Type = switch (try self.eval(exprPtr, Builtin.Type("type"))) {
+pub fn expectType(self: *Comptime, exprPtr: defines.ExpressionPtr) Error!ValuePtr {
+    return self.appendValue(.{
+        .Type = switch (self.getValue(try self.eval(exprPtr, Builtin.Type("type")))) {
             .Type => |t| t,
             else => |otherwise| {
                 self.report("Expected a type expression, got '{s}' instead.", .{@tagName(otherwise)});
                 return error.UnexpectedNonTypeExpression;
             },
         },
-    };
+    });
 }
 
-pub fn constructUndefined(self: *Comptime, valueType: TypeID) Error!Value {
+pub fn constructUndefined(self: *Comptime, valueType: TypeID) Error!ValuePtr {
     return switch (self.typechecker.typeTable.get(valueType)) {
         .Function, .Type, .Any, .Noreturn, .EnumLiteral => {
             self.report("Given type '{s}' can't be undefined.", .{
@@ -1059,7 +1104,7 @@ pub fn constructUndefined(self: *Comptime, valueType: TypeID) Error!Value {
             });
             return error.IllegalSyntax;
         },
-        else => .{ .Undefined = valueType },
+        else => self.appendValue(.{ .Undefined = valueType }),
     };
 }
 
@@ -1106,8 +1151,9 @@ fn handleScopeDecls(
     return defs.items;
 }
 
-fn castValue(self: *Comptime, value: Value, to: TypeID) Error!Value {
-    return switch (value) {
+fn castValue(self: *Comptime, valuePtr: ValuePtr, to: TypeID) Error!ValuePtr {
+    const value = self.getValue(valuePtr);
+    const newValue: Value = switch (value) {
         .Pointer => |ptr| .{
             .Pointer = .{
                 .Type = to,
@@ -1168,14 +1214,34 @@ fn castValue(self: *Comptime, value: Value, to: TypeID) Error!Value {
         .Undefined => .{
             .Undefined = to, 
         },
-        else => common.debug.ShouldBeImpossible(@src()),
+        else => return common.debug.ShouldBeImpossible(@src()),
     };
+
+    self.memory.items[valuePtr] = newValue;
+    return valuePtr;
 }
 
 fn report(self: *Comptime, comptime fmt: []const u8, args: anytype) void {
     return
         if (self.getFlag(.Attempting)) {}
         else self.typechecker.report("COMPTIME: " ++ fmt, args);
+}
+
+pub fn getValue(self: *const Comptime, address: defines.Offset) Value {
+    assert(address <= self.memory.items.len);
+    return self.memory.items[address];
+}
+
+fn setValue(self: *const Comptime, address: defines.Offset, new: Value) void {
+    assert(address <= self.memory.items.len);
+    self.memory.items[address] = new;
+}
+
+fn appendValue(self: *Comptime, value: Value) Error!ValuePtr {
+    const addr = self.memory.items.len;
+    self.memory.append(self.arena.allocator(), value)
+        catch return error.AllocatorFailure;
+    return @intCast(addr);
 }
 
 fn setFlag(self: *Comptime, comptime flag: Flags, bit: bool) bool {
