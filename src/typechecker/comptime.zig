@@ -31,7 +31,7 @@ const VoidValue = 2;
 pub const Flags = enum(u3) {
     Attempting = 0,
     CanCycle = 1,
-    RValue = 2,
+    LValue = 2,
 
     pub fn flag(flagToGet: Flags) u3 {
         return @intFromEnum(flagToGet);
@@ -512,9 +512,6 @@ fn evalStructType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
 }
 
 fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
-    // TODO: Failed union evaluations cause DependencyCycle instead of
-    // their desired errors.
-
     // @Beware manually tagged unions are banned, so some things are hardcoded here.
 
     const allocator = self.arena.allocator();
@@ -962,43 +959,17 @@ fn evalCall(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID
 }
 
 fn evalIndexing(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
-    const lValue = !self.getFlag(.RValue);
+    _ = try self.typechecker.typecheckIndexing(extraPtr);
+
+    const lValue = self.getFlag(.LValue);
 
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
     const slicePtr = try self.eval(ast.extra[extraPtr], null);
     const slice = self.getValue(slicePtr);
-    blk: switch (slice) {
-        .Slice => { },
-        .Undefined => {
-            if (lValue) {
-                break :blk;
-            }
-
-            self.report("Attempt to index an undefined value.", .{});
-            return error.MemoryViolation;
-        },
-        else => |t| {
-            self.report("Given type '{s}' is not indexable. ({s})", .{
-                self.typechecker.typeName(self.arena.allocator(), try self.typechecker.typecheckValue(slicePtr, null)),
-                @tagName(t),
-            });
-            return error.TypeMismatch;
-        },
-    }
 
     const indexPtr = try self.eval(ast.extra[extraPtr + 1], null);
     const index = self.getValue(indexPtr);
-    switch (index) {
-        .Int => { },
-        else => |t| {
-            self.report("Given type '{s}' is not suitable to be an index. ({s})", .{
-                self.typechecker.typeName(self.arena.allocator(), try self.typechecker.typecheckValue(indexPtr, null)),
-                @tagName(t),
-            });
-            return error.TypeMismatch;
-        },
-    }
 
     if (slice.Slice.Size <= index.Int) {
         self.report("Index out of bounds. Size: {d}, Index: {d}.", .{
@@ -1009,8 +980,7 @@ fn evalIndexing(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
     }
 
     return
-        if (lValue) slice.Slice.at(@intCast(index.Int))
-        else ret: {
+        if (lValue) ret: {
             const ptrType = TypeInfo{
                 .Pointer = .{
                     .mutable = true,
@@ -1026,7 +996,8 @@ fn evalIndexing(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
                     .To = slice.Slice.at(@intCast(index.Int)),
                 },
             });
-        };
+        }
+        else slice.Slice.at(@intCast(index.Int));
 }
 
 fn evalMutType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {

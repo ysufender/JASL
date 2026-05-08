@@ -92,5 +92,7 @@ pub const CompilerError = error {
     RedundantEmptyCaptureList,
     RedundantDefaultCase,
     UnreachableCodePath,
+    IndexingOfNonIndexableValue,
+    NonIntegerIndex,
     Terminate,
 };

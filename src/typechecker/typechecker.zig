@@ -19,6 +19,7 @@ const Context = common.CompilerContext;
 const Arena = std.heap.ArenaAllocator;
 const Allocator = std.mem.Allocator;
 const Callstack = collections.StaticRingStack(defines.DeclPtr, defines.stackLimit);
+const FlagMap = std.bit_set.IntegerBitSet(8);
 
 const BuiltinIndex = Resolver.BuiltinIndex;
 const deepCopy = collections.deepCopy;
@@ -30,6 +31,14 @@ pub const TypeMap = collections.HashMap(TypeInfo, TypeID);
 pub const ResolutionMap = collections.HashMap(defines.DeclPtr, TypeID);
 pub const MetadataMap = collections.HashMap(Element, []const defines.ExpressionPtr);
 const LookupMap = collections.HashMap(defines.DeclPtr, TypecheckStatus);
+
+pub const Flags = enum(u3) {
+    LValue = 2,
+
+    pub fn flag(flagToGet: Flags) u3 {
+        return @intFromEnum(flagToGet);
+    }
+};
 
 const TypecheckStatus = struct {
     status: enum {
@@ -128,6 +137,7 @@ currentFile: defines.FilePtr,
 currentScope: defines.ScopePtr,
 lastToken: defines.TokenPtr,
 callstack: Callstack,
+flags: FlagMap,
 
 pub fn init(
     gpa: Allocator,
@@ -176,6 +186,7 @@ pub fn init(
             .bools = Constants.Bool.initCapacity(allocator, (counts.bool * 3) / 2) catch return error.AllocatorFailure,
             .aggs = Constants.Aggregate.initCapacity(allocator, total / 2) catch return error.AllocatorFailure,
         },
+        .flags = FlagMap.initEmpty(),
         .executer = undefined,
         .symbols = symbolTable,
         .currentFile = 0,
@@ -1024,10 +1035,81 @@ pub fn typecheckTypeForwarding(self: *Typechecker, extraPtr: defines.OpaquePtr, 
 }
 
 pub fn typecheckIndexing(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!TypeID {
-    // TODO: Finish this
-    _ = self;
-    _ = extraPtr;
-    return error.NotImplemented;
+    const lValue = self.getFlag(.LValue);
+
+    const ast = self.context.getAST(self.currentFile);
+
+    const maybeIndexableId = try self.typecheckExpression(ast.extra[extraPtr], null);
+    const maybeIndexable = self.typeTable.get(maybeIndexableId);
+    switch (maybeIndexable) {
+        .Array => { },
+        .Pointer => |ptr| switch (ptr.size) {
+            .Slice, .C => { },
+            else => {
+                self.report("Attempt to index a singular pointer '{s}'.", .{
+                    self.typeName(self.arena.allocator(), maybeIndexableId),
+                });
+                return error.IndexingOfNonIndexableValue;
+            },
+        },
+        else => {
+            self.report("Attempt to index non-indexable value of type '{s}'.", .{
+                self.typeName(self.arena.allocator(), maybeIndexableId),
+            });
+            return error.IndexingOfNonIndexableValue;
+        },
+    }
+
+    const maybeIndexPtr = try self.typecheckExpression(ast.extra[extraPtr + 1], null);
+    const maybeIndex = self.typeTable.get(maybeIndexPtr);
+    switch (maybeIndex) {
+        .Integer, .ComptimeInt => {
+        },
+        else => {
+            self.report("Expected an integer type for indexing, received '{s}'.", .{
+                self.typeName(self.arena.allocator(), maybeIndexPtr),
+            });
+            return error.NonIntegerIndex;
+        },
+    }
+
+    switch (maybeIndexable) {
+        .Array => |arr| if (self.executer.attemptEval(ast.extra[extraPtr + 1], null)) |_index| {
+            const index = self.executer.getValue(_index).Int;
+            if (arr.len <= index) {
+                self.report("Index out of bounds. Size: {d}, Index: {d}.", .{
+                    arr.len,
+                    index
+                });
+                return error.IndexOutOfBounds;
+            }
+        },
+        else => { },
+    }
+
+    return
+        if (lValue) blk: {
+            const child = switch (maybeIndexable) {
+                .Array => |arr| arr.child,
+                .Pointer => |ptr| ptr.child,
+                else => break :blk common.debug.ShouldBeImpossible(@src()),
+            };
+
+            const newPointer = TypeInfo{
+                .Pointer = .{
+                    .mutable = true,
+                    .child = child,
+                    .size = .Single,
+                },
+            };
+
+            break :blk self.registerType(newPointer);
+        }
+        else switch (maybeIndexable) {
+            .Array => |arr| arr.child,
+            .Pointer => |ptr| ptr.child,
+            else => common.debug.ShouldBeImpossible(@src()),
+        };
 }
 
 pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!TypeID {
@@ -1682,4 +1764,13 @@ pub fn determineExpected(maybeExpected: ?TypeID) ?TypeID {
             ) null
             else expected
         else null;
+}
+
+fn setFlag(self: *Typechecker, comptime flag: Flags, bit: bool) bool {
+    defer self.flags.setValue(Flags.flag(flag), bit);
+    return self.flags.isSet(Flags.flag(flag));
+}
+
+fn getFlag(self: *Typechecker, comptime flag: Flags) bool {
+    return self.flags.isSet(Flags.flag(flag));
 }
