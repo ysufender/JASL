@@ -90,5 +90,7 @@ pub const CompilerError = error {
     DivergingBranches,
     SwitchOnNonSwitchableValue,
     RedundantEmptyCaptureList,
+    RedundantDefaultCase,
+    UnreachableCodePath,
     Terminate,
 };

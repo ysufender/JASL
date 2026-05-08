@@ -412,12 +412,13 @@ fn switchStatement(self: *Parser) StatementResult {
 
         _ = try self.consume(.Arrow, error.MissingArrow, "Expected '->' after switch case.");
 
+        // TODO: Resolver bug after addition of multiple captures.
         if (self.match(&.{.Pipe})) {
             self.scratch.append(self.allocator(), 1) catch return error.AllocatorFailure;
 
             var captureCount: u32 = 0;
             const snapshot = self.current;
-            while (!self.match(&.{.Pipe})) {
+            while (!self.check(.Pipe)) {
                 if (!self.match(&.{.Identifier, .Discard})) {
                     self.report("Expected a capture name.", .{});
                     return error.MissingIdentifier;
@@ -436,11 +437,12 @@ fn switchStatement(self: *Parser) StatementResult {
             self.scratch.append(self.allocator(), captureCount) catch return error.AllocatorFailure;
 
             self.current = snapshot;
-            while (!self.match(&.{.Pipe})) {
-                self.scratch.append(self.allocator(), self.previous()) catch return error.AllocatorFailure;
+            // TODO: Change this so it just stores the starting capture instead of everything.
+            while (!self.check(.Pipe)) {
+                self.scratch.append(self.allocator(), self.advance()) catch return error.AllocatorFailure;
                 if (!self.match(&.{.Comma})) break;
             }
-            _ = try self.advance();
+            _ = self.advance();
         }
         else {
             self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
@@ -457,6 +459,18 @@ fn switchStatement(self: *Parser) StatementResult {
     self.extra.append(self.allocator(), item) catch return error.AllocatorFailure;
     self.extra.append(self.allocator(), cases.start) catch return error.AllocatorFailure;
     self.extra.append(self.allocator(), cases.end) catch return error.AllocatorFailure;
+    
+    // Captured Case layout:
+    // 0 case
+    // 1 hasCapture
+    // 2 captureCount
+    // 3...n captures
+    // n statement
+    //
+    // Case Layout:
+    // 0 case
+    // 1 hasCapture
+    // 2 statement
 
     const result = try self.alloc(Statement);
     self.statementMap.set(result, .{
@@ -709,7 +723,7 @@ fn switchExpression(self: *Parser) ExpressionResult {
 
             var captureCount: u32 = 0;
             const snapshot = self.current;
-            while (!self.match(&.{.Pipe})) {
+            while (!self.check(.Pipe)) {
                 if (!self.match(&.{.Identifier, .Discard})) {
                     self.report("Expected a capture name.", .{});
                     return error.MissingIdentifier;
@@ -728,11 +742,11 @@ fn switchExpression(self: *Parser) ExpressionResult {
             self.scratch.append(self.allocator(), captureCount) catch return error.AllocatorFailure;
 
             self.current = snapshot;
-            while (!self.match(&.{.Pipe})) {
-                self.scratch.append(self.allocator(), self.previous()) catch return error.AllocatorFailure;
+            while (!self.check(.Pipe)) {
+                self.scratch.append(self.allocator(), self.advance()) catch return error.AllocatorFailure;
                 if (!self.match(&.{.Comma})) break;
             }
-            _ = try self.advance();
+            _ = self.advance();
         }
         else {
             self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
@@ -1165,8 +1179,8 @@ fn structDefinition(self: *Parser) ExpressionResult {
 
     // Check unionDefinition for details.
     // TODO: Fix this. Maybe two loops using scratch would be better...
-    var fieldList = collections.StaticStack(defines.OpaquePtr, 512);
-    var definitions = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
+    var fieldList = collections.StaticStack(defines.OpaquePtr, defines.subscopeMax);
+    var definitions = collections.ReverseStackArray(defines.OpaquePtr, defines.subscopeMax).init();
 
     while (!self.check(.RBrace)) {
         switch (self.tokens.items(.type)[self.peek()]) {
@@ -1229,8 +1243,8 @@ fn enumDefinition(self: *Parser) ExpressionResult {
 
     // Check unionDefinition for details.
     // TODO: Fix this.
-    var variablesTmp = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
-    var definitions = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
+    var variablesTmp = collections.ReverseStackArray(defines.OpaquePtr, defines.subscopeMax).init();
+    var definitions = collections.ReverseStackArray(defines.OpaquePtr, defines.subscopeMax).init();
 
     while (!self.check(.RBrace)) {
         switch (self.tokens.items(.type)[self.peek()]) {
@@ -1304,8 +1318,8 @@ fn unionDefinition(self: *Parser) ExpressionResult {
     // For some reason, variablesTmp overwrites the extra buffer.
     // Fixed buffer for temporary fix.
     // TODO: fix this
-    var variablesTmp = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
-    var definitions = collections.ReverseStackArray(defines.OpaquePtr, 512).init();
+    var variablesTmp = collections.ReverseStackArray(defines.OpaquePtr, defines.subscopeMax).init();
+    var definitions = collections.ReverseStackArray(defines.OpaquePtr, defines.subscopeMax).init();
 
     while (!self.check(.RBrace)) {
         switch (self.tokens.items(.type)[self.peek()]) {

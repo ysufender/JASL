@@ -179,6 +179,11 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
 }
 
 fn evalSwitchExpression(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
+    // TODO: Finish
+    _ = self;
+    _ = extraPtr;
+    _ = maybeExpected;
+    unreachable;
 }
 
 fn evalIfExpression(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {

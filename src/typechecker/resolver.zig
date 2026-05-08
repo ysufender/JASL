@@ -361,24 +361,30 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                 self.currentScope = caseScope;
 
                 const capture = ast.extra[case + 1];
+                var offset: u32 = 0;
                 if (capture != 0) {
-                    const decl = try self.decls.addOne(allocator);
-                    self.decls.set(decl, .{
-                        .scope = self.currentScope,
-                        .kind = .Capture,
-                        .public = false,
-                        .token = capture,
-                        .node = item,
-                        .type = 0,
-                        .topLevel = false,
-                    });
+                    const captureCount = ast.extra[case + 2];
+                    offset += captureCount;
 
-                    const lexeme = tokens.get(capture).lexeme(self.context, self.dataIndex());
-                    self.lookup.put(allocator, .{ .name = lexeme, .scope = self.currentScope }, decl)
-                        catch return error.AllocatorFailure;
+                    for (0..captureCount) |index| {
+                        const decl = try self.decls.addOne(allocator);
+                        self.decls.set(decl, .{
+                            .scope = self.currentScope,
+                            .kind = .Capture,
+                            .public = false,
+                            .token = ast.extra[case + 3 + index],
+                            .node = item,
+                            .type = 0,
+                            .topLevel = false,
+                        });
+
+                        const lexeme = tokens.get(ast.extra[case + 2 + index]).lexeme(self.context, self.dataIndex());
+                        self.lookup.put(allocator, .{ .name = lexeme, .scope = self.currentScope }, decl)
+                            catch return error.AllocatorFailure;
+                    }
                 }
 
-                const body = ast.extra[case + 2];
+                const body = ast.extra[case + offset + 2];
                 try self.resolveStatement(body, false);
             }
         },
@@ -818,24 +824,30 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                 self.currentScope = caseScope;
 
                 const capture = ast.extra[case + 1];
+                var offset: u32 = 0;
                 if (capture != 0) {
-                    const decl = try self.decls.addOne(allocator);
-                    self.decls.set(decl, .{
-                        .scope = self.currentScope,
-                        .kind = .Capture,
-                        .public = false,
-                        .token = capture,
-                        .node = item,
-                        .type = 0,
-                        .topLevel = false,
-                    });
+                    const captureCount = ast.extra[case + 2];
+                    offset += captureCount;
 
-                    const lexeme = tokens.get(capture).lexeme(self.context, self.dataIndex());
-                    self.lookup.put(allocator, .{ .name = lexeme, .scope = self.currentScope }, decl)
-                        catch return error.AllocatorFailure;
+                    for (0..captureCount) |index| {
+                        const decl = try self.decls.addOne(allocator);
+                        self.decls.set(decl, .{
+                            .scope = self.currentScope,
+                            .kind = .Capture,
+                            .public = false,
+                            .token = ast.extra[case + 3 + index],
+                            .node = item,
+                            .type = 0,
+                            .topLevel = false,
+                        });
+
+                        const lexeme = tokens.get(ast.extra[case + 2 + index]).lexeme(self.context, self.dataIndex());
+                        self.lookup.put(allocator, .{ .name = lexeme, .scope = self.currentScope }, decl)
+                            catch return error.AllocatorFailure;
+                    }
                 }
 
-                const body = ast.extra[case + 2];
+                const body = ast.extra[case + offset + 2];
                 try self.resolveExpression(body);
             }
         },

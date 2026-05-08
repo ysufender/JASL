@@ -2,7 +2,7 @@ import std;
 
 import initialization as i;
 
-let main = false;
+let main = if (true) as(u32, 5) else 15;
 
 let a = i::Enum(@Field1);
 let b: i::Enum = (@Field1);

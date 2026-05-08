@@ -365,15 +365,13 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
 pub fn typecheckSwitchExpression(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
     const ast = self.context.getAST(self.currentFile);
 
-    const switchExpr = .{
-        .item = ast.extra[extraPtr],
-        .cases = defines.Range{
-            .start = ast.extra[extraPtr + 1],
-            .end = ast.extra[extraPtr + 2],
-        },
+    const item = ast.extra[extraPtr];
+    const cases = defines.Range{
+        .start = ast.extra[extraPtr + 1],
+        .end = ast.extra[extraPtr + 2],
     };
 
-    const itemType = try self.typecheckExpression(switchExpr.item, null);
+    const itemType = try self.typecheckExpression(item, null);
     const info =
         if (self.maybeSwitchable(itemType)) |T| T
         else {
@@ -383,12 +381,48 @@ pub fn typecheckSwitchExpression(self: *Typechecker, extraPtr: defines.OpaquePtr
             return error.SwitchOnNonSwitchableValue;
         };
 
-    return switch (info) {
-        .Enum => |enm| for (enm.fields, 0..) |field, index| {
-            // TODO: Complete.
-            const case = ast.extra[switchExpr.cases.at(@intCast(index * 3))];
-        } else common.debug.ShouldBeImpossible(@src()),
+    _ = info;
+    _ = cases;
+    _ = maybeExpected;
+    unreachable;
+    // @Beware should be kept in sync with parser.(union|struct|enum)Definition(*Parser)
+    // return switch (info) {
+    //    .Enum => |enm| self.typecheckSwitchEnum(ast, &enm, range, maybeExpected),
+    //};
+}
+
+fn typecheckSwitchEnum(
+    self: *Typechecker,
+    ast: *const Parser.AST,
+    enm: *const Types.Enum,
+    range: defines.Range,
+    maybeExpected: ?TypeID
+) Error!TypeID {
+    const static = struct { 
+        var fieldBuffer = std.mem.zeroes([512]u32);
+        var resultBuffer = std.mem.zeroes([512]u32);
     };
+
+    var allocator = std.heap.FixedBufferAllocator.init(&static.fieldBuffer);
+
+    var fieldMap = std.DynamicBitSet.initEmpty(allocator.allocator(), enm.fields.len)
+        catch return error.AllocatorFailure;
+    _ = maybeExpected;
+    const index = 0;
+    while (index < enm.fields.len) {
+        if (fieldMap.count() == enm.fields.len) {
+            self.report("Unreachable switch case.", .{ });
+            return error.UnreachableCodePath;
+        }
+
+        const case = ast.extra[range.at(index)];
+
+        if (case == 0 and fieldMap.count() == enm.fields.len) {
+            self.report("Redundant 'else' case in switch expression. All values are alraedy handled.", .{ });
+            return error.RedundantDefaultCase;
+        }
+    }
+    unreachable;
 }
 
 pub fn typecheckIfExpression(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
@@ -409,10 +443,7 @@ pub fn typecheckIfExpression(self: *Typechecker, extraPtr: defines.OpaquePtr, ma
     const thenBranch = try self.typecheckExpression(conditional.then, maybeExpected);
     const elseBranch = try self.typecheckExpression(conditional.otherwise, maybeExpected);
 
-    if (!(
-        self.suitable(thenBranch, elseBranch)
-        and self.suitable(elseBranch, thenBranch)
-    )) {
+    if (!(try self.infer(thenBranch, elseBranch) == try self.infer(elseBranch, thenBranch))) {
         self.report("Diverging result types '{s}' and '{s}' in conditional expression.", .{
             self.typeName(self.arena.allocator(), thenBranch),
             self.typeName(self.arena.allocator(), elseBranch),

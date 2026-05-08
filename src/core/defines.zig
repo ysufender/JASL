@@ -57,5 +57,5 @@ pub const ScopePtr = u32;
 pub const DeclPtr = u32;
 
 pub const rehashLimit = 512;
-
 pub const stackLimit = 16;
+pub const subscopeMax = 512;
