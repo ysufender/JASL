@@ -373,69 +373,6 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
     };
 }
 
-pub fn typecheckSwitchExpression(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
-    const ast = self.context.getAST(self.currentFile);
-
-    const item = ast.extra[extraPtr];
-    const cases = defines.Range{
-        .start = ast.extra[extraPtr + 1],
-        .end = ast.extra[extraPtr + 2],
-    };
-
-    const itemType = try self.typecheckExpression(item, null);
-    const info =
-        if (self.maybeSwitchable(itemType)) |T| T
-        else {
-            self.report("Given type '{s}' can't be switched on.", .{
-                self.typeName(self.arena.allocator(), itemType),
-            });
-            return error.SwitchOnNonSwitchableValue;
-        };
-
-    _ = info;
-    _ = cases;
-    _ = maybeExpected;
-    unreachable;
-    // @Beware should be kept in sync with parser.(union|struct|enum)Definition(*Parser)
-    // return switch (info) {
-    //    .Enum => |enm| self.typecheckSwitchEnum(ast, &enm, range, maybeExpected),
-    //};
-}
-
-fn typecheckSwitchEnum(
-    self: *Typechecker,
-    ast: *const Parser.AST,
-    enm: *const Types.Enum,
-    range: defines.Range,
-    maybeExpected: ?TypeID
-) Error!TypeID {
-    const static = struct { 
-        var fieldBuffer = std.mem.zeroes([512]u32);
-        var resultBuffer = std.mem.zeroes([512]u32);
-    };
-
-    var allocator = std.heap.FixedBufferAllocator.init(&static.fieldBuffer);
-
-    var fieldMap = std.DynamicBitSet.initEmpty(allocator.allocator(), enm.fields.len)
-        catch return error.AllocatorFailure;
-    _ = maybeExpected;
-    const index = 0;
-    while (index < enm.fields.len) {
-        if (fieldMap.count() == enm.fields.len) {
-            self.report("Unreachable switch case.", .{ });
-            return error.UnreachableCodePath;
-        }
-
-        const case = ast.extra[range.at(index)];
-
-        if (case == 0 and fieldMap.count() == enm.fields.len) {
-            self.report("Redundant 'else' case in switch expression. All values are alraedy handled.", .{ });
-            return error.RedundantDefaultCase;
-        }
-    }
-    unreachable;
-}
-
 pub fn typecheckIfExpression(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
     const ast = self.context.getAST(self.currentFile);
 
@@ -454,7 +391,10 @@ pub fn typecheckIfExpression(self: *Typechecker, extraPtr: defines.OpaquePtr, ma
     const thenBranch = try self.typecheckExpression(conditional.then, maybeExpected);
     const elseBranch = try self.typecheckExpression(conditional.otherwise, maybeExpected);
 
-    if (!(try self.infer(thenBranch, elseBranch) == try self.infer(elseBranch, thenBranch))) {
+    if (!(
+        self.suitable(thenBranch, elseBranch)
+        and self.suitable(elseBranch, thenBranch)
+    )) {
         self.report("Diverging result types '{s}' and '{s}' in conditional expression.", .{
             self.typeName(self.arena.allocator(), thenBranch),
             self.typeName(self.arena.allocator(), elseBranch),
@@ -944,6 +884,7 @@ pub fn typecheckBuiltinCall(self: *Typechecker, extraPtr: defines.ExpressionPtr,
         BI("cast") => self.typecheckCast(extraPtr, maybeExpected),
         BI("as") => self.typecheckTypeForwarding(extraPtr, maybeExpected),
         BI("typeOf") => self.executer.getValue(try self.executer.evalTypeOf(extraPtr)).Type,
+        BI("unreachable") => Comptime.Builtin.Type("noreturn"),
         else => {
             self.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[declPtr]});
             return error.ComptimeNotPossible;
@@ -1192,6 +1133,145 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
 
     _ = self.callstack.pop();
     return types;
+}
+
+pub fn typecheckSwitchExpression(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
+    // TODO: Hardcoded field size, must be kept in sync with parser.(union|struct|enum)Definition
+    const ast = self.context.getAST(self.currentFile);
+
+    const item = ast.extra[extraPtr];
+    const itemTypeID = try self.typecheckExpression(item, null);
+    const itemType = self.typeTable.get(itemTypeID);
+
+    switch (itemType) {
+        .Enum => { },
+        .Union => |uni| if (!uni.isTagged) {
+            self.report("Can't switch on untagged union type '{s}'.", .{
+                self.typeName(self.arena.allocator(), itemTypeID),
+            });
+            return error.SwitchOnPlainUnion;
+        },
+        else => {
+            self.report("Can't switch on value of type '{s}'.", .{
+                self.typeName(self.arena.allocator(), itemTypeID),
+            });
+            return error.SwitchOnNonSwitchableValue;
+        }
+    }
+
+    const range = defines.Range{
+        .start = ast.extra[extraPtr + 1],
+        .end = ast.extra[extraPtr + 2],
+    };
+
+    return switch (itemType) {
+        .Enum => |enm| self.typecheckSwitchOnEnum(ast, itemTypeID, &enm, range, maybeExpected),
+        // TODO: Finish this
+        .Union => return common.debug.NotImplemented(@src()),
+        else => return common.debug.ShouldBeImpossible(@src()),
+    };
+}
+
+fn typecheckSwitchOnEnum(
+    self: *Typechecker,
+    ast: *const Parser.AST,
+    itemTypeID: TypeID,
+    enm: *const Types.Enum,
+    range: defines.Range,
+    maybeExpected: ?TypeID,
+) Error!TypeID {
+    var fieldBuffer: [512]u32 = undefined;
+    var bufferAllocator = std.heap.FixedBufferAllocator.init(@ptrCast(&fieldBuffer));
+
+    var fieldMap = std.DynamicBitSet.initEmpty(bufferAllocator.allocator(), enm.fields.len)
+        catch return common.debug.ShouldBeImpossible(@src());
+
+    var expected: ?TypeID = null;
+    var case = range.start;
+    while (case < range.end) : (case += 4) {
+        if (fieldMap.count() == fieldMap.capacity()) {
+            self.report("Unreachable switch case.", .{ });
+            return error.UnreachableCodePath;
+        }
+
+        const caseLabel = ast.extra[case];
+        const field = 
+            if (caseLabel == 0) blk: {
+                // TODO: Allow captures in else branch
+                fieldMap.setRangeValue(.{
+                    .start = 0,
+                    .end = fieldMap.capacity(),
+                }, true);
+
+                break :blk "else";
+            }
+            else blk: {
+                const fieldPtr = try self.executer.eval(caseLabel, itemTypeID);
+                const field = self.executer.getValue(fieldPtr);
+
+                const enumeration = switch (field) {
+                    .Enum => |caseEnum| caseEnum.Value,
+                    else => {
+                        self.report("Expected a comptime enum for switch case label, received '{s}' instead.", .{
+                            self.typeName(self.arena.allocator(), try self.typecheckValue(fieldPtr, itemTypeID)),
+                        });
+                        return error.InvalidSwitchCase;
+                    }
+                };
+
+                if (fieldMap.isSet(enumeration)) {
+                    self.report("Duplicate switch case '{s}'.", .{
+                        enm.fields[enumeration],
+                    });
+                    return error.DuplicateSwitchCase;
+                }
+
+                fieldMap.set(enumeration);
+                break :blk enm.fields[enumeration];
+            };
+
+        const captureCount = ast.extra[case + 1];
+        if (captureCount != 0) {
+            self.report("Enum fields can't be captured.", .{});
+            return error.CaptureOnEnumField;
+        }
+
+        const branchType = try self.typecheckExpression(ast.extra[case + 3], maybeExpected);
+        expected = expected orelse branchType;
+
+        if (!(
+            self.suitable(expected.?, branchType)
+            and self.suitable(branchType, expected.?)
+        )) {
+            self.report(
+                "Diverging result types '{s}' and '{s}' in switch expression case '{s}'.", .{
+                self.typeName(self.arena.allocator(), expected.?),
+                self.typeName(self.arena.allocator(), branchType),
+                field,
+            });
+            return error.DivergingBranches;
+        }
+    }
+
+    if (fieldMap.count() != fieldMap.capacity()) {
+        common.log.err("Missing enum fields:", .{});
+
+        var iterator = fieldMap.iterator(.{
+            .direction = .forward,
+            .kind = .unset,
+        });
+        while (iterator.next()) |field| {
+            const fieldName = enm.fields[field];
+            common.log.err(("." ** 4) ++ " {s}", .{
+                fieldName,
+            });
+        }
+
+        self.report("In switch expression.", .{});
+        return error.UnhandledSwitchCases;
+    }
+
+    return expected orelse common.debug.ShouldBeImpossible(@src());
 }
 
 pub fn registerType(self: *Typechecker, newType: TypeInfo) Error!TypeID {

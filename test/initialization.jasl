@@ -1,8 +1,17 @@
 pub let Enum = enum {
     Field1,
+    Field2,
+    Field3,
+    Field4,
 };
 
 pub let Struct = struct {
+    field1: bool,
+    field2: Enum,
+    other: void,
+};
+
+pub let Struct2 = struct {
     field1: bool,
     field2: Enum,
     other: void,
@@ -13,3 +22,21 @@ pub let Union = union(enum) {
     field2: bool,
     field3: i32,
 };
+
+pub let main = switch (a) {
+    @Field1 -> Struct(false, @Field1),
+    @Field2 -> Struct2(true, @Field2),
+    else -> unreachable(),
+};
+
+let a: i::Enum = @Field1;
+
+let b: i::Enum = (@Field1);
+let c = i::Enum::Field1;
+let d: i::Enum = @Field1;
+
+let e = i::Struct(true, @Field1, ());
+let f: i::Struct = (true, @Field1, ());
+let g: i::Struct = (true, i::Enum::Field1, ());
+let h: i::Struct = (true, i::Enum(@Field1), ());
+let j: i::Struct = (true, i::Enum(i::Enum::Field1), ());

@@ -332,62 +332,7 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                 try self.resolveStatement(elseBody, false);
             }
         },
-        .Switch => {
-            const item = ast.extra[statement.value];
-            try self.resolveExpression(item);
-
-            const cases = defines.Range{
-                .start = ast.extra[statement.value + 1],
-                .end = ast.extra[statement.value + 2],
-            };
-
-            var case: u32 = cases.start;
-            while (case < cases.end) : (case += 3) {
-                const pattern = ast.extra[case];
-
-                if (pattern != 0) {
-                    try self.resolveExpression(pattern);
-                }
-
-                const caseScope = try self.scopes.addOne(allocator);
-                self.scopes.set(caseScope, .{
-                    .module = self.scopes.items(.module)[self.currentScope],
-                    .parent = self.currentScope,
-                    .kind = .Block,
-                });
-
-                const previous = self.currentScope;
-                defer self.currentScope = previous;
-                self.currentScope = caseScope;
-
-                const capture = ast.extra[case + 1];
-                var offset: u32 = 0;
-                if (capture != 0) {
-                    const captureCount = ast.extra[case + 2];
-                    offset += captureCount;
-
-                    for (0..captureCount) |index| {
-                        const decl = try self.decls.addOne(allocator);
-                        self.decls.set(decl, .{
-                            .scope = self.currentScope,
-                            .kind = .Capture,
-                            .public = false,
-                            .token = ast.extra[case + 3 + index],
-                            .node = item,
-                            .type = 0,
-                            .topLevel = false,
-                        });
-
-                        const lexeme = tokens.get(ast.extra[case + 2 + index]).lexeme(self.context, self.dataIndex());
-                        self.lookup.put(allocator, .{ .name = lexeme, .scope = self.currentScope }, decl)
-                            catch return error.AllocatorFailure;
-                    }
-                }
-
-                const body = ast.extra[case + offset + 2];
-                try self.resolveStatement(body, false);
-            }
-        },
+        .Switch => try self.resolveSwitch(.Statement, ast, tokens, statement.value),
         .While => {
             const condition = ast.extra[statement.value];
             try self.resolveExpression(condition);
@@ -795,62 +740,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             const elseBody = ast.extra[expr.value + 2];
             try self.resolveExpression(elseBody);
         },
-        .Switch => {
-            const item = ast.extra[expr.value];
-            try self.resolveExpression(item);
-
-            const cases = defines.Range{
-                .start = ast.extra[expr.value + 1],
-                .end = ast.extra[expr.value + 2],
-            };
-
-            var case: u32 = cases.start;
-            while (case < cases.end) : (case += 3) {
-                const pattern = ast.extra[case];
-
-                if (pattern != 0) {
-                    try self.resolveExpression(pattern);
-                }
-
-                const caseScope = try self.scopes.addOne(allocator);
-                self.scopes.set(caseScope, .{
-                    .module = self.scopes.items(.module)[self.currentScope],
-                    .parent = self.currentScope,
-                    .kind = .Block,
-                });
-
-                const previous = self.currentScope;
-                defer self.currentScope = previous;
-                self.currentScope = caseScope;
-
-                const capture = ast.extra[case + 1];
-                var offset: u32 = 0;
-                if (capture != 0) {
-                    const captureCount = ast.extra[case + 2];
-                    offset += captureCount;
-
-                    for (0..captureCount) |index| {
-                        const decl = try self.decls.addOne(allocator);
-                        self.decls.set(decl, .{
-                            .scope = self.currentScope,
-                            .kind = .Capture,
-                            .public = false,
-                            .token = ast.extra[case + 3 + index],
-                            .node = item,
-                            .type = 0,
-                            .topLevel = false,
-                        });
-
-                        const lexeme = tokens.get(ast.extra[case + 2 + index]).lexeme(self.context, self.dataIndex());
-                        self.lookup.put(allocator, .{ .name = lexeme, .scope = self.currentScope }, decl)
-                            catch return error.AllocatorFailure;
-                    }
-                }
-
-                const body = ast.extra[case + offset + 2];
-                try self.resolveExpression(body);
-            }
-        },
+        .Switch => try self.resolveSwitch(.Expression, ast, tokens, expr.value),
         .MutableType, .PointerType, .SliceType, .CPointerType => try self.resolveExpression(expr.value),
         .ArrayType => {
             const size = ast.extra[expr.value];
@@ -1030,6 +920,74 @@ fn resolveSignature(self: *Resolver, signaturePtr: defines.SignaturePtr, comptim
             }
         },
         else => unreachable,
+    }
+}
+
+fn resolveSwitch(
+    self: *Resolver,
+    switchType: enum {
+        Statement,
+        Expression
+    },
+    ast: *const Parser.AST,
+    tokens: *const Lexer.TokenList.Slice,
+    extraPtr: defines.OpaquePtr
+) Error!void {
+    const allocator = self.arena.allocator();
+
+    const item = ast.extra[extraPtr];
+    try self.resolveExpression(item);
+
+    const cases = defines.Range{
+        .start = ast.extra[extraPtr + 1],
+        .end = ast.extra[extraPtr + 2],
+    };
+
+    var case: u32 = cases.start;
+    while (case < cases.end) : (case += 4) {
+        const pattern = ast.extra[case];
+
+        if (pattern != 0) {
+            try self.resolveExpression(pattern);
+        }
+
+        const caseScope = try self.scopes.addOne(allocator);
+        self.scopes.set(caseScope, .{
+            .module = self.scopes.items(.module)[self.currentScope],
+            .parent = self.currentScope,
+            .kind = .Block,
+        });
+
+        const previous = self.currentScope;
+        defer self.currentScope = previous;
+        self.currentScope = caseScope;
+
+        const captureCount = ast.extra[case + 1];
+        const firstCapture = ast.extra[case + 2];
+        for (0..captureCount) |captureIndex| {
+            const captureToken: u32 = @intCast(firstCapture + 2 * captureIndex);
+
+            const decl = try self.decls.addOne(allocator);
+            self.decls.set(decl, .{
+                .scope = self.currentScope,
+                .kind = .Capture,
+                .public = false,
+                .token = captureToken,
+                .node = item,
+                .type = 0,
+                .topLevel = false,
+            });
+
+            const lexeme = tokens.get(captureToken).lexeme(self.context, self.dataIndex());
+            self.lookup.put(allocator, .{ .name = lexeme, .scope = self.currentScope }, decl)
+                catch return error.AllocatorFailure;
+        }
+
+        const body = ast.extra[case + 3];
+        try switch (switchType) {
+            .Statement => self.resolveStatement(body, false),
+            .Expression => self.resolveExpression(body),
+        };
     }
 }
 

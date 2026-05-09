@@ -273,7 +273,7 @@ fn statement(self: *Parser) StatementResult {
     return switch (self.tokens.items(.type)[self.advance()]) {
         .LBrace => self.block(),
         .Asm => self.inlineAssembly(),
-        .Switch => self.switchStatement(),
+        .Switch => self.commonSwitch(.Statement),
         .If => self.conditional(),
         .While, .For => |loop| self.loopStatement(loop),
         .Return => self.returnStatement(),
@@ -394,97 +394,6 @@ fn returnStatement(self: *Parser) StatementResult {
     });
     
     return result;
-}
-
-fn switchStatement(self: *Parser) StatementResult {
-    if (true) {
-        self.report("Switch statements are not supported (yet)", .{});
-        return common.debug.NotImplemented(@src());
-    }
-    else if (false) {
-        const item = try self.ifExpression();
-
-        _ = try self.consume(.LBrace, error.MissingBrace, "Expected a block after switch statement.");
-
-        const scratchStart = self.scratch.items.len;
-        while (!self.check(.RBrace)) {
-            if (self.match(&.{.Else})) {
-                self.scratch.append(self.allocator(), AnyType) catch return error.AllocatorFailure;
-            }
-            else {
-                self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
-            }
-
-            _ = try self.consume(.Arrow, error.MissingArrow, "Expected '->' after switch case.");
-
-            // TODO: Resolver bug after addition of multiple captures.
-            if (self.match(&.{.Pipe})) {
-                self.scratch.append(self.allocator(), 1) catch return error.AllocatorFailure;
-
-                var captureCount: u32 = 0;
-                const snapshot = self.current;
-                while (!self.check(.Pipe)) {
-                    if (!self.match(&.{.Identifier, .Discard})) {
-                        self.report("Expected a capture name.", .{});
-                        return error.MissingIdentifier;
-                    }
-
-                    captureCount += 1;
-                    if (!self.match(&.{.Comma})) break;
-                }
-                _ = try self.consume(.Pipe, error.MissingPipe, "Expected an enclosing pipe '|' at case capture.");
-
-                if (captureCount == 0) {
-                    self.report("Redundant empty capture list.", .{});
-                    return error.RedundantEmptyCaptureList;
-                }
-
-                self.scratch.append(self.allocator(), captureCount) catch return error.AllocatorFailure;
-
-                self.current = snapshot;
-                // TODO: Change this so it just stores the starting capture instead of everything.
-                while (!self.check(.Pipe)) {
-                    self.scratch.append(self.allocator(), self.advance()) catch return error.AllocatorFailure;
-                    if (!self.match(&.{.Comma})) break;
-                }
-                _ = self.advance();
-            }
-            else {
-                self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
-            }
-
-            self.scratch.append(self.allocator(), try self.statement()) catch return error.AllocatorFailure;
-        }
-
-        _ = try self.consume(.RBrace, error.MissingBrace, "Missing enclosing brace '}' after switch statement.");
-
-        const cases = try self.commitScratch(scratchStart);
-
-        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-        self.extra.append(self.allocator(), item) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), cases.start) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), cases.end) catch return error.AllocatorFailure;
-        
-        // Captured Case layout:
-        // 0 case
-        // 1 hasCapture
-        // 2 captureCount
-        // 3...n captures
-        // n statement
-        //
-        // Case Layout:
-        // 0 case
-        // 1 hasCapture
-        // 2 statement
-
-        const result = try self.alloc(Statement);
-        self.statementMap.set(result, .{
-            .type = .Switch,
-            .value = start,
-        });
-
-        return result;
-    }
 }
 
 fn conditional(self: *Parser) StatementResult {
@@ -709,92 +618,7 @@ fn switchExpression(self: *Parser) ExpressionResult {
         return self.logicalOr();
     }
 
-    if (true) {
-        self.report("Switch expressions are not supported (yet)", .{});
-        return common.debug.NotImplemented(@src());
-    }
-    else {
-        const item = try self.ifExpression();
-
-        _ = try self.consume(.LBrace, error.MissingBrace, "Expected a block after switch expression.");
-
-        const scratchStart = self.scratch.items.len;
-        while (!self.check(.RBrace)) {
-            if (self.match(&.{.Else})) {
-                self.scratch.append(self.allocator(), AnyType) catch return error.AllocatorFailure;
-            }
-            else {
-                self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
-            }
-
-            _ = try self.consume(.Arrow, error.MissingArrow, "Expected '->' after switch case.");
-
-            if (self.match(&.{.Pipe})) {
-                self.scratch.append(self.allocator(), 1) catch return error.AllocatorFailure;
-
-                var captureCount: u32 = 0;
-                const snapshot = self.current;
-                while (!self.check(.Pipe)) {
-                    if (!self.match(&.{.Identifier, .Discard})) {
-                        self.report("Expected a capture name.", .{});
-                        return error.MissingIdentifier;
-                    }
-
-                    captureCount += 1;
-                    if (!self.match(&.{.Comma})) break;
-                }
-                _ = try self.consume(.Pipe, error.MissingPipe, "Expected an enclosing pipe '|' at case capture.");
-
-                if (captureCount == 0) {
-                    self.report("Redundant empty capture list.", .{});
-                    return error.RedundantEmptyCaptureList;
-                }
-
-                self.scratch.append(self.allocator(), captureCount) catch return error.AllocatorFailure;
-
-                self.current = snapshot;
-                while (!self.check(.Pipe)) {
-                    self.scratch.append(self.allocator(), self.advance()) catch return error.AllocatorFailure;
-                    if (!self.match(&.{.Comma})) break;
-                }
-                _ = self.advance();
-            }
-            else {
-                self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
-            }
-            self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
-
-            if (!self.match(&.{.Comma})) break;
-        }
-
-        _ = try self.consume(.RBrace, error.MissingBrace, "Missing enclosing brace '}' after switch statement.");
-        const cases = try self.commitScratch(scratchStart);
-
-        const start: defines.OpaquePtr = @intCast(self.extra.items.len);
-        self.extra.append(self.allocator(), item) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), cases.start) catch return error.AllocatorFailure;
-        self.extra.append(self.allocator(), cases.end) catch return error.AllocatorFailure;
-
-        // Captured Case layout:
-        // 0 case
-        // 1 hasCapture
-        // 2 captureCount
-        // 3...n captures
-        // n expression
-        //
-        // Case Layout:
-        // 0 case
-        // 1 hasCapture
-        // 2 expression
-
-        const result = try self.alloc(Expression);
-        self.expressionMap.set(result, .{
-            .type = .Switch,
-            .value = start,
-        });
-
-        return result;
-    }
+    return self.commonSwitch(.Expression);
 }
 
 fn logicalOr(self: *Parser) ExpressionResult {
@@ -1072,6 +896,7 @@ fn primary(self: *Parser) ExpressionResult {
             return expr;
         },
         else => {
+            self.current -= 1;
             self.report("Expected a primary expression, got '{s}' instead.", .{self.tokens.get(self.advance()).lexeme(self.context, self.file)});
             return error.InvalidToken;
         },
@@ -1553,6 +1378,103 @@ fn compilerHint(self: *Parser) common.CompilerError!defines.Range {
         .start = 0,
         .end = 0,
     };
+}
+
+fn commonSwitch(
+    self: *Parser,
+    comptime switchType: enum {
+        Statement,
+        Expression
+    },
+) common.CompilerError!defines.EitherPtr(defines.StatementPtr, defines.ExpressionPtr) {
+    const item = try self.ifExpression();
+
+    _ = try self.consume(.LBrace, error.MissingBrace, "Expected a block after switch statement.");
+
+    const scratchStart = self.scratch.items.len;
+    while (!self.check(.RBrace)) {
+        if (self.match(&.{.Else})) {
+            self.scratch.append(self.allocator(), AnyType) catch return error.AllocatorFailure;
+        }
+        else {
+            self.scratch.append(self.allocator(), try self.ifExpression()) catch return error.AllocatorFailure;
+        }
+
+        _ = try self.consume(.Arrow, error.MissingArrow, "Expected '->' after switch case.");
+
+        // TODO: Resolver bug after addition of multiple captures.
+        if (self.match(&.{.Pipe})) {
+            var captureCount: u32 = 0;
+            const firstCapture = self.previous() + 1;
+            while (!self.check(.Pipe)) {
+                if (!self.match(&.{.Identifier, .Discard})) {
+                    self.report("Expected a capture name.", .{});
+                    return error.MissingIdentifier;
+                }
+
+                captureCount += 1;
+                if (!self.match(&.{.Comma})) break;
+            }
+            _ = try self.consume(.Pipe, error.MissingPipe, "Expected an enclosing pipe '|' at case capture.");
+
+            if (captureCount == 0) {
+                self.report("Redundant empty capture list.", .{});
+                return error.RedundantEmptyCaptureList;
+            }
+
+            self.scratch.append(self.allocator(), captureCount) catch return error.AllocatorFailure;
+            self.scratch.append(self.allocator(), firstCapture) catch return error.AllocatorFailure;
+        }
+        else {
+            self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
+            self.scratch.append(self.allocator(), 0) catch return error.AllocatorFailure;
+        }
+
+        self.scratch.append(self.allocator(), try switch (switchType) {
+            .Statement => self.statement(),
+            .Expression => self.expression(),
+        }) catch return error.AllocatorFailure;
+
+        switch (switchType) {
+            .Expression => if (!self.match(&.{.Comma})) break,
+            .Statement => { },
+        }
+    }
+
+    _ = try self.consume(.RBrace, error.MissingBrace, "Missing enclosing brace '}' after switch statement.");
+
+    const cases = try self.commitScratch(scratchStart);
+
+    const start: defines.OpaquePtr = @intCast(self.extra.items.len);
+    self.extra.append(self.allocator(), item) catch return error.AllocatorFailure;
+    self.extra.append(self.allocator(), cases.start) catch return error.AllocatorFailure;
+    self.extra.append(self.allocator(), cases.end) catch return error.AllocatorFailure;
+    
+    // Captured Case layout:
+    // 0 case
+    // 1 captureCount
+    // 2 firstCapture
+    // 3 body
+    //
+    // Case Layout:
+    // 0 case
+    // 1 captureCount
+    // 2 dummy
+    // 3 body 
+
+    const result = try self.alloc(switch (switchType) {
+        .Expression => Expression,
+        .Statement => Statement,
+    });
+    (switch (switchType) {
+        .Statement => self.statementMap,
+        .Expression => self.expressionMap
+    }).set(result, .{
+        .type = .Switch,
+        .value = start,
+    });
+
+    return result;
 }
 
 fn commonBinary(self: *Parser, expr: defines.ExpressionPtr, comptime next: anytype) ExpressionResult {

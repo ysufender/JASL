@@ -179,11 +179,39 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
 }
 
 fn evalSwitchExpression(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
-    // TODO: Finish
-    _ = self;
-    _ = extraPtr;
-    _ = maybeExpected;
-    unreachable;
+    const resultType = try self.typechecker.typecheckSwitchExpression(extraPtr, maybeExpected);
+
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+    const varToSwitchOn = try self.eval(ast.extra[extraPtr], null);
+
+    switch (self.getValue(varToSwitchOn)) {
+        .Enum => {
+            const cases = defines.Range{
+                .start = ast.extra[extraPtr + 1],
+                .end = ast.extra[extraPtr + 2],
+            };
+
+            var case = cases.start;
+            while (case < cases.end) : (case += 4) {
+                const fieldExprPtr = ast.extra[case];
+
+                if (fieldExprPtr == 0) {
+                    return self.eval(ast.extra[case + 3], resultType);
+                }
+
+                const fieldPtr = try self.eval(fieldExprPtr, varToSwitchOn);
+                const field = self.getValue(fieldPtr);
+                
+                if (field.Enum.Value == (case - cases.start) / 4) {
+                    return self.eval(ast.extra[case + 3], resultType);
+                }
+            }
+
+            return common.debug.ShouldBeImpossible(@src());
+        },
+        .Union => return common.debug.NotImplemented(@src()),
+        else => return common.debug.ShouldBeImpossible(@src()),
+    }
 }
 
 fn evalIfExpression(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
@@ -211,12 +239,15 @@ fn evalDecl(self: *Comptime, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) E
 
     const prevToken = self.typechecker.lastToken;
     const prevFile = self.typechecker.currentFile;
+    const prevScope = self.typechecker.currentScope;
     if (decl.kind != .Builtin) {
+        self.typechecker.currentScope = decl.scope;
         self.typechecker.currentFile = self.typechecker.modules.modules.items(.dataIndex)[self.typechecker.symbols.scopes.items(.module)[decl.scope]];
         self.typechecker.lastToken = decl.token;
     }
     defer self.typechecker.lastToken = prevToken;
     defer self.typechecker.currentFile = prevFile;
+    defer self.typechecker.currentScope = prevScope;
 
     _ = try self.typechecker.typecheckDecl(declPtr, maybeExpected);
 
@@ -237,6 +268,9 @@ fn evalBuiltinCall(self: *Comptime, extraPtr: defines.OpaquePtr, declPtr: define
         BI("cast") => self.evalCast(extraPtr, maybeExpected),
         BI("as") => self.evalTypeForwarding(extraPtr, maybeExpected),
         BI("typeOf") => self.evalTypeOf(extraPtr),
+        BI("unreachable") => self.appendValue(.{
+            .Undefined = Builtin.Type("noreturn"),
+        }),
         else => {
             self.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[declPtr]});
             return error.ComptimeNotPossible;
@@ -723,20 +757,6 @@ pub fn constructFromList(self: *Comptime, typeID: TypeID, _range: defines.Range)
 
             return self.constructArrayFromList(typeID, arr.child, range);
         },
-        //Typechecker should reject this.
-        //.Pointer => |ptr| switch (ptr.size) {
-        //    .Slice => self.constructArrayFromList(typeID, ptr.child, range),
-        //    else => {
-        //        const address = self.memory.items.len;
-        //        _ = try self.eval(ast.extra[range.at(0)], ptr.child);
-        //        break :ret Value{
-        //            .Pointer = .{
-        //                .Type = typeID,
-        //                .To = @intCast(address),
-        //            },
-        //        };
-        //    },
-        //},
         .Noreturn,
         .Type, .Function,
         .Bool, .Float, .Integer,
@@ -924,17 +944,20 @@ fn evalCall(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID
 
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
+    common.log.debug("Typecheck call '{d}'", .{extraPtr});
     if (ast.expressions.items(.type)[ast.extra[extraPtr]] == .Identifier) blk: {
         if (self.typechecker.symbols.resolutionMap.get(.{
             .file = self.typechecker.currentFile,
             .expr = ast.extra[extraPtr], 
         })) |builtinPtr| {
+            common.log.debug("Builtin call '{d}'", .{extraPtr});
             const decl = self.typechecker.symbols.declarations.get(builtinPtr);
 
             if (decl.kind != .Builtin) {
                 break :blk;
             }
 
+            common.log.debug("Builtin call '{d}'", .{extraPtr});
             if (Builtin.isBuiltinType(decl.type)) {
                 break :blk;
             }

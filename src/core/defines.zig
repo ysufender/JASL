@@ -56,6 +56,10 @@ pub const ModulePtr = u32;
 pub const ScopePtr = u32;
 pub const DeclPtr = u32;
 
+pub fn EitherPtr(_: type, _: type) type {
+    return OpaquePtr;
+}
+
 pub const rehashLimit = 512;
 pub const stackLimit = 16;
 pub const subscopeMax = 512;

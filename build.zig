@@ -56,14 +56,25 @@ fn addTargets(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
                 @tagName(target.result.cpu.arch),
             }) catch unreachable,
             .version = version,
-            .root_module = b.createModule(.{
-                .root_source_file = b.path("src/main.zig"),
-                .target = target,
-                .optimize = optimize,
-                .link_libc  = target.result.os.tag == .windows,
-                .error_tracing = optimize == .Debug,
-                .strip = optimize != .Debug,
-            }),
+            .root_module = b.createModule(
+                if (optimize == .Debug) .{
+                    .root_source_file = b.path("src/main.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc  = target.result.os.tag == .windows,
+                    .error_tracing = true,
+                    .dwarf_format = .@"64",
+                    .unwind_tables = .sync,
+                    .omit_frame_pointer = false,
+                    .fuzz = true,
+                }
+                else .{
+                    .root_source_file = b.path("src/main.zig"),
+                    .target = target,
+                    .optimize = optimize,
+                    .link_libc  = target.result.os.tag == .windows,
+                }
+            ),
         });
         exe.root_module.addOptions("config", opts);
         const install = b.addInstallArtifact(exe, .{});
