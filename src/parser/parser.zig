@@ -1080,7 +1080,7 @@ fn enumDefinition(self: *Parser) ExpressionResult {
 
     // Check unionDefinition for details.
     // TODO: Fix this.
-    var variablesTmp = collections.ReverseStackArray(defines.OpaquePtr, defines.subscopeMax).init();
+    var variablesTmp = collections.StaticStack(defines.OpaquePtr, defines.subscopeMax);
     var definitions = collections.ReverseStackArray(defines.OpaquePtr, defines.subscopeMax).init();
 
     while (!self.check(.RBrace)) {
@@ -1104,7 +1104,7 @@ fn enumDefinition(self: *Parser) ExpressionResult {
                 try definitions.append(try self.variable(false));
             },
             .Identifier => {
-                try variablesTmp.append(self.advance());
+                try variablesTmp.push(self.advance());
                 if (!self.match(&.{.Comma})) break;
             },
             else => {
@@ -1155,7 +1155,7 @@ fn unionDefinition(self: *Parser) ExpressionResult {
     // For some reason, variablesTmp overwrites the extra buffer.
     // Fixed buffer for temporary fix.
     // TODO: fix this
-    var variablesTmp = collections.ReverseStackArray(defines.OpaquePtr, defines.subscopeMax).init();
+    var variablesTmp = collections.StaticStack(defines.OpaquePtr, defines.subscopeMax);
     var definitions = collections.ReverseStackArray(defines.OpaquePtr, defines.subscopeMax).init();
 
     while (!self.check(.RBrace)) {
@@ -1178,7 +1178,7 @@ fn unionDefinition(self: *Parser) ExpressionResult {
                 try definitions.append(try self.variable(false));
             },
             .Identifier => {
-                try variablesTmp.append(try self.variableSignature(true, true));
+                try variablesTmp.push(try self.variableSignature(true, true));
                 if (!self.match(&.{.Comma})) break;
             },
             else => {

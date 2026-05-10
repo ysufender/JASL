@@ -138,7 +138,17 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
     const addr = switch (expr.type) {
         .Identifier =>
             if (expr.value == 0) AnyType
-            else try self.evalDecl(typechecker.symbols.findDecl(.{ .file = file, .expr = exprPtr }), maybeExpected),
+            else if (typechecker.symbols.tryGetDecl(.{ .file = file, .expr = exprPtr })) |decl|
+                try self.evalDecl(decl, maybeExpected)
+            else {
+                self.report("Unable to resolve identifier '{s}'.", .{
+                    self.typechecker.context
+                        .getTokens(self.typechecker.currentFile)
+                        .get(expr.value)
+                        .lexeme(self.typechecker.context, self.typechecker.currentFile)
+                });
+                return error.MissingIdentifier;
+            },
         .Call => try self.evalCall(expr.value, maybeExpected),
         .Indexing => try self.evalIndexing(expr.value),
         .Scoping => try self.evalScoping(exprPtr),
@@ -154,6 +164,7 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
         .EnumDefinition => try self.evalEnumType(exprPtr),
         .StructDefinition => try self.evalStructType(exprPtr),
         .UnionDefinition => try self.evalUnionType(exprPtr),
+
         .Conditional => try self.evalIfExpression(expr.value, maybeExpected),
         .Switch => try self.evalSwitchExpression(expr.value, maybeExpected),
 
@@ -185,7 +196,7 @@ fn evalSwitchExpression(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpec
     const varToSwitchOn = try self.eval(ast.extra[extraPtr], null);
 
     switch (self.getValue(varToSwitchOn)) {
-        .Enum => {
+        .Enum => |enm| {
             const cases = defines.Range{
                 .start = ast.extra[extraPtr + 1],
                 .end = ast.extra[extraPtr + 2],
@@ -202,7 +213,7 @@ fn evalSwitchExpression(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpec
                 const fieldPtr = try self.eval(fieldExprPtr, varToSwitchOn);
                 const field = self.getValue(fieldPtr);
                 
-                if (field.Enum.Value == (case - cases.start) / 4) {
+                if (field.Enum.Value == enm.Value) {
                     return self.eval(ast.extra[case + 3], resultType);
                 }
             }
@@ -268,9 +279,10 @@ fn evalBuiltinCall(self: *Comptime, extraPtr: defines.OpaquePtr, declPtr: define
         BI("cast") => self.evalCast(extraPtr, maybeExpected),
         BI("as") => self.evalTypeForwarding(extraPtr, maybeExpected),
         BI("typeOf") => self.evalTypeOf(extraPtr),
-        BI("unreachable") => self.appendValue(.{
-            .Undefined = Builtin.Type("noreturn"),
-        }),
+        BI("unreachable") => {
+            self.report("Reached unreachable code.", .{});
+            return error.UnreachableCodePath;
+        },
         else => {
             self.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[declPtr]});
             return error.ComptimeNotPossible;
@@ -610,7 +622,7 @@ fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
 
     if (tagged) {
         fields[0] = .{
-            .public = true,
+            .public = false,
             .name = "tag",
             .valueType = tag,
             .isComptime = false,
@@ -944,20 +956,17 @@ fn evalCall(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID
 
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
-    common.log.debug("Typecheck call '{d}'", .{extraPtr});
     if (ast.expressions.items(.type)[ast.extra[extraPtr]] == .Identifier) blk: {
         if (self.typechecker.symbols.resolutionMap.get(.{
             .file = self.typechecker.currentFile,
             .expr = ast.extra[extraPtr], 
         })) |builtinPtr| {
-            common.log.debug("Builtin call '{d}'", .{extraPtr});
             const decl = self.typechecker.symbols.declarations.get(builtinPtr);
 
             if (decl.kind != .Builtin) {
                 break :blk;
             }
 
-            common.log.debug("Builtin call '{d}'", .{extraPtr});
             if (Builtin.isBuiltinType(decl.type)) {
                 break :blk;
             }

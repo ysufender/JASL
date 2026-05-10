@@ -13,6 +13,7 @@ const version = std.SemanticVersion{
 };
 
 pub fn build(b: *std.Build) void {
+    configureBuild(b);
     addTargets(b, .Debug);
     addTargets(b, .ReleaseFast);
     addTargets(b, .ReleaseSafe);
@@ -63,16 +64,14 @@ fn addTargets(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
                     .optimize = optimize,
                     .link_libc  = target.result.os.tag == .windows,
                     .error_tracing = true,
-                    .dwarf_format = .@"64",
-                    .unwind_tables = .sync,
                     .omit_frame_pointer = false,
-                    .fuzz = true,
                 }
                 else .{
                     .root_source_file = b.path("src/main.zig"),
                     .target = target,
                     .optimize = optimize,
                     .link_libc  = target.result.os.tag == .windows,
+                    .strip = true,
                 }
             ),
         });
@@ -87,4 +86,8 @@ fn addTargets(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
         step.dependOn(&install.step);
         step.dependOn(b.getInstallStep());
     }
+}
+
+fn configureBuild(b: *std.Build) void {
+    _ = b;
 }

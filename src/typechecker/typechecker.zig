@@ -223,7 +223,8 @@ pub fn typecheck(self: *Typechecker, allocator: Allocator) Error!Resolution {
     if (mainType != Comptime.Builtin.Type("entry_point")) {
         const main = self.symbols.getDecl(mainPtr);
         self.lastToken = main.token;
-        self.report("Unexpected type of entry point 'main'. Expected '*fn void -> i32', received '{s}'", .{
+        self.report("Unexpected type of entry point 'main'. Expected '{s}', received '{s}'", .{
+            self.typeName(allocator, Comptime.Builtin.Type("entry_point")),
             self.typeName(allocator, mainType),
         });
         return error.TypeMismatch;
@@ -240,10 +241,7 @@ pub fn typecheckVariable(self: *Typechecker, decl: *const Resolver.Declaration) 
     const expected = try self.expectType(decl.type);
 
     const initializer =
-        if (
-            decl.topLevel
-            or expected == Comptime.Builtin.Type("type")
-        )
+        if (decl.topLevel or expected == Comptime.Builtin.Type("type"))
             try self.typecheckValue(try self.executer.eval(decl.node, expected), expected)
         else
             try self.typecheckExpression(decl.node, expected);
@@ -501,7 +499,7 @@ pub fn typecheckExpressionListRange(self: *Typechecker, range: defines.Range, ex
 
             try self.typecheckGeneralInitialization(ast, expected, range);
         },
-        else => return common.debug.NotImplemented(@src()),
+        else => return common.debug.ShouldBeImpossible(@src()),
     }
 
     return expected;
@@ -929,7 +927,7 @@ pub fn typecheckCast(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpec
             error.StructuralMismatch => self.report("Illegal cast from structurally incompatible '{s}' to '{s}'", rargs),
             error.MismatchingSliceChildType => self.report("Cast from slice type '{s}' to '{s}' will alter the length of the slice.", rargs),
             error.InferenceError => self.report("Illegal cast from '{s}' to unknown type '{s}'.", rargs),
-            error.RedundantCast => self.report("Unnecessary cast from type '{s}' to '{s}'.", rargs),
+            error.RedundantCast => self.report("Redundant cast from type '{s}' to '{s}'.", rargs),
             else => return common.debug.ShouldBeImpossible(@src()),
         }
 
@@ -1241,7 +1239,7 @@ fn typecheckSwitchOnEnum(
 
         if (!(
             self.suitable(expected.?, branchType)
-            and self.suitable(branchType, expected.?)
+            //and self.suitable(branchType, expected.?)
         )) {
             self.report(
                 "Diverging result types '{s}' and '{s}' in switch expression case '{s}'.", .{
@@ -1477,12 +1475,12 @@ pub fn assertSuitable(self: *const Typechecker, this: TypeID, that: TypeID) Erro
 
     return switch (thatType) {
         .Noreturn => { },
-        .Any => functional.throwIf(std.meta.activeTag(thatType) == .Any, error.TypeMismatch),
+        .Any => functional.throwIf(std.meta.activeTag(thisType) == .Any, error.TypeMismatch),
         else => switch (thisType) {
             .Any => { },
             .ComptimeInt, .Integer => functional.throwIf(!self.isInt(that), error.TypeMismatch),
             .ComptimeFloat, .Float => functional.throwIf(!self.isFloat(that), error.TypeMismatch),
-            .Struct, .Union, .Enum => self.assertStructurallyIdentical(this, that),
+            // .Struct, .Union, .Enum => self.assertStructurallyIdentical(this, that),
             else => functional.throwIf(this != that, error.TypeMismatch),
         },
     };
@@ -1527,7 +1525,7 @@ pub fn infer(self: *const Typechecker, this: TypeID, that: TypeID) Error!TypeID 
     const thisType = std.meta.activeTag(self.typeTable.get(this));
     const thatType = std.meta.activeTag(self.typeTable.get(that));
 
-    const resType = switch (thatType) {
+    return switch (thatType) {
         .Noreturn => that,
         else => switch (thisType) {
             .Any => that,
@@ -1535,8 +1533,6 @@ pub fn infer(self: *const Typechecker, this: TypeID, that: TypeID) Error!TypeID 
             else => this,
         },
     };
-
-    return resType;
 }
 
 pub fn expectType(self: *Typechecker, exprPtr: defines.ExpressionPtr) Error!TypeID {

@@ -95,11 +95,17 @@ pub const Resolution = struct {
     lookup: LookupMap,
     scopes: ScopeList.Slice,
 
+    pub fn tryGetDecl(self: *const Resolution, key: ResolutionKey) ?defines.DeclPtr {
+        return self.resolutionMap.get(key);
+    }
+
     pub fn getDecl(self: *const Resolution, key: defines.DeclPtr) Declaration {
+        assert(self.declarations.len > key);
         return self.declarations.get(key);
     }
 
     pub fn findDecl(self: *const Resolution, key: ResolutionKey) defines.DeclPtr {
+        assert(self.resolutionMap.contains(key));
         return self.resolutionMap.get(key).?;
     }
 
@@ -853,6 +859,7 @@ fn resolveScoping(
 
     const moduleName = self.getModuleName(lhsPtr);
 
+    // TODO: I don't like this hardcoded
     if (moduleName[0] == '/') {
         return leftMost;
     }
