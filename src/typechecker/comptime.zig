@@ -372,7 +372,45 @@ fn evalSwitchExpression(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpec
 
             return common.debug.ShouldBeImpossible(@src());
         },
-        .Union => return common.debug.NotImplemented(@src()),
+        .Union => |uni| {
+            const cases = defines.Range{
+                .start = ast.extra[extraPtr + 1],
+                .end = ast.extra[extraPtr + 2],
+            };
+
+            var case = cases.start;
+            while (case < cases.end) : (case += 4) {
+                const fieldExprPtr = ast.extra[case];
+
+                if (fieldExprPtr == 0) {
+                    return self.eval(ast.extra[case + 3], resultType);
+                }
+
+                const fieldPtr = try self.eval(fieldExprPtr, varToSwitchOn);
+                const field = self.getValue(fieldPtr);
+
+                if (field.Enum.Value != uni.Tag) {
+                    continue;
+                }
+
+                const captureCount = ast.extra[case + 1];
+                if (captureCount > 1) {
+                    return common.debug.ShouldBeImpossible(@src());
+                }
+                else if (captureCount > 0) {
+                    const firstCapture = ast.extra[case + 2];
+
+                    self.cache.putNoClobber(self.arena.allocator(), .{
+                        .file = self.typechecker.currentFile,
+                        .expr = firstCapture,
+                    }, uni.Value) catch return Error.AllocatorFailure;
+                }
+
+                return self.eval(ast.extra[case + 3], resultType);
+            }
+
+            return common.debug.ShouldBeImpossible(@src());
+        },
         else => return common.debug.ShouldBeImpossible(@src()),
     }
 }
@@ -429,6 +467,11 @@ fn evalDecl(self: *Comptime, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) E
                     }
                 else valuePtr;
         },
+        .Capture => self.cache.get(.{
+            // TODO: Crashes
+            .file = prevFile,
+            .expr = decl.node,
+        }).?,
         else => |t| {
             self.report("{s} declaration is not implemented.", .{@tagName(t)});
             return common.debug.NotImplemented(@src());
@@ -656,10 +699,10 @@ fn evalEnumType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
             .name = try self.generateRandomName(.Enum),
             .fields = fields,
             .definitions = try self.handleScopeDecls(ast, tokens, defRange),
-            .scope = self.typechecker.symbols.findDecl(.{
+            .scope = self.typechecker.symbols.findGetDecl(.{
                 .file = self.typechecker.currentFile,
                 .expr = expr,
-            })
+            }).scope
         },
     };
 
@@ -710,10 +753,10 @@ fn evalStructType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
             .name = try self.generateRandomName(.Struct),
             .fields = fields,
             .definitions = try self.handleScopeDecls(ast, tokens, defRange),
-            .scope = self.typechecker.symbols.findDecl(.{
+            .scope = self.typechecker.symbols.findGetDecl(.{
                 .file = self.typechecker.currentFile,
                 .expr = expr,
-            })
+            }).scope
         },
     };
 
@@ -764,10 +807,10 @@ fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
             .name = try self.generateRandomName(.Enum),
             .definitions = &.{},
             .fields = tags,
-            .scope = self.typechecker.symbols.findDecl(.{
+            .scope = self.typechecker.symbols.findGetDecl(.{
                 .file = self.typechecker.currentFile,
                 .expr = expr,
-            })
+            }).scope
         },
     };
 
@@ -820,10 +863,10 @@ fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
             .name = try self.generateRandomName(.Union),
             .fields = fields,
             .definitions = defs,
-            .scope = self.typechecker.symbols.findDecl(.{
+            .scope = self.typechecker.symbols.findGetDecl(.{
                 .file = self.typechecker.currentFile,
                 .expr = expr,
-            }),
+            }).scope,
         }
     };
 
@@ -1059,67 +1102,6 @@ fn evalScoping(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
     }).?, null);
 }
 
-fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
-    const expected =
-        if (Typechecker.determineExpected(maybeExpected)) |expected| switch (self.typechecker.typeTable.get(expected)) {
-            .Function => |func| func,
-            else => {
-                self.report("Expected '{s}', received lambda expression.", .{
-                    self.typechecker.typeName(self.arena.allocator(), expected),
-                });
-                return Error.TypeMismatch;
-            },
-        }
-        else {
-            self.report("Couldn't infer the type of lambda expression.", .{});
-            return Error.InferenceError;
-        };
-
-    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
-
-    const paramsRange = defines.Range{
-        .start = ast.extra[extraPtr],
-        .end = ast.extra[extraPtr + 1],
-    };
-
-    if (paramsRange.len() != expected.argTypes.len) blk: {
-        if (
-            paramsRange.len() == 0
-            and expected.argTypes.len == 1
-            and expected.argTypes[0] == Builtin.Type("void")
-        ) {
-            break :blk;
-        }
-
-        self.report(
-            "Mismatching parameter counts in lambda expression. Expected {d}, received {d}", .{
-                expected.argTypes.len,
-                paramsRange.len(),
-            }
-        );
-        return Error.ArgumentCountMismatch;
-    }
-
-    const returnType = try self.typechecker.typecheckExpression(
-        ast.extra[extraPtr + 2],
-        expected.returnType,
-    );
-
-    if (expected.returnType != returnType) {
-        self.report(
-            "Mismatching return type in lambda expression. Expected '{s}', received '{s}'", .{
-                self.typechecker.typeName(self.arena.allocator(), expected.returnType),
-                self.typechecker.typeName(self.arena.allocator(), returnType),
-            }
-        );
-
-        return Error.TypeMismatch;
-    }
-
-    // @Unfinished
-    return common.debug.NotImplemented(@src());
-}
-
 fn evalCall(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
     _ = try self.typechecker.typecheckCall(extraPtr, maybeExpected);
 
@@ -1293,7 +1275,7 @@ fn generateRandomName(self: *Comptime, comptime mode: @TypeOf(.EnumLiteral)) Err
     }) catch Error.AllocatorFailure;
 }
 
-// @Note Beware, scope declarations must be comptime since they are technically
+// @Beware, scope declarations must be comptime since they are technically
 // top-level declarations.
 fn handleScopeDecls(
     self: *Comptime,

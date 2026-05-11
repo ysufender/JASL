@@ -971,8 +971,9 @@ fn resolveSwitch(
 
         const captureCount = ast.extra[case + 1];
         const firstCapture = ast.extra[case + 2];
+        const firstCaptureToken: defines.TokenPtr = ast.expressions.items(.value)[firstCapture];
         for (0..captureCount) |captureIndex| {
-            const captureToken: u32 = @intCast(firstCapture + 2 * captureIndex);
+            const captureToken: u32 = @intCast(firstCaptureToken + 2 * captureIndex);
 
             const decl = try self.decls.addOne(allocator);
             self.decls.set(decl, .{
@@ -980,13 +981,18 @@ fn resolveSwitch(
                 .kind = .Capture,
                 .public = false,
                 .token = captureToken,
-                .node = item,
+                .node = firstCapture,
                 .type = 0,
                 .topLevel = false,
             });
 
+            _ = self.resolved.getOrPutValue(allocator, .{
+                .file = self.dataIndex(),
+                .expr = firstCapture,
+            }, self.currentScope) catch return Error.AllocatorFailure;
+
             const lexeme = tokens.get(captureToken).lexeme(self.context, self.dataIndex());
-            self.lookup.put(allocator, .{ .name = lexeme, .scope = self.currentScope }, decl)
+            self.lookup.putNoClobber(allocator, .{ .name = lexeme, .scope = self.currentScope }, decl)
                 catch return Error.AllocatorFailure;
         }
 

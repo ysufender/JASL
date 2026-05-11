@@ -1385,8 +1385,46 @@ fn typecheckSwitchOnUnion(
                 break :blk tag.fields[enumeration];
             };
 
+        const prev = self.currentScope;
+        defer self.currentScope = prev;
+
         const captureCount = ast.extra[case + 1];
-        if (captureCount != 0) {
+        if (captureCount > 1) {
+            self.report("Value destruction is not supported.", .{ });
+            return Error.IllegalSyntax;
+        }
+        else if (captureCount > 0)
+        {
+            const firstCapture = ast.extra[case + 2];
+
+            self.currentScope = self.symbols.findDecl(.{
+                .file = self.currentFile,
+                .expr = firstCapture,
+            });
+
+            const capture = self.context
+                .getTokens(ast.tokens)
+                .get(ast.expressions.items(.value)[firstCapture])
+                .lexeme(self.context, self.currentFile);
+
+            const captureDecl = self.symbols.lookup.get(.{
+                .name = capture,
+                .scope = self.currentScope,
+            }) orelse return common.debug.ShouldBeImpossible(@src());
+
+            const captureType = uni.fields[
+                self.fieldIndex(itemTypeID, field) catch return common.debug.ShouldBeImpossible(@src())
+            ].valueType;
+
+            self.reso.putNoClobber(self.arena.allocator(),
+                captureDecl,
+                captureType,
+            ) catch return Error.AllocatorFailure;
+
+            self.lookup.putNoClobber(self.arena.allocator(), captureDecl, .{
+                .status = .Checked,
+                .types = captureType,
+            }) catch return Error.AllocatorFailure;
         }
 
         const branchType = try self.typecheckExpression(ast.extra[case + 3], maybeExpected);
@@ -1754,8 +1792,8 @@ pub fn assertSuitable(self: *const Typechecker, this: TypeID, that: TypeID) Erro
             // @Beware remove this alltogether if you don't want structural coercion.
             .Struct, .Union, .Enum =>
                 if (self.context.settings.hasFlag("--allow-structural-coercion")) self.assertStructurallyIdentical(this, that)
-                else functional.throwIf(this != that, Error.TypeMismatch),
-            else => functional.throwIf(this != that, Error.TypeMismatch),
+                else functional.throwIf(std.meta.activeTag(thisType) != std.meta.activeTag(thatType), Error.TypeMismatch),
+            else => functional.throwIf(std.meta.activeTag(thisType) != std.meta.activeTag(thatType), Error.TypeMismatch),
         },
     };
 }

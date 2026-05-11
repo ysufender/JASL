@@ -1402,10 +1402,15 @@ fn commonSwitch(
 
         _ = try self.consume(.Arrow, error.MissingArrow, "Expected '->' after switch case.");
 
-        // TODO: Resolver bug after addition of multiple captures.
+        // @Note Multi-captures in case I add destruction
         if (self.match(&.{.Pipe})) {
+            const firstCapture = try self.alloc(Expression);
+            self.expressionMap.set(firstCapture, .{
+                .type = .Identifier,
+                .value = self.current,
+            });
+
             var captureCount: u32 = 0;
-            const firstCapture = self.previous() + 1;
             while (!self.check(.Pipe)) {
                 if (!self.match(&.{.Identifier, .Discard})) {
                     self.report("Expected a capture name.", .{});
