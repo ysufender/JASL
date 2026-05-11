@@ -1,8 +1,9 @@
 const std = @import("std");
 const common = @import("common.zig");
 const hashmap = @import("../util/hashmap.zig");
-
 const collections = @import("../util/collections.zig");
+
+const Error = common.CompilerError;
 
 const Flags = enum {
     Help,
@@ -36,6 +37,8 @@ const flags = std.StaticStringMap(Flags).initComptime(&(.{
 
     .{ "--resolve-only", .Flag },
 
+    .{ "--allow-structural-coercion", .Flag },
+
 } ++ if (common.debug.isDebug) .{
 
     .{ "--print-ast", .Flag },
@@ -43,15 +46,17 @@ const flags = std.StaticStringMap(Flags).initComptime(&(.{
 
     .{ "--dump-memory", .Flag },
 
-} else .{ })
+})
 );
 
-const helpText = @embedFile("help.txt");
+const helpText =
+    @embedFile("../res/help.txt")
+    ++ if (common.debug.isDebug) @embedFile("../res/help-debug.txt") else "";
 
 pub fn parseCLI(allocator: std.mem.Allocator, _args: std.process.Args, io: std.Io) common.CompilerError!common.CompilerSettings {
     const NMap = std.StringHashMapUnmanaged(void);
 
-    var args = _args.iterateAllocator(allocator) catch return error.AllocatorFailure;
+    var args = _args.iterateAllocator(allocator) catch return Error.AllocatorFailure;
 
     _ = args.skip();
 
@@ -67,47 +72,47 @@ pub fn parseCLI(allocator: std.mem.Allocator, _args: std.process.Args, io: std.I
         .maxErr = 0,
     };
 
-    settings.flags.ensureTotalCapacity(allocator, 128) catch return error.AllocatorFailure;
+    settings.flags.ensureTotalCapacity(allocator, 128) catch return Error.AllocatorFailure;
 
-    includeDirs.ensureTotalCapacity(allocator, 512) catch return error.AllocatorFailure;
+    includeDirs.ensureTotalCapacity(allocator, 512) catch return Error.AllocatorFailure;
 
     while (args.next()) |flag| {
         switch (hash(flag)) {
             .Help => return printHelp(),
             .Version => return printHeader(),
             .Working => {
-                const dir = if (args.next()) |next| next else return error.MissingFlag;
+                const dir = if (args.next()) |next| next else return Error.MissingFlag;
 
                 std.process.setCurrentPath(io, dir) catch |err| {
                     common.log.err("Failed to set working directory to '{s}',\n\tProvided information: {s}", .{dir, @errorName(err)});
-                    return error.IOError;
+                    return Error.IOError;
                 };
 
-                workingDir = std.process.currentPathAlloc(io, allocator) catch return error.AllocatorFailure;
+                workingDir = std.process.currentPathAlloc(io, allocator) catch return Error.AllocatorFailure;
             },
             .MaxErr => {
                 const max = if (args.next()) |next| next else {
                     common.log.err("Expected an integer value, received nothing.", .{});
-                    return error.MissingFlag;
+                    return Error.MissingFlag;
                 };
 
                 maxErr = std.fmt.parseInt(u32, max, 10) catch {
                     common.log.err("Expected an integer value, received '{s}'", .{max});
 
-                    return error.UnknownFlag;
+                    return Error.UnknownFlag;
                 };
             },
             .Include => {
                 if (args.next()) |arg| {
                     const path = std.Io.Dir.cwd().realPathFileAlloc(io, arg, allocator) catch |err| switch (err) {
-                        error.OutOfMemory => return error.AllocatorFailure,
+                        error.OutOfMemory => return Error.AllocatorFailure,
                         else => {
                             common.log.info("Given path '{s}' couldn't be resolved.", .{arg});
-                            return error.IOError;
+                            return Error.IOError;
                         }
                     };
 
-                    includeDirs.put(allocator, path, {}) catch return error.AllocatorFailure;
+                    includeDirs.put(allocator, path, {}) catch return Error.AllocatorFailure;
                 }
                 else {
                     common.log.err("Expected a path after include flag.", .{});
@@ -119,7 +124,7 @@ pub fn parseCLI(allocator: std.mem.Allocator, _args: std.process.Args, io: std.I
             else =>
                 if (maybeFile != null) {
                     common.log.err("Unexpected commandline option {s}", .{flag});
-                    return error.UnknownFlag;
+                    return Error.UnknownFlag;
                 }
                 else {
                     maybeFile = flag;
@@ -130,7 +135,7 @@ pub fn parseCLI(allocator: std.mem.Allocator, _args: std.process.Args, io: std.I
     const collect = struct {
         pub fn collect(count: u32, _it: NMap.KeyIterator, _allocator: std.mem.Allocator) ![][]const u8 {
             var it = _it;
-            const ret = _allocator.alloc([]const u8, count) catch return error.AllocatorFailure;
+            const ret = _allocator.alloc([]const u8, count) catch return Error.AllocatorFailure;
             var i: u32 = 0;
             while (it.next()) |n| : (i += 1) {
                 ret[i] = n.*;
@@ -153,7 +158,7 @@ pub fn parseCLI(allocator: std.mem.Allocator, _args: std.process.Args, io: std.I
         }
         else {
             common.log.err("jaslc expects an input file.", .{});
-            return error.NoSourceFile;
+            return Error.NoSourceFile;
         }
     };
 }
@@ -165,13 +170,13 @@ fn printHeader() common.CompilerError {
         .{}
     );
 
-    return error.Terminate; 
+    return Error.Terminate; 
 }
 
 fn printHelp() common.CompilerError {
     printHeader() catch { };
     common.log.info(helpText, .{});
-    return error.Terminate; 
+    return Error.Terminate; 
 }  
 
 fn hash(str: []const u8) Flags {

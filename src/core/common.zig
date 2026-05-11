@@ -100,5 +100,12 @@ pub const CompilerError = error {
     DuplicateSwitchCase,
     UnhandledSwitchCases,
     InvalidSwitchCase,
+    NegationOfUnsigned,
+    OperationOnZeroBitSize,
+    ArithmeticOnNonNumericType,
+    LogicOnNonBooleanType,
+    BitwiseOnUnsupportedType,
+    ComparisonOnNonComparableType,
+    ComparisonOnIncompatibleTypes,
     Terminate,
 };

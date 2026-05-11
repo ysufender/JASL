@@ -722,7 +722,7 @@ fn factor(self: *Parser) ExpressionResult {
 }
 
 fn unary(self: *Parser) ExpressionResult {
-    if (self.match(&.{.Bang, .Minus, .Plus, .Tilde})) {
+    if (self.match(&.{.Bang, .Minus, .Tilde})) {
         const operator = self.tokens.items(.type)[self.previous()];
 
         const rhs = try self.unary();

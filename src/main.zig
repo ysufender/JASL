@@ -6,6 +6,7 @@ const defines = @import("core/defines.zig");
 const debug = @import("debug/debug.zig");
 const platform = @import("core/platform.zig");
 
+const Error = common.CompilerError;
 const Lexer = @import("lexer/lexer.zig");
 const Parser = @import("parser/parser.zig");
 const Prepass = @import("parser/prepass.zig");
@@ -24,14 +25,14 @@ pub fn main(init: std.process.Init) void {
         init
     ) catch |err| blk: {
         switch (err) {
-            error.ShouldBeImpossible => common.log.err(
+            Error.ShouldBeImpossible => common.log.err(
                 "This is a compiler bug, a part of impossible branch has been reached."
                 ++ " Please inform the authors about it.", .{ }
             ),
-            error.NotImplemented => common.log.err(
+            Error.NotImplemented => common.log.err(
                 "The compiler has hit an unfinished part of the codebase, stay tuned.", .{ }
             ),
-            error.Terminate => break :blk,
+            Error.Terminate => break :blk,
             else => { }, 
         }
 

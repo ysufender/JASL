@@ -12,7 +12,7 @@ fn InnerStaticStack(comptime T: type, comptime Size: usize) type {
 
         pub fn push(stack: *Self, value: T) Error!void {
             if (stack.index >= Size) {
-                return error.OutOfMemory;
+                return Error.OutOfMemory;
             }
 
             defer stack.items = stack.values[0..stack.index];

@@ -6,6 +6,7 @@ const defines = @import("../core/defines.zig");
 const assert = std.debug.assert;
 
 pub const TokenList = collections.MultiArrayList(Token);
+const Error = common.CompilerError;
 
 pub const TokenType = enum(u8) {
     LParen, RParen,
@@ -56,7 +57,7 @@ pub const Token = struct {
         const string = token.lexeme(context, file);
         const length =  @tagName(token.type).len + string.len + 16;
         const pos = token.position(context, file);
-        const buffer = gpa.alloc(u8, length) catch return @errorName(error.AllocatorFailure);
+        const buffer = gpa.alloc(u8, length) catch return @errorName(Error.AllocatorFailure);
         return std.fmt.bufPrint(buffer, "<{s}: {s} at ({d}:{d})>", .{
             @tagName(token.type),
             string,
@@ -224,7 +225,7 @@ pub fn lex(self: *Lexer) common.CompilerError!defines.TokenListPtr {
             .start = self.start,
             .end = self.current,
         }
-    ) catch return error.InternalError;
+    ) catch return Error.InternalError;
 
     self.start = 0;
     self.current = 0;
@@ -267,7 +268,7 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
         '.' => 
             if (std.ascii.isDigit(self.peek())) {
                 self.report("Dot (.) prefixed numeric literals are not allowed.", .{});
-                break :blk error.DotPrefixedNumericLiteral;
+                break :blk Error.DotPrefixedNumericLiteral;
             }
             else if (self.match('.')) self.addToken(.Range) 
             else self.addToken(.Dot),
@@ -306,7 +307,7 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
 
                 if (self.isAtEnd()) {
                     self.report("Unterminated multiline comment", .{});
-                    break :blk error.UnterminatedComment;
+                    break :blk Error.UnterminatedComment;
                 }
             }
             else self.addToken(.Slash),
@@ -332,7 +333,7 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
 
             if (ch == '\'') {
                 self.report("Empty character literals are not allowed.", .{});
-                break :blk error.EmptyCharLiteral;
+                break :blk Error.EmptyCharLiteral;
             }
 
             _ = try self.consume('\'', "Expected closing single quote (')");
@@ -350,7 +351,7 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
 
             if (self.isAtEnd()) {
                 self.report("Unterminated string literal", .{});
-                break :blk error.UnterminatedStringLiteral;
+                break :blk Error.UnterminatedStringLiteral;
             }
 
             self.start += 1;
@@ -375,7 +376,7 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
             }
             else {
                 self.report("Unexpected character '{c}'", .{ch});
-                break :blk error.UnexpectedCharacter;
+                break :blk Error.UnexpectedCharacter;
             }
         },
         else => |ch| {
@@ -400,7 +401,7 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
                 //else if (self.check('.')) {
                 //    _ = self.advance();
                 //    self.report("Trailing dots (.) after numeric literals are not allowed.", .{});
-                //    break :blk error.DotPostfixedNumericLiteral;
+                //    break :blk Error.DotPostfixedNumericLiteral;
                 //}
 
                 break :blk self.addToken(.Integer);
@@ -419,7 +420,7 @@ fn scanToken(self: *Lexer) common.CompilerError!void {
             }
             else {
                 self.report("Unexpected character '{c}'", .{ch});
-                return error.UnexpectedCharacter;
+                return Error.UnexpectedCharacter;
             }
         }
     };
@@ -482,7 +483,7 @@ fn consume(self: *Lexer, expected: u8, message: []const u8) common.CompilerError
     if (self.peek() == expected) return self.advance();
 
     self.report("{s}\n\tExpected '{c}' got '{c}'", .{message, expected, self.peek()});
-    return error.UnexpectedCharacter;
+    return Error.UnexpectedCharacter;
 }
 
 fn addToken(self: *Lexer, tokenType: TokenType) common.CompilerError!void {
@@ -490,7 +491,7 @@ fn addToken(self: *Lexer, tokenType: TokenType) common.CompilerError!void {
         .type = tokenType,
         .start = self.start,
         .end = self.current,
-    }) catch return error.InvalidToken;
+    }) catch return Error.InvalidToken;
 
     if (tokenType == .String)
         _ = self.advance();

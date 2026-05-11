@@ -43,12 +43,12 @@ pub fn deepCopyPtr(ptr: anytype, allocator: Allocator) Error!determine(@TypeOf(p
 
     switch (info.PtrType) {
         .one => {
-            result = allocator.create(info.ElemType) catch return error.AllocatorFailure;
+            result = allocator.create(info.ElemType) catch return Error.AllocatorFailure;
             result.* = try deepCopy(ptr.*, allocator);
         },
         .many => result = ptr,
         .slice => {
-            result = allocator.alloc(info.ElemType, ptr.len) catch return error.AllocatorFailure;
+            result = allocator.alloc(info.ElemType, ptr.len) catch return Error.AllocatorFailure;
             for (0..ptr.len) |i| {
                 result[i] = try deepCopy(ptr[i], allocator);
             }
@@ -87,7 +87,7 @@ pub fn deepCopy(item: anytype, allocator: Allocator) Error!@TypeOf(item) {
                         @call(.auto, @field(T, func), .{&item, allocator})
                     else
                         @call(.auto, @field(T, func), .{item, allocator})
-                ) catch error.AllocatorFailure;
+                ) catch Error.AllocatorFailure;
 
             }
             else {

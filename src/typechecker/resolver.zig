@@ -152,8 +152,8 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
     var lookup = LookupMap.empty;
     var reso = ResolutionMap.empty;
 
-    lookup.ensureTotalCapacity(allocator, declCap) catch return error.AllocatorFailure;
-    reso.ensureTotalCapacity(allocator, declCap) catch return error.AllocatorFailure;
+    lookup.ensureTotalCapacity(allocator, declCap) catch return Error.AllocatorFailure;
+    reso.ensureTotalCapacity(allocator, declCap) catch return Error.AllocatorFailure;
 
     const builtin = try scopes.addOne(allocator);
     scopes.set(builtin, .{
@@ -175,7 +175,7 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
         });
 
         lookup.putNoClobber(allocator, .{ .name = b, .scope = builtin }, decl)
-            catch return error.AllocatorFailure;
+            catch return Error.AllocatorFailure;
     }
 
     var iterator = modules.modules.iterator();
@@ -208,7 +208,7 @@ pub fn init(gpa: Allocator, context: *Context, modules: *const ModuleList) Error
             lookup.putNoClobber(allocator, .{
                 .scope = scope,
                 .name = name,
-            }, decl) catch return error.AllocatorFailure;
+            }, decl) catch return Error.AllocatorFailure;
         }
     }
 
@@ -245,7 +245,7 @@ pub fn resolve(self: *Resolver, allocator: Allocator) Error!Resolution {
     }
 
     if (errCount > 1) {
-        lastErr = error.MultipleErrors;
+        lastErr = Error.MultipleErrors;
     }
 
     if (errCount > 0) {
@@ -265,7 +265,7 @@ fn resolveModule(self: *Resolver) Error!void {
 
     const kind = self.scopes.items(.kind)[self.currentScope];
     if (kind != .Module) {
-        return error.UnexpectedScope;
+        return Error.UnexpectedScope;
     }
 
     var errCount: u32 = 0;
@@ -288,7 +288,7 @@ fn resolveModule(self: *Resolver) Error!void {
     }
 
     if (errCount > 1) {
-        lastErr = error.MultipleErrors;
+        lastErr = Error.MultipleErrors;
     }
 
     if (errCount > 0) {
@@ -387,7 +387,7 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
 
             const name = tokens.get(signature.name).lexeme(self.context, self.dataIndex());
             const isPresent = self.lookup.getOrPut(allocator, .{ .name = name, .scope = self.currentScope })
-                catch return error.AllocatorFailure;
+                catch return Error.AllocatorFailure;
 
             if (isPresent.found_existing) {
                 self.report("Given symbol '{s}' collides with the previous definition of '{s}'.", .{name, name});
@@ -398,7 +398,7 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                     self.report("Found here.", .{});
                 }
 
-                return error.DuplicateSymbol;
+                return Error.DuplicateSymbol;
             }
 
             isPresent.value_ptr.* = decl;
@@ -429,7 +429,7 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                 else modulename;
 
             const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
-                catch return error.AllocatorFailure;
+                catch return Error.AllocatorFailure;
 
             if (isPresent.found_existing) {
                 const kind: Declaration.Kind = self.decls.items(.kind)[isPresent.value_ptr.*];
@@ -445,7 +445,7 @@ fn resolveStatement(self: *Resolver, stmt: defines.StatementPtr, topLevel: bool)
                     self.report("Found here.", .{});
                 }
                 
-                return error.DuplicateSymbol;
+                return Error.DuplicateSymbol;
             }
 
             isPresent.value_ptr.* = decl;
@@ -475,7 +475,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             const decl = try self.look(identifier);
 
             const status = self.resolved.getOrPut(allocator, .{ .file = ast.tokens, .expr = exprPtr })
-                catch return error.AllocatorFailure;
+                catch return Error.AllocatorFailure;
 
             if (status.found_existing) {
                 self.report(
@@ -527,7 +527,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             self.resolved.putNoClobber(allocator, .{
                 .file = ast.tokens,
                 .expr = exprPtr,
-            }, body) catch return error.AllocatorFailure;
+            }, body) catch return Error.AllocatorFailure;
 
             const previous = self.currentScope;
             defer self.currentScope = previous;
@@ -549,7 +549,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                 if (try self.resolveSignature(ast.extra[fieldPtrPtr], .Field, .Struct)) {
                     const lexeme = tokens.get(ast.signatures.get(ast.extra[fieldPtrPtr]).name).lexeme(self.context, self.dataIndex());
                     self.report("Given field '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
-                    return error.DuplicateSymbol;
+                    return Error.DuplicateSymbol;
                 }
             }
         },
@@ -564,7 +564,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             self.resolved.putNoClobber(allocator, .{
                 .file = ast.tokens,
                 .expr = exprPtr,
-            }, body) catch return error.AllocatorFailure;
+            }, body) catch return Error.AllocatorFailure;
 
             const previous = self.currentScope;
             defer self.currentScope = previous;
@@ -586,7 +586,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                 if (try self.resolveSignature(ast.extra[fieldPtrPtr], .Field, .Enum)) {
                     const lexeme = tokens.get(ast.signatures.get(ast.extra[fieldPtrPtr]).name).lexeme(self.context, self.dataIndex());
                     self.report("Given field '{s}' is already present in the enum body.", .{lexeme});
-                    return error.DuplicateSymbol;
+                    return Error.DuplicateSymbol;
                 }
             }
         },
@@ -601,7 +601,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
             self.resolved.putNoClobber(allocator, .{
                 .file = ast.tokens,
                 .expr = exprPtr,
-            }, body) catch return error.AllocatorFailure;
+            }, body) catch return Error.AllocatorFailure;
 
             const previous = self.currentScope;
             defer self.currentScope = previous;
@@ -635,7 +635,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                 if (try self.resolveSignature(ast.extra[fieldPtrPtr], .Field, .Union)) {
                     const lexeme = tokens.get(ast.signatures.get(ast.extra[fieldPtrPtr]).name).lexeme(self.context, self.dataIndex());
                     self.report("Given field '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
-                    return error.DuplicateSymbol;
+                    return Error.DuplicateSymbol;
                 }
             }
         },
@@ -660,7 +660,7 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                 const lexeme = tokens.get(ast.signatures.get(ast.extra[paramPtrPtr]).name).lexeme(self.context, self.dataIndex());
                 if (try self.resolveSignature(ast.extra[paramPtrPtr], .Parameter, .Block)) {
                     self.report("Duplicate parameter name '{s}'.", .{lexeme});
-                    return error.DuplicateSymbol;
+                    return Error.DuplicateSymbol;
                 }
             }
 
@@ -716,11 +716,11 @@ fn resolveExpression(self: *Resolver, exprPtr: defines.ExpressionPtr) Error!void
                 });
 
                 const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
-                    catch return error.AllocatorFailure;
+                    catch return Error.AllocatorFailure;
 
                 if (isPresent.found_existing) {
                     self.report("Duplicate capture '{s}'.", .{lexeme});
-                    return error.DuplicateSymbol;
+                    return Error.DuplicateSymbol;
                 }
 
                 isPresent.value_ptr.* = decl;
@@ -800,7 +800,7 @@ fn resolveScoping(
                 self.resolved.putNoClobber(self.arena.allocator(), .{
                     .file = ast.tokens,
                     .expr = lhsPtr,
-                }, found) catch return error.AllocatorFailure;
+                }, found) catch return Error.AllocatorFailure;
             }
 
             break :blk @as(defines.Offset, tokens.items(.start)[lhs.value]);
@@ -822,7 +822,7 @@ fn resolveScoping(
             self.resolved.putNoClobber(self.arena.allocator(), .{
                 .file = ast.tokens,
                 .expr = expr,
-            }, decl) catch return error.AllocatorFailure;
+            }, decl) catch return Error.AllocatorFailure;
 
             return leftMost;
         }
@@ -844,7 +844,7 @@ fn resolveScoping(
             self.resolved.putNoClobber(self.arena.allocator(), .{
                 .file = ast.tokens,
                 .expr = expr,
-            }, foundPtr) catch return error.AllocatorFailure;
+            }, foundPtr) catch return Error.AllocatorFailure;
 
             return leftMost;
         }
@@ -853,7 +853,7 @@ fn resolveScoping(
                 member,
                 self.modules.modules.get(self.scopes.get(decl.node).module).name
             });
-            return error.InvalidIdentifier;
+            return Error.InvalidIdentifier;
         }
     }
 
@@ -868,7 +868,7 @@ fn resolveScoping(
         self.report("Given module '{s}' is not imported into the current scope.", .{
             moduleName,
         });
-        return error.ModuleNotInScope;
+        return Error.ModuleNotInScope;
     }
 
     return leftMost;
@@ -891,7 +891,7 @@ fn resolveSignature(self: *Resolver, signaturePtr: defines.SignaturePtr, comptim
                 const lexeme = field.lexeme(self.context, self.dataIndex());
 
                 const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
-                    catch return error.AllocatorFailure;
+                    catch return Error.AllocatorFailure;
 
                 return isPresent.found_existing;
             }
@@ -916,7 +916,7 @@ fn resolveSignature(self: *Resolver, signaturePtr: defines.SignaturePtr, comptim
                 });
 
                 const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
-                    catch return error.AllocatorFailure;
+                    catch return Error.AllocatorFailure;
 
                 return
                     if (isPresent.found_existing) true
@@ -987,7 +987,7 @@ fn resolveSwitch(
 
             const lexeme = tokens.get(captureToken).lexeme(self.context, self.dataIndex());
             self.lookup.put(allocator, .{ .name = lexeme, .scope = self.currentScope }, decl)
-                catch return error.AllocatorFailure;
+                catch return Error.AllocatorFailure;
         }
 
         const body = ast.extra[case + 3];
@@ -1024,7 +1024,7 @@ fn prepassScope(self: *Resolver, declarations: defines.Range) Error!void {
         });
 
         const isPresent = self.lookup.getOrPut(allocator, .{ .name = lexeme, .scope = self.currentScope })
-            catch return error.AllocatorFailure;
+            catch return Error.AllocatorFailure;
 
         if (isPresent.found_existing) {
             self.report("Given definition '{s}' collides with the previous definition of '{s}'.", .{lexeme, lexeme});
@@ -1035,7 +1035,7 @@ fn prepassScope(self: *Resolver, declarations: defines.Range) Error!void {
                 self.report("Found here.", .{});
             }
 
-            return error.DuplicateSymbol;
+            return Error.DuplicateSymbol;
         }
 
         isPresent.value_ptr.* = decl;
@@ -1091,7 +1091,7 @@ fn lookNameAt(self: *Resolver, name: []const u8, scope: defines.ScopePtr) Error!
 
             const modulename = self.modules.modules.items(.name)[module];
             self.report("'{s}::{s}' is inaccessible due to its visibility level.", .{modulename, name});
-            return error.AccessSpecifierMismatch;
+            return Error.AccessSpecifierMismatch;
         }
         current = self.scopes.items(.parent)[s];
     }
@@ -1100,7 +1100,7 @@ fn lookNameAt(self: *Resolver, name: []const u8, scope: defines.ScopePtr) Error!
         name,
         currentModule,
     });
-    return error.InvalidIdentifier;
+    return Error.InvalidIdentifier;
 }
 
 fn lookAt(self: *Resolver, namePtr: defines.TokenPtr, scope: defines.ScopePtr) Error!defines.DeclPtr {
@@ -1125,7 +1125,7 @@ fn tryLookNameAt(self: *Resolver, name: []const u8, scope: defines.ScopePtr) Err
 
             const modulename = self.modules.modules.items(.name)[module];
             self.report("'{s}::{s}' is inaccessible due to its visibility level.", .{modulename, name});
-            return error.AccessSpecifierMismatch;
+            return Error.AccessSpecifierMismatch;
         }
         current = self.scopes.items(.parent)[s];
     }

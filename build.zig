@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const resourcePath = "res/";
+
 const targets = [_]std.Target.Query{
     .{},
     .{ .os_tag = .windows, .cpu_arch = .x86_64 },
@@ -75,6 +77,7 @@ fn addTargets(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
                 }
             ),
         });
+        exe.root_module.addEmbedPath(b.path(resourcePath));
         exe.root_module.addOptions("config", opts);
         const install = b.addInstallArtifact(exe, .{});
 

@@ -95,9 +95,9 @@ pub fn init(typechecker: *Typechecker, gpa: Allocator) Error!Comptime {
     const allocator = arena.allocator();
 
     var cache = Cache.empty;
-    cache.ensureTotalCapacity(allocator, typechecker.symbols.resolutionMap.count()) catch return error.AllocatorFailure;
+    cache.ensureTotalCapacity(allocator, typechecker.symbols.resolutionMap.count()) catch return Error.AllocatorFailure;
 
-    var memory = Memory.initCapacity(allocator, 1024) catch return error.AllocatorFailure;
+    var memory = Memory.initCapacity(allocator, 1024) catch return Error.AllocatorFailure;
     memory.appendAssumeCapacity(.{ .Type = Builtin.Type("any") });
     memory.appendAssumeCapacity(.{ .Type = Builtin.Type("incomplete") });
     memory.appendAssumeCapacity(.{ .Void = { } });
@@ -130,7 +130,7 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
     };
 
     if (self.cache.get(key)) |cached| {
-        return cached;
+        return self.appendValue(self.getValue(cached));
     }
 
     // TODO: Complete after proper typed AST
@@ -147,7 +147,7 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
                         .get(expr.value)
                         .lexeme(self.typechecker.context, self.typechecker.currentFile)
                 });
-                return error.MissingIdentifier;
+                return Error.MissingIdentifier;
             },
         .Call => try self.evalCall(expr.value, maybeExpected),
         .Indexing => try self.evalIndexing(expr.value),
@@ -168,25 +168,61 @@ pub fn eval(self: *Comptime, exprPtr: defines.ExpressionPtr, maybeExpected: ?Typ
         .Conditional => try self.evalIfExpression(expr.value, maybeExpected),
         .Switch => try self.evalSwitchExpression(expr.value, maybeExpected),
 
-        .Lambda,
+        .Unary => try self.evalUnary(expr.value),
+        .Binary => try self.evalBinary(expr.value),
+
         .Assignment,
-        .Binary,
         .Dot,
         .Mark,
         .Slicing,
-        .Unary,
-        .FunctionDefinition => |t| {
+        .Lambda, .FunctionDefinition => |t| {
             self.report("Unable to resolve comptime expression. ({s})", .{
                 @tagName(t)
             });
-            return error.ComptimeNotPossible;
+            return Error.ComptimeNotPossible;
         },
     };
 
     defer self.dumpMem();
     self.cache.putNoClobber(self.arena.allocator(), key, @intCast(addr))
-        catch return error.AllocatorFailure;
+        catch return Error.AllocatorFailure;
     return addr;
+}
+
+pub fn evalBinary(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
+    _ = try self.typechecker.typecheckBinary(extraPtr);
+
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+
+    const operation: Lexer.TokenType = @enumFromInt(ast.extra[extraPtr + 1]);
+    const lhs = try self.eval(ast.extra[extraPtr], null);
+    const rhs = try self.eval(ast.extra[extraPtr], null);
+    _ = operation;
+    _ = lhs;
+    _ = rhs;
+    unreachable;
+}
+
+pub fn evalUnary(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
+    _ = try self.typechecker.typecheckUnary(extraPtr);
+
+    const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
+
+    const operator: Lexer.TokenType = @enumFromInt(ast.extra[extraPtr]);
+    const rhsPtr = try self.eval(ast.extra[extraPtr + 1], null);
+    const rhs = self.getValue(rhsPtr);
+    switch (operator) {
+        .Minus => switch (rhs) {
+            .Float => |float| self.setValue(rhsPtr, .{ .Float = -float }),
+            .Int => |int| self.setValue(rhsPtr, .{ .Int = -int }),
+            else => return common.debug.ShouldBeImpossible(@src()),
+        },
+        .Tilde => self.setValue(rhsPtr, .{ .Int = ~rhs.Int }),
+        .Bang => self.setValue(rhsPtr, .{ .Bool = !rhs.Bool }),
+        else => return common.debug.ShouldBeImpossible(@src()),
+    }
+
+    return rhsPtr;
 }
 
 fn evalSwitchExpression(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!ValuePtr {
@@ -260,11 +296,23 @@ fn evalDecl(self: *Comptime, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) E
     defer self.typechecker.currentFile = prevFile;
     defer self.typechecker.currentScope = prevScope;
 
-    _ = try self.typechecker.typecheckDecl(declPtr, maybeExpected);
+    const expected = try self.typechecker.typecheckDecl(declPtr, maybeExpected);
 
     return switch (decl.kind) {
         .Builtin => try self.evalBuiltin(&decl, maybeExpected),
-        .Variable => try self.eval(decl.node, maybeExpected),
+        .Variable => blk: {
+            const valuePtr = try self.eval(decl.node, maybeExpected);
+            const value = self.getValue(valuePtr);
+
+            // @Beware remove this if you don't want structural coercion
+            break :blk
+                if (self.typechecker.context.settings.hasFlag("--allow-structural-coercion"))
+                    switch (value) {
+                        .Struct, .Enum, .Union => self.castValue(valuePtr, expected),
+                        else => valuePtr,
+                    }
+                else valuePtr;
+        },
         else => |t| {
             self.report("{s} declaration is not implemented.", .{@tagName(t)});
             return common.debug.NotImplemented(@src());
@@ -281,11 +329,11 @@ fn evalBuiltinCall(self: *Comptime, extraPtr: defines.OpaquePtr, declPtr: define
         BI("typeOf") => self.evalTypeOf(extraPtr),
         BI("unreachable") => {
             self.report("Reached unreachable code.", .{});
-            return error.UnreachableCodePath;
+            return Error.UnreachableCodePath;
         },
         else => {
             self.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[declPtr]});
-            return error.ComptimeNotPossible;
+            return Error.ComptimeNotPossible;
         },
     };
 }
@@ -304,15 +352,15 @@ fn evalBuiltin(self: *Comptime, decl: *const Resolver.Declaration, maybeExpected
                         self.report("Given type '{s}' can't be undefined.", .{
                             self.typechecker.typeName(self.arena.allocator(), expected),
                         });
-                        return error.MissingTypeSpecifier;
+                        return Error.MissingTypeSpecifier;
                     }
                 else {
                     self.report("Unable to infer the type of undefined value.", .{});
-                    return error.MissingTypeSpecifier;
+                    return Error.MissingTypeSpecifier;
                 },
             else => {
                 self.report("Builtin '{s}' is not suitable in this context.", .{Resolver.builtins[decl.type]});
-                return error.IllegalSyntax;
+                return Error.IllegalSyntax;
             },
         };
 }
@@ -326,7 +374,7 @@ fn evalLiteral(self: *Comptime, tokenPtr: defines.TokenPtr, maybeExpected: ?Type
         .Integer => .{ .Int = std.fmt.parseInt(u32, lexeme, 10) catch |err| switch (err) {
             error.Overflow => {
                 self.report("Given literal '{s}' is too big for comptime evaluation.", .{lexeme});
-                return error.IntegerOverflow;
+                return Error.IntegerOverflow;
             },
             else => unreachable,
         }},
@@ -353,21 +401,21 @@ fn evalLiteral(self: *Comptime, tokenPtr: defines.TokenPtr, maybeExpected: ?Type
                         lexeme[1..],
                         self.typechecker.typeName(self.arena.allocator(), expected),
                     });
-                    return error.FieldNotFound;
+                    return Error.FieldNotFound;
                 },
                 else => {
                     self.report("Failed to resolve the type of enum literal '{s}'. Context requires type '{s}'.", .{
                         lexeme,
                         self.typechecker.typeName(self.arena.allocator(), expected),
                     });
-                    return error.TypeMismatch;
+                    return Error.TypeMismatch;
                 },
             }
             else {
                 self.report("Can't infer the type of enum literal '{s}'.", .{
                     lexeme,
                 });
-                return error.InferenceError;
+                return Error.InferenceError;
             },
         else => unreachable,
     };
@@ -383,7 +431,7 @@ fn evalPtrType(
     const prev = self.setFlag(.CanCycle, true);
     defer _ = self.setFlag(.CanCycle, prev);
     const inner = self.expectType(innerType) catch |err| switch (err) {
-        error.DependencyCycle => IncompleteType,
+        Error.DependencyCycle => IncompleteType,
         else => return err,
     };
 
@@ -415,6 +463,7 @@ fn evalFuncType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
                         self.report("Expected a type expression, got '{s}' instead.", .{
                             @tagName(std.meta.activeTag(t)),
                         });
+                        return Error.TypeMismatch;
                     },
                 }
             }
@@ -426,11 +475,11 @@ fn evalFuncType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
             self.report(
                 "Expected an argument type list in function type expression,"
                 ++ " got '{s}' instead.", .{@tagName(std.meta.activeTag(t))});
-            return error.TypeMismatch;
+            return Error.TypeMismatch;
         },
     };
 
-    var argTypes = self.arena.allocator().alloc(TypeID, argSize) catch return error.AllocatorFailure;
+    var argTypes = self.arena.allocator().alloc(TypeID, argSize) catch return Error.AllocatorFailure;
 
     switch (args) {
         .Type => |argType| if (argSize != 0) { argTypes[0] = argType; },
@@ -477,7 +526,7 @@ fn evalEnumType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
         .end = ast.extra[extraPtr + 3],
     };
 
-    var fields = allocator.alloc([]const u8, fieldRange.len()) catch return error.AllocatorFailure;
+    var fields = allocator.alloc([]const u8, fieldRange.len()) catch return Error.AllocatorFailure;
 
     for (0..fieldRange.len()) |index| {
         const token = tokens.get(ast.extra[fieldRange.at(@intCast(index))]);
@@ -521,7 +570,7 @@ fn evalStructType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
         .end = ast.extra[extraPtr + 3],
     };
 
-    var fields = allocator.alloc(types.FieldInfo, fieldRange.len()) catch return error.AllocatorFailure;
+    var fields = allocator.alloc(types.FieldInfo, fieldRange.len()) catch return Error.AllocatorFailure;
 
     for (0..fieldRange.len()) |index| {
         const symbol = ast.signatures.get(ast.extra[fieldRange.at(@intCast(index))]);
@@ -581,7 +630,7 @@ fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
         .end = ast.extra[extraPtr + offset + 3],
     };
 
-    var tags = allocator.alloc([]const u8, fieldRange.len()) catch return error.AllocatorFailure;
+    var tags = allocator.alloc([]const u8, fieldRange.len()) catch return Error.AllocatorFailure;
 
     for (0..fieldRange.len()) |index| {
         const symbolTokenPtr: defines.TokenPtr = ast.signatures.items(.name)[
@@ -611,14 +660,14 @@ fn evalUnionType(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
             fieldRange.len(),
             if (fieldRange.len() == 0) "s" else ""
         });
-        return error.PointlessUnionDefinition;
+        return Error.PointlessUnionDefinition;
     }
 
     // @Beware manually tagged unions are not supported so this is fine,
     // however this must be properly handled when they are allowed.
     const tag = try self.typechecker.registerType(tagType);
 
-    var fields = allocator.alloc(types.FieldInfo, fieldRange.len() + @intFromBool(tagged)) catch return error.AllocatorFailure;
+    var fields = allocator.alloc(types.FieldInfo, fieldRange.len() + @intFromBool(tagged)) catch return Error.AllocatorFailure;
 
     if (tagged) {
         fields[0] = .{
@@ -680,7 +729,7 @@ fn evalCast(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID
 
     if (thingToCastRange.len() != 1) {
         self.report("Multi-value type casting is not supported.", .{});
-        return error.MultivalueCast;
+        return Error.MultivalueCast;
     }
 
     const thingToCast = try self.eval(ast.extra[thingToCastRange.at(0)], null);
@@ -701,7 +750,7 @@ pub fn evalTypeOf(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
         self.report("'typeOf' expects a single expression argument, received {d}.", .{
             args.len(),
         });
-        return error.ArgumentCountMismatch;
+        return Error.ArgumentCountMismatch;
     }
 
     return self.appendValue(.{
@@ -880,7 +929,7 @@ fn evalScoping(self: *Comptime, expr: defines.ExpressionPtr) Error!ValuePtr {
             self.report("Attempt to scope on type '{s}', which contains no scope.", .{
                 self.typechecker.typeName(self.arena.allocator(), res),
             });
-            return error.ScopingOnNonScopedType;
+            return Error.ScopingOnNonScopedType;
         },
     };
 
@@ -898,12 +947,12 @@ fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?Type
                 self.report("Expected '{s}', received lambda expression.", .{
                     self.typechecker.typeName(self.arena.allocator(), expected),
                 });
-                return error.TypeMismatch;
+                return Error.TypeMismatch;
             },
         }
         else {
             self.report("Couldn't infer the type of lambda expression.", .{});
-            return error.InferenceError;
+            return Error.InferenceError;
         };
 
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
@@ -928,7 +977,7 @@ fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?Type
                 paramsRange.len(),
             }
         );
-        return error.ArgumentCountMismatch;
+        return Error.ArgumentCountMismatch;
     }
 
     const returnType = try self.typechecker.typecheckExpression(
@@ -944,7 +993,7 @@ fn evalLambda(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpected: ?Type
             }
         );
 
-        return error.TypeMismatch;
+        return Error.TypeMismatch;
     }
 
     // @Unfinished
@@ -1008,7 +1057,7 @@ fn evalIndexing(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
             slice.Slice.Size,
             index.Int,
         });
-        return error.IndexOutOfBounds;
+        return Error.IndexOutOfBounds;
     }
 
     return
@@ -1047,7 +1096,7 @@ fn evalMutType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
         self.report("Redundant 'mut' specifier on already mutable type '{s}'.", .{
             self.typechecker.typeName(self.typechecker.arena.allocator(), inner.Type)
         });
-        return error.InvalidSpecifier;
+        return Error.InvalidSpecifier;
     }
 }
 
@@ -1065,7 +1114,7 @@ fn evalArrType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
                         val,
                         std.math.maxInt(u32),
                     });
-                return error.SizeViolation;
+                return Error.SizeViolation;
             },
         else => {
             self.report("Expected a 'comptime_int' value as size specifier. Got '{s}' instead.", .{
@@ -1073,7 +1122,7 @@ fn evalArrType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
                     try self.typechecker.typecheckValue(ptr, null),
                 ),
             });
-            return error.TypeMismatch;
+            return Error.TypeMismatch;
         },
     };
 
@@ -1098,7 +1147,7 @@ pub fn expectType(self: *Comptime, exprPtr: defines.ExpressionPtr) Error!ValuePt
             .Type => |t| t,
             else => |otherwise| {
                 self.report("Expected a type expression, got '{s}' instead.", .{@tagName(otherwise)});
-                return error.UnexpectedNonTypeExpression;
+                return Error.UnexpectedNonTypeExpression;
             },
         },
     });
@@ -1110,7 +1159,7 @@ pub fn constructUndefined(self: *Comptime, valueType: TypeID) Error!ValuePtr {
             self.report("Given type '{s}' can't be undefined.", .{
                 self.typechecker.typeName(self.arena.allocator(), valueType)
             });
-            return error.IllegalSyntax;
+            return Error.IllegalSyntax;
         },
         else => self.appendValue(.{ .Undefined = valueType }),
     };
@@ -1121,7 +1170,7 @@ fn generateRandomName(self: *Comptime, comptime mode: @TypeOf(.EnumLiteral)) Err
 
     return std.fmt.allocPrint(self.arena.allocator(), "$$anon_"++@tagName(mode)++"_{d}", .{
         randint
-    }) catch error.AllocatorFailure;
+    }) catch Error.AllocatorFailure;
 }
 
 // @Note Beware, scope declarations must be comptime since they are technically
@@ -1134,7 +1183,7 @@ fn handleScopeDecls(
 ) Error![]types.FieldInfo {
     const allocator = self.arena.allocator();
 
-    const defsBuffer = allocator.alloc(types.FieldInfo, defRange.len()) catch return error.AllocatorFailure;
+    const defsBuffer = allocator.alloc(types.FieldInfo, defRange.len()) catch return Error.AllocatorFailure;
     var defs = std.ArrayList(types.FieldInfo).initBuffer(defsBuffer);
 
     for (0..defRange.len()) |defIndex| {
@@ -1248,7 +1297,7 @@ fn setValue(self: *const Comptime, address: defines.Offset, new: Value) void {
 fn appendValue(self: *Comptime, value: Value) Error!ValuePtr {
     const addr = self.memory.items.len;
     self.memory.append(self.arena.allocator(), value)
-        catch return error.AllocatorFailure;
+        catch return Error.AllocatorFailure;
     return @intCast(addr);
 }
 
@@ -1257,7 +1306,7 @@ fn setFlag(self: *Comptime, comptime flag: Flags, bit: bool) bool {
     return self.flags.isSet(Flags.flag(flag));
 }
 
-fn getFlag(self: *Comptime, comptime flag: Flags) bool {
+pub fn getFlag(self: *Comptime, comptime flag: Flags) bool {
     return self.flags.isSet(Flags.flag(flag));
 }
 

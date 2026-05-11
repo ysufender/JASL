@@ -4,7 +4,7 @@ const collections = @import("../util/collections.zig");
 const cli = @import("cli.zig");
 const log = @import("log.zig");
 
-const CompilerError = @import("common.zig").CompilerError;
+const Error = @import("common.zig").CompilerError;
 const Lexer = @import("../lexer/lexer.zig");
 const CompilerSettings = @import("settings.zig");
 const Parser = @import("../parser/parser.zig");
@@ -58,7 +58,7 @@ counts: struct {
 
 settings: CompilerSettings,
 
-pub fn init(baseAllocator: std.mem.Allocator, mainInit: std.process.Init) CompilerError!Context {
+pub fn init(baseAllocator: std.mem.Allocator, mainInit: std.process.Init) Error!Context {
     var arena = std.heap.ArenaAllocator.init(baseAllocator);
     errdefer arena.deinit();
     const allocator = arena.allocator();
@@ -93,7 +93,7 @@ pub fn deinit(self: *Context) void {
     self.arena.deinit();
 }
 
-pub fn openRead(self: *Context, file: []const u8) CompilerError!defines.FilePtr {
+pub fn openRead(self: *Context, file: []const u8) Error!defines.FilePtr {
     const path = try self.realpath(file);
 
     if (self.resolved.get(path)) |id| {
@@ -131,7 +131,7 @@ pub fn openRead(self: *Context, file: []const u8) CompilerError!defines.FilePtr 
     return @intCast(self.fileMap.items.len - 1);
 }
 
-pub fn openWrite(self: *Context, file: []const u8) CompilerError!std.fs.File {
+pub fn openWrite(self: *Context, file: []const u8) Error!std.fs.File {
     return std.Io.Dir.createFileAbsolute(self.io, file, .{ .truncate = true }) catch {
         log.err("Couldn't open target file {s}", .{file});
         return error.IOError;
@@ -148,7 +148,7 @@ pub fn getFileName(self: *const Context, file: defines.FilePtr) []const u8 {
     return self.filenameMap.items[file];
 }
 
-pub fn registerTokens(self: *Context, tokens: Lexer.TokenList.Slice) CompilerError!defines.TokenPtr {
+pub fn registerTokens(self: *Context, tokens: Lexer.TokenList.Slice) Error!defines.TokenPtr {
     self.counts.tokens += tokens.len;
 
     self.tokenMap.append(self.arena.allocator(), try collections.deepCopy(tokens, self.arena.allocator())) catch return error.AllocatorFailure;
@@ -161,7 +161,7 @@ pub fn getTokens(self: *const Context, tokens: defines.TokenPtr) *const Lexer.To
     return &self.tokenMap.items[tokens];
 }
 
-pub fn registerAST(self: *Context, ast: Parser.AST) CompilerError!defines.ASTPtr {
+pub fn registerAST(self: *Context, ast: Parser.AST) Error!defines.ASTPtr {
     const ptr: defines.ASTPtr = @intCast(self.astMap.items.len);
     _ = self.astMap.addOne(self.arena.allocator()) catch return error.AllocatorFailure;
 
@@ -197,7 +197,7 @@ pub fn isProcessed(self: *Context, file: []const u8) bool {
 }
 
 var pathBuf: [std.fs.max_path_bytes]u8 = undefined;
-pub fn realpath(self: *Context, file: []const u8) CompilerError![]const u8 {
+pub fn realpath(self: *Context, file: []const u8) Error![]const u8 {
     var allocator = std.heap.FixedBufferAllocator.init(&pathBuf);
 
     var path: []const u8 = undefined;

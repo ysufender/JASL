@@ -35,6 +35,5 @@ let h: Struct = (true, Enum(@Field1), ());
 let j: Struct = (true, Enum(Enum::Field1), ());
 
 pub let e: Struct2 = switch (Enum::Field3) {
-    @Field1 -> undefined,
-    else -> unreachable(),
+    else -> 5-false,
 };

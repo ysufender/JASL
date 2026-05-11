@@ -29,7 +29,7 @@ pub fn setFlag(self: *Self, flag: []const u8) Error!void {
 
     if (status.found_existing) {
         log.err("Duplicated commandline input '{s}'", .{status.key_ptr.*});
-        return error.DuplicateCommandLineInput;
+        return Error.DuplicateCommandLineInput;
     }
 }
 

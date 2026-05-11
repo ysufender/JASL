@@ -60,7 +60,7 @@ pub const ModuleList = struct {
     pub fn init(allocator: std.mem.Allocator, cap: u32) Error!ModuleList {
         var ids = Map.empty;
 
-        ids.ensureTotalCapacity(allocator, cap) catch return error.AllocatorFailure;
+        ids.ensureTotalCapacity(allocator, cap) catch return Error.AllocatorFailure;
 
         return .{
             .modules = try List.init(allocator, cap),
@@ -196,7 +196,7 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
                     null
                 );
 
-                lastErr = error.MissingStatement;
+                lastErr = Error.MissingStatement;
                 errc += 1;
                 break :case;
             },
@@ -207,7 +207,7 @@ fn prepassImpl(self: *Prepass, ast: *const Parser.AST, name: []const u8) Error!v
     }
 
     if (errc > 1) {
-        return error.MultipleErrors;
+        return Error.MultipleErrors;
     }
     else if (errc == 1) {
         return lastErr.?;
@@ -233,7 +233,7 @@ fn prepassImport(
 ) Error!void {
     const module = getModuleName(stmt, ast, self.context);
     file.dependencies.append(self.arena.allocator(), module)
-        catch return error.AllocatorFailure;
+        catch return Error.AllocatorFailure;
 
     const path = getModulePathWithExtension(self.arena.allocator(), stmt, ast, self.context) catch |err| {
         self.report("Couldn't get module path for {s}: {s}.",
@@ -316,15 +316,15 @@ fn prepassVariableDef(
             self.report("Given symbol '{s}' collides with the builtin '{s}'.", .{
                 sigName, sigName,
             }, file.dataIndex, sig.name);
-            return error.DuplicateSymbol;
+            return Error.DuplicateSymbol;
         }
     }
 
     const idx = file.symbols.addOne(self.arena.allocator()) catch
-        return error.AllocatorFailure;
+        return Error.AllocatorFailure;
 
     const res = file.symbolPtrs.getOrPut(self.arena.allocator(), sigName) catch
-        return error.AllocatorFailure;
+        return Error.AllocatorFailure;
 
     if (res.found_existing) {
         self.report("Given symbol '{s}' collides with the previous definition of '{s}'.",
@@ -333,7 +333,7 @@ fn prepassVariableDef(
             sig.name,
         );
 
-        return error.DuplicateSymbol;
+        return Error.DuplicateSymbol;
     }
 
     res.value_ptr.* = idx;
@@ -350,7 +350,7 @@ fn getModulePathWithExtension(allocator: std.mem.Allocator, id: u32, ast: *const
     return context.realpath(
         std.fmt.allocPrint(allocator, "{s}.jasl", .{
             try getModulePath(allocator, id, ast, context)
-        }) catch return error.AllocatorFailure
+        }) catch return Error.AllocatorFailure
     );
 }
 
@@ -366,7 +366,7 @@ fn getModulePath(allocator: std.mem.Allocator, id: defines.ExpressionPtr, ast: *
         switch (expr.type) {
             .Identifier => {
                 const lexeme = context.getTokens(ast.tokens).get(expr.value).lexeme(context, file);
-                parts.append(lexeme) catch return error.PathNameTooLong;
+                parts.append(lexeme) catch return Error.PathNameTooLong;
                 break;
             },
             .Scoping => {
@@ -374,7 +374,7 @@ fn getModulePath(allocator: std.mem.Allocator, id: defines.ExpressionPtr, ast: *
                 const rhsExpr = ast.extra[expr.value + 1];
 
                 const rhsStr = context.getTokens(ast.tokens).get(rhsExpr).lexeme(context, file);
-                parts.append(rhsStr) catch return error.PathNameTooLong;
+                parts.append(rhsStr) catch return Error.PathNameTooLong;
 
                 current = lhsExpr;
             },
@@ -382,7 +382,7 @@ fn getModulePath(allocator: std.mem.Allocator, id: defines.ExpressionPtr, ast: *
         }
     }
 
-    return std.fs.path.join(allocator, parts.items) catch error.AllocatorFailure;
+    return std.fs.path.join(allocator, parts.items) catch Error.AllocatorFailure;
 }
 
 fn getModuleName(id: defines.ExpressionPtr, ast: *const Parser.AST, context: *Context) []const u8 {

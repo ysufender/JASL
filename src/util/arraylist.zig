@@ -4,7 +4,7 @@ const collections = @import("collections.zig");
 const assert = std.debug.assert;
 
 const Allocator = std.mem.Allocator;
-const CompilerError = @import("../core/common.zig").CompilerError;
+const Error = @import("../core/common.zig").CompilerError;
 
 /// Faster for structs compared to std.MultiArrayList, not tested for unions
 pub fn MultiArrayList(comptime T: type) type {
@@ -72,8 +72,8 @@ fn StructMultiArrayList(comptime T: type) type {
                 self.idx = 0;
             }
 
-            pub fn exhaust(self: *Iterator, allocator: Allocator) CompilerError![]T {
-                var mem = allocator.alloc(T, self.ctx.len) catch return error.AllocatorFailure;
+            pub fn exhaust(self: *Iterator, allocator: Allocator) Error![]T {
+                var mem = allocator.alloc(T, self.ctx.len) catch return Error.AllocatorFailure;
                 var i: u32 = 0;
 
                 while (self.next()) |item| : (i += 1) {
@@ -149,14 +149,14 @@ fn StructMultiArrayList(comptime T: type) type {
         inner: Inner,
         len: u32,
 
-        pub fn init(allocator: Allocator, cap: usize) CompilerError!Self {
+        pub fn init(allocator: Allocator, cap: usize) Error!Self {
             var self = Self{
                 .len = 0,
                 .inner = undefined,
             };
 
             inline for (fields) |field| {
-                @field(self.inner, field.name) = allocator.alloc(field.type, cap) catch return error.AllocatorFailure;
+                @field(self.inner, field.name) = allocator.alloc(field.type, cap) catch return Error.AllocatorFailure;
             }
 
             try self.ensureTotalCapacity(allocator, cap);
@@ -164,7 +164,7 @@ fn StructMultiArrayList(comptime T: type) type {
             return self;
         }
         
-        pub fn ensureTotalCapacity(self: *Self, allocator: Allocator, cap: usize) CompilerError!void {
+        pub fn ensureTotalCapacity(self: *Self, allocator: Allocator, cap: usize) Error!void {
             if (self.capacity() >= cap) {
                 return;
             }
@@ -177,21 +177,21 @@ fn StructMultiArrayList(comptime T: type) type {
                         new = mem;
                     }
                     else {
-                        const mem = allocator.alloc(field.type, cap) catch return error.AllocatorFailure;
+                        const mem = allocator.alloc(field.type, cap) catch return Error.AllocatorFailure;
                         @memcpy(mem.ptr, @field(self.inner, field.name)[0..self.len]);
                         allocator.free(@field(self.inner, field.name));
                         new = mem;
                     }
                 }
                 else {
-                    new = allocator.alloc(field.type, cap) catch return error.AllocatorFailure;
+                    new = allocator.alloc(field.type, cap) catch return Error.AllocatorFailure;
                 }
 
                 @field(self.inner, field.name) = new;
             }
         }
 
-        pub fn addOne(self: *Self, allocator: Allocator) CompilerError!u32 {
+        pub fn addOne(self: *Self, allocator: Allocator) Error!u32 {
             const cap = self.capacity();
 
             if (self.len >= cap) {
@@ -202,7 +202,7 @@ fn StructMultiArrayList(comptime T: type) type {
             return self.len;
         }
 
-        pub fn append(self: *Self, allocator: Allocator, element: T) CompilerError!void {
+        pub fn append(self: *Self, allocator: Allocator, element: T) Error!void {
             const cap = self.capacity();
 
             if (cap <= self.len) {
@@ -311,9 +311,9 @@ pub fn ReverseStackArray(comptime T: type, comptime capacity: u32) type {
             };
         }
 
-        pub fn append(self: *Self, element: T) CompilerError!void {
+        pub fn append(self: *Self, element: T) Error!void {
             if (self.items.len >= capacity) {
-                return error.OutOfMemory;
+                return Error.OutOfMemory;
             }
 
             const index = capacity - self.items.len - 1;
@@ -325,14 +325,14 @@ pub fn ReverseStackArray(comptime T: type, comptime capacity: u32) type {
         /// Clears all internal data and releases the ownership
         /// self is uninitialized after this call. Self.init must be called
         /// before use.
-        pub fn toOwnedSlice(self: *Self, allocator: Allocator) CompilerError![]T {
+        pub fn toOwnedSlice(self: *Self, allocator: Allocator) Error![]T {
             defer self.* = .{
                 .len = 0,
                 .items = &[_]T{},
                 .buffer = &[_]T{},
             };
 
-            return allocator.dupe(T, self.items) catch error.AllocatorFailure;
+            return allocator.dupe(T, self.items) catch Error.AllocatorFailure;
         }
     };
 }

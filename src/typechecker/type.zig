@@ -33,6 +33,19 @@ pub const TypeInfo = union(enum) {
             else => false,
         };
     }
+
+    pub fn isZeroBit(self: TypeInfo) bool {
+        return switch (self) {
+            .Integer => |int| int.size == 0,
+            .Noreturn => true,
+            .Void => true,
+            .Type => true,
+            .Struct => |str| str.fields.len == 0,
+            .Union => |uni| uni.fields.len == 0,
+            .Enum => |enm| enm.fields.len == 0,
+            else => false,
+        };
+    }
 };
 
 pub const FieldInfo = struct {
