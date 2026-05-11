@@ -33,11 +33,15 @@ fn InnerStaticStack(comptime T: type, comptime Size: usize) type {
         pub fn empty(stack: *const Self) bool {
             return stack.index == 0;
         }
+
+        pub fn peek(stack: *const Self) *T {
+            return &stack.items[stack.items.len - 1];
+        }
     };
 }
 
-pub fn StaticStack(comptime T: type, comptime Size: usize) InnerStaticStack(T, Size) {
-    return InnerStaticStack(T, Size){};
+pub fn StaticStack(comptime T: type, comptime Size: usize) type {
+    return InnerStaticStack(T, Size);
 }
 
 pub fn StaticRingStack(comptime T: type, comptime Size: usize) type {

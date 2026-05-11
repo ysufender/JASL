@@ -1155,22 +1155,13 @@ pub fn typecheckBinary(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!Ty
             break :res lhs;
         },
         .EqualEqual, .BangEqual => {
-            const lhsType = self.typeTable.items(.tags)[lhs];
-
-            switch (lhsType) {
-                .Integer, .Float,
-                .ComptimeInt, .ComptimeFloat,
-                .Bool, .Array => { },
-                else => { 
-                    self.report("Attempt to compare non-comparable types '{s}' and '{s}'.", .{
-                        self.typeName(self.arena.allocator(), lhs),
-                        self.typeName(self.arena.allocator(), rhs),
-                    });
-                    break :res Error.ComparisonOnNonComparableType;
-                },
-            }
-
-            try self.assertComparable(lhs, rhs);
+            self.assertComparable(lhs, rhs) catch {
+                self.report("Attempt to compare non-comparable types '{s}' and '{s}'.", .{
+                    self.typeName(self.arena.allocator(), lhs),
+                    self.typeName(self.arena.allocator(), rhs),
+                });
+                break :res Error.ComparisonOnNonComparableType;
+            };
             break :res Comptime.Builtin.Type("bool");
         },
         .Pipe, .Xor, .Ampersand => {
@@ -1190,9 +1181,7 @@ pub fn typecheckBinary(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!Ty
 
             break :res self.infer(lhs, rhs);
         },
-        .LeftShift, .RightShift => |shift| {
-            const left = shift == .LeftShift;
-
+        .LeftShift, .RightShift => {
             if (!self.isInt(lhs)) {
                 self.report("Attempt to use unsupported type '{s}' on the left hand side of bitwise operation.", .{
                     self.typeName(self.arena.allocator(), lhs),
@@ -1207,21 +1196,25 @@ pub fn typecheckBinary(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!Ty
                 break :res Error.BitwiseOnUnsupportedType;
             }
 
-            break :res if (left) lhs else rhs;
+            break :res lhs;
         },
-
         .Lesser, .LesserEqual, .Greater, .GreaterEqual => {
-            self.assertComparable(lhs, rhs) catch {
-                self.report("Attempt to compare non-comparable types '{s}' and '{s}'.", .{
+            if (!(self.isInt(lhs) or self.isFloat(lhs))) {
+                self.report("Non-numeric type '{s}' on the left hand side of arithmetic comparison.", .{
                     self.typeName(self.arena.allocator(), lhs),
+                });
+                break :res Error.ArithmeticOnNonNumericType;
+            }
+
+            if (!(self.isInt(rhs) or self.isFloat(rhs))) {
+                self.report("Non-numeric type '{s}' on the right hand side of arithmetic comparison.", .{
                     self.typeName(self.arena.allocator(), rhs),
                 });
-                break :res Error.ComparisonOnNonComparableType;
-            };
+                break :res Error.ArithmeticOnNonNumericType;
+            }
 
             break :res Comptime.Builtin.Type("bool");
         },
-
         .Plus, .Minus, .Slash, .Star => {
             if (!(self.isInt(lhs) or self.isFloat(lhs))) {
                 self.report("Non-numeric type '{s}' on the left hand side of arithmetic operation.", .{
@@ -1298,7 +1291,6 @@ pub fn typecheckUnary(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!Typ
 }
 
 pub fn typecheckSwitchExpression(self: *Typechecker, extraPtr: defines.OpaquePtr, maybeExpected: ?TypeID) Error!TypeID {
-    // TODO: Hardcoded field size, must be kept in sync with parser.(union|struct|enum)Definition
     const ast = self.context.getAST(self.currentFile);
 
     const item = ast.extra[extraPtr];
@@ -1328,10 +1320,113 @@ pub fn typecheckSwitchExpression(self: *Typechecker, extraPtr: defines.OpaquePtr
 
     return switch (itemType) {
         .Enum => |enm| self.typecheckSwitchOnEnum(ast, itemTypeID, &enm, range, maybeExpected),
-        // TODO: Finish this
-        .Union => return common.debug.NotImplemented(@src()),
+        .Union => |uni| self.typecheckSwitchOnUnion(ast, itemTypeID, &uni, range, maybeExpected),
         else => return common.debug.ShouldBeImpossible(@src()),
     };
+}
+
+fn typecheckSwitchOnUnion(
+    self: *Typechecker,
+    ast: *const Parser.AST,
+    itemTypeID: TypeID,
+    uni: *const Types.Union,
+    range: defines.Range,
+    maybeExpected: ?TypeID,
+) Error!TypeID {
+    // @Beware Hardcoded field size, must be kept in sync with parser.(union|struct|enum)Definition
+    var fieldBuffer: [512]u32 = undefined;
+    var bufferAllocator = std.heap.FixedBufferAllocator.init(@ptrCast(&fieldBuffer));
+
+    const tag = self.typeTable.get(uni.tag).Enum;
+
+    var fieldMap = std.DynamicBitSet.initEmpty(bufferAllocator.allocator(), tag.fields.len)
+        catch return common.debug.ShouldBeImpossible(@src());
+
+    var expected: ?TypeID = null;
+    var case = range.start;
+    while (case < range.end) : (case += 4) {
+        if (fieldMap.count() == fieldMap.capacity()) {
+            self.report("Unreachable switch case.", .{ });
+            return Error.UnreachableCodePath;
+        }
+
+        const caseLabel = ast.extra[case];
+        const field = 
+            if (caseLabel == 0) blk: {
+                fieldMap.setRangeValue(.{
+                    .start = 0,
+                    .end = fieldMap.capacity(),
+                }, true);
+
+                break :blk "else";
+            }
+            else blk: {
+                const fieldPtr = try self.executer.eval(caseLabel, uni.tag);
+                const field = self.executer.getValue(fieldPtr);
+
+                const enumeration = switch (field) {
+                    .Enum => |caseEnum| caseEnum.Value,
+                    else => {
+                        self.report("Expected a comptime enum for switch case label, received '{s}' instead.", .{
+                            self.typeName(self.arena.allocator(), try self.typecheckValue(fieldPtr, itemTypeID)),
+                        });
+                        return Error.InvalidSwitchCase;
+                    }
+                };
+
+                if (fieldMap.isSet(enumeration)) {
+                    self.report("Duplicate switch case '{s}'.", .{
+                        tag.fields[enumeration],
+                    });
+                    return Error.DuplicateSwitchCase;
+                }
+
+                fieldMap.set(enumeration);
+                break :blk tag.fields[enumeration];
+            };
+
+        const captureCount = ast.extra[case + 1];
+        if (captureCount != 0) {
+            // TODO: Complete captures.
+            return common.debug.NotImplemented(@src());
+        }
+
+        const branchType = try self.typecheckExpression(ast.extra[case + 3], maybeExpected);
+        expected = expected orelse branchType;
+
+        if (!(
+            self.suitable(expected.?, branchType)
+            //and self.suitable(branchType, expected.?)
+        )) {
+            self.report(
+                "Diverging result types '{s}' and '{s}' in switch expression case '{s}'.", .{
+                self.typeName(self.arena.allocator(), expected.?),
+                self.typeName(self.arena.allocator(), branchType),
+                field,
+            });
+            return Error.DivergingBranches;
+        }
+    }
+
+    if (fieldMap.count() != fieldMap.capacity()) {
+        common.log.err("Missing union fields:", .{});
+
+        var iterator = fieldMap.iterator(.{
+            .direction = .forward,
+            .kind = .unset,
+        });
+        while (iterator.next()) |field| {
+            const fieldName = tag.fields[field];
+            common.log.err(("." ** 4) ++ " {s}", .{
+                fieldName,
+            });
+        }
+
+        self.report("In switch expression.", .{});
+        return Error.UnhandledSwitchCases;
+    }
+
+    return expected orelse common.debug.ShouldBeImpossible(@src());
 }
 
 fn typecheckSwitchOnEnum(
@@ -1342,6 +1437,7 @@ fn typecheckSwitchOnEnum(
     range: defines.Range,
     maybeExpected: ?TypeID,
 ) Error!TypeID {
+    // @Beware Hardcoded field size, must be kept in sync with parser.(union|struct|enum)Definition
     var fieldBuffer: [512]u32 = undefined;
     var bufferAllocator = std.heap.FixedBufferAllocator.init(@ptrCast(&fieldBuffer));
 
@@ -1359,7 +1455,6 @@ fn typecheckSwitchOnEnum(
         const caseLabel = ast.extra[case];
         const field = 
             if (caseLabel == 0) blk: {
-                // TODO: Allow captures in else branch
                 fieldMap.setRangeValue(.{
                     .start = 0,
                     .end = fieldMap.capacity(),
@@ -1394,6 +1489,8 @@ fn typecheckSwitchOnEnum(
 
         const captureCount = ast.extra[case + 1];
         if (captureCount != 0) {
+            // @Maybe TODO: Allow the capture
+            // TODO: Allow the capture of enum in else branch
             self.report("Enum fields can't be captured.", .{});
             return Error.CaptureOnEnumField;
         }
@@ -1667,10 +1764,6 @@ pub fn assertSuitable(self: *const Typechecker, this: TypeID, that: TypeID) Erro
 }
 
 pub fn assertComparable(self: *const Typechecker, this: TypeID, that: TypeID) Error!void {
-    if (this == that) {
-        return;
-    }
-
     const thisType = self.typeTable.get(this);
     const thatType = self.typeTable.get(that);
 
@@ -1679,10 +1772,10 @@ pub fn assertComparable(self: *const Typechecker, this: TypeID, that: TypeID) Er
     }
 
     try switch (thisType) {
-        .ComptimeInt => functional.throwIf(thatType != .Integer, Error.ComparisonOnIncompatibleTypes),
-        .ComptimeFloat => functional.throwIf(thatType != .Float, Error.ComparisonOnIncompatibleTypes),
-        .Array => switch (thatType) {
-            .Array => { },
+        .ComptimeInt => functional.throwIf(!self.isInt(that), Error.ComparisonOnIncompatibleTypes),
+        .ComptimeFloat => functional.throwIf(!self.isFloat(that), Error.ComparisonOnIncompatibleTypes),
+        .Array => |thisArr| switch (thatType) {
+            .Array => |thatArr| self.assertComparable(thisArr.child, thatArr.child),
             else => Error.ComparisonOnIncompatibleTypes,
         },
         .Enum => |thisEnm| switch (thatType) {
@@ -1691,7 +1784,7 @@ pub fn assertComparable(self: *const Typechecker, this: TypeID, that: TypeID) Er
                 else Error.ComparisonOnIncompatibleTypes,
             else => Error.ComparisonOnIncompatibleTypes,
         },
-        .Bool, .Type => { },
+        .Bool, .Type => functional.throwIf(std.meta.activeTag(thatType) != std.meta.activeTag(thisType), Error.ComparisonOnIncompatibleTypes),
         .EnumLiteral => common.debug.ShouldBeImpossible(@src()),
         else => Error.ComparisonOnNonComparableType,
     };
@@ -1745,10 +1838,16 @@ pub fn infer(self: *const Typechecker, this: TypeID, that: TypeID) Error!TypeID 
     return switch (thatType) {
         .Noreturn => that,
         .Any => this,
-        .ComptimeInt, .ComptimeFloat => this,
+        .ComptimeInt, .ComptimeFloat => switch (thisType) {
+            .Any => that,
+            else => this,
+        },
         else => switch (thisType) {
             .Any => that,
-            .ComptimeInt, .ComptimeFloat => that,
+            .ComptimeInt, .ComptimeFloat => switch (thatType) {
+                .Any => this,
+                else => that,
+            },
             .Integer =>
                 if (thatType.Integer.size > thisType.Integer.size) that
                 else this,

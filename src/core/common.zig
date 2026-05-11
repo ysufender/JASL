@@ -107,5 +107,6 @@ pub const CompilerError = error {
     BitwiseOnUnsupportedType,
     ComparisonOnNonComparableType,
     ComparisonOnIncompatibleTypes,
+    DivisionByZero,
     Terminate,
 };

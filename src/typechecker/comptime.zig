@@ -1,4 +1,4 @@
-// TODO: Garbage collecting
+// TODO: Garbage collecting or something similar
 
 const std = @import("std");
 const common = @import("../core/common.zig");
@@ -195,12 +195,128 @@ pub fn evalBinary(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
     const ast = self.typechecker.context.getAST(self.typechecker.currentFile);
 
     const operation: Lexer.TokenType = @enumFromInt(ast.extra[extraPtr + 1]);
-    const lhs = try self.eval(ast.extra[extraPtr], null);
-    const rhs = try self.eval(ast.extra[extraPtr], null);
-    _ = operation;
-    _ = lhs;
-    _ = rhs;
-    unreachable;
+
+    switch (operation) {
+        .Or, .And => |logic| {
+            const isOr = logic == .Or;
+            const lhs = self.getValue(try self.eval(ast.extra[extraPtr], null));
+
+            if (lhs.Bool == if (isOr) true else false) {
+                return self.appendValue(.{
+                    .Bool = isOr,
+                });
+            }
+
+            const rhs = self.getValue(try self.eval(ast.extra[extraPtr + 1], null));
+            return self.appendValue(.{
+                .Bool =
+                    if (isOr) lhs.Bool or rhs.Bool
+                    else lhs.Bool and rhs.Bool,
+            });
+        },
+        .EqualEqual, .BangEqual => |equality| {
+            const multiplier = equality == .EqualEqual;
+
+            const lhs = self.getValue(try self.eval(ast.extra[extraPtr], null));
+            const rhs = self.getValue(try self.eval(ast.extra[extraPtr + 2], null));
+
+            return self.appendValue(.{
+                .Bool = multiplier and self.comptimeEq(lhs, rhs)
+            });
+        },
+        .LeftShift, .RightShift,
+        .Pipe, .Xor, .Ampersand => |bitwise| {
+            const lhs = self.getValue(try self.eval(ast.extra[extraPtr], null)).Int;
+            const rhs = self.getValue(try self.eval(ast.extra[extraPtr + 2], null)).Int;
+
+            return self.appendValue(.{
+                .Int = switch (bitwise) {
+                    .LeftShift => lhs << @intCast(rhs),
+                    .RightShift => lhs >> @intCast(rhs),
+                    .Pipe => lhs | rhs,
+                    .Xor => lhs ^ rhs,
+                    .Ampersand => lhs & rhs,
+                    else => return common.debug.ShouldBeImpossible(@src()),
+                },
+            });
+        },
+        .Greater, .LesserEqual => |comparison| {
+            const multiplier = comparison == .Greater;
+
+            const lhs = self.getValue(try self.eval(ast.extra[extraPtr], null));
+            const rhs = self.getValue(try self.eval(ast.extra[extraPtr + 2], null));
+
+            return self.appendValue(.{
+                .Bool = multiplier and switch (lhs) {
+                    .Int => lhs.Int > rhs.Int,
+                    .Float => lhs.Float > rhs.Float,
+                    else => return common.debug.ShouldBeImpossible(@src()),
+                }
+            });
+        },
+        .Lesser, .GreaterEqual => |comparison| {
+            const multiplier = comparison == .Lesser;
+
+            const lhs = self.getValue(try self.eval(ast.extra[extraPtr], null));
+            const rhs = self.getValue(try self.eval(ast.extra[extraPtr + 2], null));
+
+            return self.appendValue(.{
+                .Bool = multiplier and switch (lhs) {
+                    .Int => lhs.Int < rhs.Int,
+                    .Float => lhs.Float < rhs.Float,
+                    else => return common.debug.ShouldBeImpossible(@src()),
+                }
+            });
+
+        },
+        .Plus, .Minus, .Slash, .Star => |arithmetic| {
+            const lhs = self.getValue(try self.eval(ast.extra[extraPtr], null));
+            const rhs = self.getValue(try self.eval(ast.extra[extraPtr + 2], null));
+
+            return self.appendValue(switch (arithmetic) {
+                .Plus => switch (lhs) {
+                    .Int => .{ .Int = lhs.Int + rhs.Int },
+                    .Float => .{ .Float = lhs.Float + rhs.Float },
+                    else => return common.debug.ShouldBeImpossible(@src()),
+                },
+                .Minus => switch (lhs) {
+                    .Int => .{ .Int = lhs.Int - rhs.Int },
+                    .Float => .{ .Float = lhs.Float - rhs.Float },
+                    else => return common.debug.ShouldBeImpossible(@src()),
+                },
+                .Slash => switch (lhs) {
+                    .Int => .{
+                        .Int = blk: {
+                            if (rhs.Int == 0) {
+                                self.report("Division by zero.", .{});
+                                return Error.DivisionByZero;
+                            }
+
+                            break :blk @divTrunc(lhs.Int, rhs.Int);
+                        }
+                    },
+                    .Float => .{
+                        .Float = blk: {
+                            if (rhs.Float == 0) {
+                                self.report("Division by zero.", .{});
+                                return Error.DivisionByZero;
+                            }
+
+                            break :blk lhs.Float / rhs.Float;
+                        }
+                    },
+                    else => return common.debug.ShouldBeImpossible(@src()),
+                },
+                .Star => switch (lhs) {
+                    .Int => .{ .Int = lhs.Int * rhs.Int },
+                    .Float => .{ .Float = lhs.Float * rhs.Float },
+                    else => return common.debug.ShouldBeImpossible(@src()),
+                },
+                else => return common.debug.ShouldBeImpossible(@src()),
+            });
+        },
+        else => return common.debug.ShouldBeImpossible(@src()),
+    }
 }
 
 pub fn evalUnary(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
@@ -412,7 +528,7 @@ fn evalLiteral(self: *Comptime, tokenPtr: defines.TokenPtr, maybeExpected: ?Type
                 },
             }
             else {
-                self.report("Can't infer the type of enum literal '{s}'.", .{
+                self.report("Couldn't infer the type of enum literal '{s}'.", .{
                     lexeme,
                 });
                 return Error.InferenceError;
@@ -783,6 +899,10 @@ fn evalExpressionList(self: *Comptime, extraPtr: defines.OpaquePtr, maybeExpecte
         .end = ast.extra[extraPtr + 1],
     };
 
+    if (maybeExpected == null and range.len() == 1) {
+        return self.eval(ast.extra[range.at(0)], null);
+    }
+
     return self.constructFromList(typeToInit, range);
 }
 
@@ -1081,8 +1201,8 @@ fn evalIndexing(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
         else slice.Slice.at(@intCast(index.Int));
 }
 
-fn evalMutType(self: *Comptime, extraPtr: defines.OpaquePtr) Error!ValuePtr {
-    const inner = self.getValue(try self.expectType(extraPtr));
+fn evalMutType(self: *Comptime, exprPtr: defines.OpaquePtr) Error!ValuePtr {
+    const inner = self.getValue(try self.expectType(exprPtr));
 
     if (self.typechecker.canBeMutable(inner.Type)) {
         const typeInfo = self.typechecker.typeTable.get(inner.Type);
@@ -1276,6 +1396,37 @@ fn castValue(self: *Comptime, valuePtr: ValuePtr, to: TypeID) Error!ValuePtr {
 
     self.memory.items[valuePtr] = newValue;
     return valuePtr;
+}
+
+fn comptimeEq(self: *const Comptime, lhs: Value, rhs: Value) bool {
+    assert(std.meta.activeTag(lhs) == std.meta.activeTag(rhs));
+
+    return switch (lhs) {
+        .Int => lhs.Int == rhs.Int,
+        .Float => lhs.Float == rhs.Float,
+        .Slice => blk: {
+            if (lhs.Slice.Size != rhs.Slice.Size) {
+                break :blk false;
+            }
+
+            for (0..lhs.Slice.Size) |index| {
+                const left = lhs.Slice.at(@intCast(index));
+                const right = rhs.Slice.at(@intCast(index));
+                if (!self.comptimeEq(self.getValue(left), self.getValue(right))) {
+                    return false;
+                }
+            }
+
+            return true;
+        },
+        .Enum => {
+            assert(lhs.Enum.Type == rhs.Enum.Type);
+            return lhs.Enum.Value == rhs.Enum.Value;
+        },
+        .Bool => lhs.Bool == rhs.Bool,
+        .Type => lhs.Type == rhs.Type,
+        else => unreachable,
+    };
 }
 
 fn report(self: *Comptime, comptime fmt: []const u8, args: anytype) void {

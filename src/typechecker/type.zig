@@ -78,6 +78,8 @@ pub const Union = struct {
     isTagged: bool,
     /// All unions must have field tags, but only
     /// tagged unions contain them in their layout.
+    /// So runtime safety is only present for tagged
+    /// unions.
     tag: TypeID,
     mutable: bool,
     name: []const u8,

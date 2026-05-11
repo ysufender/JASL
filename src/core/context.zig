@@ -61,6 +61,7 @@ settings: CompilerSettings,
 pub fn init(baseAllocator: std.mem.Allocator, mainInit: std.process.Init) Error!Context {
     var arena = std.heap.ArenaAllocator.init(baseAllocator);
     errdefer arena.deinit();
+
     const allocator = arena.allocator();
 
     const settings = cli.parseCLI(allocator, mainInit.minimal.args, mainInit.io) catch |err| {

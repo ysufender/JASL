@@ -1016,7 +1016,7 @@ fn structDefinition(self: *Parser) ExpressionResult {
 
     // Check unionDefinition for details.
     // TODO: Fix this. Maybe two loops using scratch would be better...
-    var fieldList = collections.StaticStack(defines.OpaquePtr, defines.subscopeMax);
+    var fieldList = collections.StaticStack(defines.OpaquePtr, defines.subscopeMax){};
     var definitions = collections.ReverseStackArray(defines.OpaquePtr, defines.subscopeMax).init();
 
     while (!self.check(.RBrace)) {
@@ -1080,7 +1080,7 @@ fn enumDefinition(self: *Parser) ExpressionResult {
 
     // Check unionDefinition for details.
     // TODO: Fix this.
-    var variablesTmp = collections.StaticStack(defines.OpaquePtr, defines.subscopeMax);
+    var variablesTmp = collections.StaticStack(defines.OpaquePtr, defines.subscopeMax){};
     var definitions = collections.ReverseStackArray(defines.OpaquePtr, defines.subscopeMax).init();
 
     while (!self.check(.RBrace)) {
@@ -1155,7 +1155,7 @@ fn unionDefinition(self: *Parser) ExpressionResult {
     // For some reason, variablesTmp overwrites the extra buffer.
     // Fixed buffer for temporary fix.
     // TODO: fix this
-    var variablesTmp = collections.StaticStack(defines.OpaquePtr, defines.subscopeMax);
+    var variablesTmp = collections.StaticStack(defines.OpaquePtr, defines.subscopeMax){};
     var definitions = collections.ReverseStackArray(defines.OpaquePtr, defines.subscopeMax).init();
 
     while (!self.check(.RBrace)) {
