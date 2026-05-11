@@ -1387,8 +1387,6 @@ fn typecheckSwitchOnUnion(
 
         const captureCount = ast.extra[case + 1];
         if (captureCount != 0) {
-            // TODO: Complete captures.
-            return common.debug.NotImplemented(@src());
         }
 
         const branchType = try self.typecheckExpression(ast.extra[case + 3], maybeExpected);
@@ -1396,7 +1394,6 @@ fn typecheckSwitchOnUnion(
 
         if (!(
             self.suitable(expected.?, branchType)
-            //and self.suitable(branchType, expected.?)
         )) {
             self.report(
                 "Diverging result types '{s}' and '{s}' in switch expression case '{s}'.", .{
