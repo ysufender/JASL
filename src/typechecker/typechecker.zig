@@ -638,11 +638,13 @@ fn typecheckUnionInitialization(self: *Typechecker, ast: *const Parser.AST, uni:
     };
 
     const field = uni.fields[findex];
-    _ = if (field.isComptime) try self.executer.constructFromList(
+    _ = try self.typecheckExpressionListRange(range.subRange(1), field.valueType);
+    if (field.isComptime) {
+        _ = try self.executer.constructFromList(
             field.valueType,
             range.subRange(1),
-        )
-        else try self.typecheckExpressionListRange(range.subRange(1), field.valueType);
+        );
+    }
 }
 
 pub fn typecheckScoping(self: *Typechecker, expr: defines.ExpressionPtr) Error!TypeID {
@@ -955,6 +957,10 @@ pub fn typecheckTypeForwarding(self: *Typechecker, extraPtr: defines.OpaquePtr, 
 
     if (determineExpected(maybeExpected)) |expected| {
         if (self.suitable(typeToForward, expected)) {
+            common.log.debug("{s} where forward {s}", .{
+                self.typeName(self.arena.allocator(), typeToForward),
+                self.typeName(self.arena.allocator(), expected),
+            });
             self.report("Reduntant type forwarding in already inferable context.", .{ });
             return Error.RedundantTypeForwarding;
         }
@@ -1050,9 +1056,25 @@ pub fn typecheckIndexing(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!
 }
 
 pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) Error!TypeID {
-    const allocator = self.arena.allocator();
-
     const decl = self.symbols.declarations.get(declPtr);
+
+    if (decl.kind == .Builtin) {
+        return if (Comptime.Builtin.isBuiltinType(decl.type)) Comptime.Builtin.Type("type")
+        else switch (decl.type) {
+            BuiltinIndex("undefined") =>
+                if (determineExpected(maybeExpected)) |expected| expected
+                else {
+                    self.report("Unable to resolve the type of undefined value.", .{});
+                    return Error.MissingTypeSpecifier;
+                },
+            else => {
+                self.report("Builtin '{s}' is not implemented.", .{Resolver.builtins[decl.type]});
+                return Error.NotImplemented;
+            },
+        };
+    }
+
+    const allocator = self.arena.allocator();
 
     const prevToken = self.lastToken;
     const prevFile = self.currentFile;
@@ -1085,7 +1107,7 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
                 }
                 return Error.DependencyCycle;
             },
-            else => unreachable,
+            else => return common.debug.ShouldBeImpossible(@src()),
         }
     }
 
@@ -1097,25 +1119,13 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
     self.callstack.push(declPtr);
 
     const types = try switch (decl.kind) {
-        .Builtin =>
-            if (Comptime.Builtin.isBuiltinType(decl.type)) Comptime.Builtin.Type("type")
-            else switch (decl.type) {
-                BuiltinIndex("undefined") =>
-                    if (determineExpected(maybeExpected)) |expected| expected
-                    else {
-                        self.report("Unable to resolve the type of undefined value.", .{});
-                        return Error.MissingTypeSpecifier;
-                    },
-                else => {
-                    self.report("Builtin '{s}' is not implemented.", .{Resolver.builtins[decl.type]});
-                    return Error.NotImplemented;
-                },
-            },
         .Variable => self.typecheckVariable(&decl),
         .Namespace => {
             self.report("Operations on namespaces are not allowed.", .{});
             return Error.NamespaceAsValue;
         },
+        .Builtin => return common.debug.ShouldBeImpossible(@src()),
+        .Capture => return common.debug.ShouldBeImpossible(@src()),
         else => {
             self.report("{s} is not implemented.", .{@tagName(decl.kind)});
             return Error.NotImplemented;
@@ -1342,7 +1352,7 @@ fn typecheckSwitchOnUnion(
     var fieldMap = std.DynamicBitSet.initEmpty(bufferAllocator.allocator(), tag.fields.len)
         catch return common.debug.ShouldBeImpossible(@src());
 
-    var expected: ?TypeID = null;
+    var expected: ?TypeID = determineExpected(maybeExpected);
     var case = range.start;
     while (case < range.end) : (case += 4) {
         if (fieldMap.count() == fieldMap.capacity()) {
@@ -1397,20 +1407,10 @@ fn typecheckSwitchOnUnion(
         {
             const firstCapture = ast.extra[case + 2];
 
-            self.currentScope = self.symbols.findDecl(.{
+            const captureDecl = self.symbols.findDecl(.{
                 .file = self.currentFile,
                 .expr = firstCapture,
             });
-
-            const capture = self.context
-                .getTokens(ast.tokens)
-                .get(ast.expressions.items(.value)[firstCapture])
-                .lexeme(self.context, self.currentFile);
-
-            const captureDecl = self.symbols.lookup.get(.{
-                .name = capture,
-                .scope = self.currentScope,
-            }) orelse return common.debug.ShouldBeImpossible(@src());
 
             const captureType = uni.fields[
                 self.fieldIndex(itemTypeID, field) catch return common.debug.ShouldBeImpossible(@src())
@@ -1427,12 +1427,9 @@ fn typecheckSwitchOnUnion(
             }) catch return Error.AllocatorFailure;
         }
 
-        const branchType = try self.typecheckExpression(ast.extra[case + 3], maybeExpected);
-        expected = expected orelse branchType;
+        const branchType = try self.typecheckExpression(ast.extra[case + 3], expected);
 
-        if (!(
-            self.suitable(expected.?, branchType)
-        )) {
+        if (!self.suitable(expected.?, branchType)) {
             self.report(
                 "Diverging result types '{s}' and '{s}' in switch expression case '{s}'.", .{
                 self.typeName(self.arena.allocator(), expected.?),
@@ -1441,6 +1438,8 @@ fn typecheckSwitchOnUnion(
             });
             return Error.DivergingBranches;
         }
+
+        expected = expected orelse branchType;
     }
 
     if (fieldMap.count() != fieldMap.capacity()) {
@@ -1479,7 +1478,7 @@ fn typecheckSwitchOnEnum(
     var fieldMap = std.DynamicBitSet.initEmpty(bufferAllocator.allocator(), enm.fields.len)
         catch return common.debug.ShouldBeImpossible(@src());
 
-    var expected: ?TypeID = null;
+    var expected: ?TypeID = determineExpected(maybeExpected);
     var case = range.start;
     while (case < range.end) : (case += 4) {
         if (fieldMap.count() == fieldMap.capacity()) {
@@ -1530,13 +1529,9 @@ fn typecheckSwitchOnEnum(
             return Error.CaptureOnEnumField;
         }
 
-        const branchType = try self.typecheckExpression(ast.extra[case + 3], maybeExpected);
-        expected = expected orelse branchType;
+        const branchType = try self.typecheckExpression(ast.extra[case + 3], expected);
 
-        if (!(
-            self.suitable(expected.?, branchType)
-            //and self.suitable(branchType, expected.?)
-        )) {
+        if (!self.suitable(expected.?, branchType)) {
             self.report(
                 "Diverging result types '{s}' and '{s}' in switch expression case '{s}'.", .{
                 self.typeName(self.arena.allocator(), expected.?),
@@ -1545,6 +1540,8 @@ fn typecheckSwitchOnEnum(
             });
             return Error.DivergingBranches;
         }
+
+        expected = expected orelse branchType;
     }
 
     if (fieldMap.count() != fieldMap.capacity()) {
@@ -1583,6 +1580,10 @@ pub fn registerType(self: *Typechecker, newType: TypeInfo) Error!TypeID {
 }
 
 pub fn report(self: *Typechecker, comptime fmt: []const u8, args: anytype) void {
+    if (self.executer.getFlag(.Attempting)) {
+        return;
+    }
+
     common.log.err(fmt, args);
     const token = self.context.getTokens(self.currentFile).get(self.lastToken);
     const position = token.position(self.context, self.currentFile);
@@ -1758,9 +1759,9 @@ pub fn structurallyIdentical(self: *const Typechecker, this: TypeID, that: TypeI
     return true;
 }
 
-/// Check if 'expected' can be assigned to 'got'
-pub fn suitable(self: *const Typechecker, expected: TypeID, got: TypeID) bool {
-    self.assertSuitable(expected, got) catch return false;
+/// Check if 'this' can be assigned to 'that'
+pub fn suitable(self: *const Typechecker, this: TypeID, that: TypeID) bool {
+    self.assertSuitable(this, that) catch return false;
     return true;
 }
 
@@ -1789,10 +1790,19 @@ pub fn assertSuitable(self: *const Typechecker, this: TypeID, that: TypeID) Erro
             .Any => return common.debug.ShouldBeImpossible(@src()),
             .ComptimeInt, .Integer => functional.throwIf(!self.isInt(that), Error.TypeMismatch),
             .ComptimeFloat, .Float => functional.throwIf(!self.isFloat(that), Error.TypeMismatch),
-            // @Beware remove this alltogether if you don't want structural coercion.
+            // @Beware remove this altogether if you don't want structural coercion.
             .Struct, .Union, .Enum =>
                 if (self.context.settings.hasFlag("--allow-structural-coercion")) self.assertStructurallyIdentical(this, that)
-                else functional.throwIf(std.meta.activeTag(thisType) != std.meta.activeTag(thatType), Error.TypeMismatch),
+                else {
+                    try functional.throwIf(std.meta.activeTag(thisType) != std.meta.activeTag(thatType), Error.TypeMismatch);
+                    const names: struct { []const u8, []const u8 } = switch (thisType) {
+                        .Struct => .{ thisType.Struct.name, thatType.Struct.name },
+                        .Union => .{ thisType.Union.name, thatType.Union.name },
+                        .Enum => .{ thisType.Enum.name, thatType.Enum.name },
+                        else => return common.debug.ShouldBeImpossible(@src()),
+                    };
+                    try functional.throwIf(!std.mem.eql(u8, names.@"0", names.@"1"), Error.TypeMismatch);
+                },
             else => functional.throwIf(std.meta.activeTag(thisType) != std.meta.activeTag(thatType), Error.TypeMismatch),
         },
     };

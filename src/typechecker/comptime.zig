@@ -467,11 +467,12 @@ fn evalDecl(self: *Comptime, declPtr: defines.DeclPtr, maybeExpected: ?TypeID) E
                     }
                 else valuePtr;
         },
-        .Capture => self.cache.get(.{
+        .Capture => if (self.cache.get(.{
             // TODO: Crashes
             .file = prevFile,
             .expr = decl.node,
-        }).?,
+        })) |capture| capture
+        else Error.ComptimeNotPossible,
         else => |t| {
             self.report("{s} declaration is not implemented.", .{@tagName(t)});
             return common.debug.NotImplemented(@src());
@@ -1020,7 +1021,7 @@ fn constructUnion(
     range: defines.Range,
 ) Error!ValuePtr {
     const tag = self.getValue(try self.eval(ast.extra[range.at(0)], uni.tag)).Enum.Value;
-    const fieldType = uni.fields[tag].valueType;
+    const fieldType = uni.fields[tag + 1].valueType;
     const value = self.memory.items.len;
     _ = try self.constructFromList(fieldType, range.subRange(1));
 

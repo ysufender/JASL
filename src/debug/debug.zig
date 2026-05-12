@@ -26,3 +26,7 @@ pub fn ShouldBeImpossible(comptime src: std.builtin.SourceLocation) Error {
 
     return Error.NotImplemented;
 }
+
+pub fn hello(comptime num: comptime_int) void {
+    common.log.debug(std.fmt.comptimePrint("Hello {d}", .{num}), .{});
+}

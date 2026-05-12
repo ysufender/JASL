@@ -26,14 +26,18 @@ pub const TypeInfo = union(enum) {
 
     Array: Array,
 
+
     /// Like type, comptime_int, comptime_float, enum_literal
+    // @CompilerOnly
     pub fn isComptime(self: TypeInfo) bool {
         return switch (self) {
-            .Type, .ComptimeInt, .ComptimeFloat, .EnumLiteral => true,
+            .Array, .Type, .ComptimeInt, .ComptimeFloat, .EnumLiteral => true,
+            .Struct, .Union, .Enum => self.isZeroBit(),
             else => false,
         };
     }
 
+    // @CompilerOnly
     pub fn isZeroBit(self: TypeInfo) bool {
         return switch (self) {
             .Integer => |int| int.size == 0,
