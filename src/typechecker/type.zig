@@ -1,6 +1,8 @@
 const std = @import("std");
 const defines = @import("../core/defines.zig");
 
+const Typechecker = @import("typechecker.zig");
+
 // @CompilerOnly 
 pub const TypeID = u32;
 
@@ -59,11 +61,15 @@ pub const FieldInfo = struct {
     isComptime: bool,
 
     // @CompilerOnly 
-    pub fn eql(this: *const FieldInfo, that: FieldInfo) bool {
+    pub fn eql(this: *const FieldInfo, that: FieldInfo, typechecker: *const Typechecker) bool {
         return
-            this.public == that.public
+            (this.public and !that.public or this.public == that.public)
             and std.mem.eql(u8, this.name, that.name)
-            and this.valueType == that.valueType;
+            and typechecker.typeTable.items(.tags)[this.valueType] == typechecker.typeTable.items(.tags)[that.valueType]
+            and (
+                typechecker.mutable(this.valueType) and !typechecker.mutable(that.valueType)
+                or typechecker.mutable(this.valueType) == typechecker.mutable(that.valueType)
+            );
         // @Maybe TODO: Structural FieldInfo.valueType check instead.
     }
 };

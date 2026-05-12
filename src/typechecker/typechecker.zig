@@ -359,10 +359,11 @@ pub fn typecheckExpression(self: *Typechecker, expressionPtr: defines.Expression
         .Unary => self.typecheckUnary(expr.value),
         .Binary => self.typecheckBinary(expr.value),
 
+        .Slicing => self.typecheckSlicing(expr.value),
+
         .Assignment,
         .Dot,
-        .Mark,
-        .Slicing => |t| {
+        .Mark => |t| {
             self.report("Unable to typecheck expression '{s}'.", .{@tagName(t)});
             return Error.TypecheckingFailure;
         }
@@ -957,10 +958,6 @@ pub fn typecheckTypeForwarding(self: *Typechecker, extraPtr: defines.OpaquePtr, 
 
     if (determineExpected(maybeExpected)) |expected| {
         if (self.suitable(typeToForward, expected)) {
-            common.log.debug("{s} where forward {s}", .{
-                self.typeName(self.arena.allocator(), typeToForward),
-                self.typeName(self.arena.allocator(), expected),
-            });
             self.report("Reduntant type forwarding in already inferable context.", .{ });
             return Error.RedundantTypeForwarding;
         }
@@ -1107,7 +1104,7 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
                 }
                 return Error.DependencyCycle;
             },
-            else => return common.debug.ShouldBeImpossible(@src()),
+            else => { },
         }
     }
 
@@ -1115,6 +1112,11 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
         .status = .InProgress,
         .types = 0,
     };
+
+    errdefer {
+        isPresent.value_ptr.status = .NotChecked;
+        _ = self.callstack.pop();
+    }
 
     self.callstack.push(declPtr);
 
@@ -1139,6 +1141,69 @@ pub fn typecheckDecl(self: *Typechecker, declPtr: defines.DeclPtr, maybeExpected
 
     _ = self.callstack.pop();
     return types;
+}
+
+pub fn typecheckSlicing(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!TypeID {
+    const ast = self.context.getAST(self.currentFile);
+
+    const maybeSliceableType = try self.typecheckExpression(ast.extra[extraPtr], null);
+    const maybeSliceable = self.typeTable.get(maybeSliceableType);
+    const resultType = switch (maybeSliceable) {
+        .Array => |arr| try self.registerType(.{
+            .Pointer = .{
+                .mutable = arr.mutable,
+                .size = .Slice,
+                .child = arr.child,
+            },
+        }),
+        .Pointer => |ptr| switch (ptr.size) {
+            .C, .Slice => maybeSliceableType,
+            .Single => {
+                self.report("Attempt to slice a singular pointer '{s}'.", .{
+                    self.typeName(self.arena.allocator(), maybeSliceableType),
+                });
+                return Error.SlicingOfNonSliceableValue;
+            },
+        },
+        else => {
+            self.report("Attempt to slice a non-sliceable value of type '{s}'.", .{
+                self.typeName(self.arena.allocator(), maybeSliceableType),
+            });
+            return Error.SlicingOfNonSliceableValue;
+        },
+    };
+
+    const startType = try self.typecheckExpression(ast.extra[extraPtr + 1], null);
+    if (!self.isInt(startType)) {
+        self.report("Expected an integer value for slicing start index, received '{s}'.", .{
+            self.typeName(self.arena.allocator(), startType),
+        });
+        return Error.NonIntegerIndex;
+    }
+
+    const endType = try self.typecheckExpression(ast.extra[extraPtr + 2], null);
+    if (!self.isInt(endType)) {
+        self.report("Expected an integer value for slicing end index, received '{s}'.", .{
+            self.typeName(self.arena.allocator(), endType),
+        });
+        return Error.NonIntegerIndex;
+    }
+
+    if (self.executer.attemptEval(ast.extra[extraPtr + 1], startType)) |startPtr| {
+        if (self.executer.attemptEval(ast.extra[extraPtr + 2], endType)) |endPtr| {
+            const startIndex = self.executer.getValue(startPtr).Int;
+            const endIndex = self.executer.getValue(endPtr).Int;
+            if (startIndex > endIndex) {
+                self.report("Ill-formed slicing, start index {d} is bigger than end index {d}", .{
+                    startIndex,
+                    endIndex,
+                });
+                return Error.IllegalSlicing;
+            }
+        }
+    }
+
+    return resultType;
 }
 
 pub fn typecheckBinary(self: *Typechecker, extraPtr: defines.OpaquePtr) Error!TypeID {
@@ -1428,6 +1493,7 @@ fn typecheckSwitchOnUnion(
         }
 
         const branchType = try self.typecheckExpression(ast.extra[case + 3], expected);
+        expected = expected orelse branchType;
 
         if (!self.suitable(expected.?, branchType)) {
             self.report(
@@ -1438,8 +1504,6 @@ fn typecheckSwitchOnUnion(
             });
             return Error.DivergingBranches;
         }
-
-        expected = expected orelse branchType;
     }
 
     if (fieldMap.count() != fieldMap.capacity()) {
@@ -1522,14 +1586,29 @@ fn typecheckSwitchOnEnum(
             };
 
         const captureCount = ast.extra[case + 1];
-        if (captureCount != 0) {
-            // @Maybe TODO: Allow the capture
-            // TODO: Allow the capture of enum in else branch
-            self.report("Enum fields can't be captured.", .{});
-            return Error.CaptureOnEnumField;
+        if (captureCount > 1) {
+            self.report("Too many captures for context.", .{ });
+            return Error.IllegalSyntax;
+        }
+        else if (captureCount > 0) {
+            const firstCapture = ast.extra[case + 2];
+
+            const captureDecl = self.symbols.findDecl(.{
+                .file = self.currentFile,
+                .expr = firstCapture,
+            });
+
+            self.reso.putNoClobber(self.arena.allocator(), captureDecl, itemTypeID)
+                catch return Error.AllocatorFailure;
+
+            self.lookup.putNoClobber(self.arena.allocator(), captureDecl, .{
+                .status = .Checked,
+                .types = itemTypeID,
+            }) catch return Error.AllocatorFailure;
         }
 
         const branchType = try self.typecheckExpression(ast.extra[case + 3], expected);
+        expected = expected orelse branchType;
 
         if (!self.suitable(expected.?, branchType)) {
             self.report(
@@ -1540,8 +1619,6 @@ fn typecheckSwitchOnEnum(
             });
             return Error.DivergingBranches;
         }
-
-        expected = expected orelse branchType;
     }
 
     if (fieldMap.count() != fieldMap.capacity()) {
@@ -1715,7 +1792,7 @@ pub fn assertStructurallyIdentical(self: *const Typechecker, this: TypeID, that:
             }
 
             for (fromStruct.fields, toType.Struct.fields) |fromField, toField| {
-                if (!fromField.eql(toField)) {
+                if (!fromField.eql(toField, self)) {
                     return Error.StructuralMismatch;
                 }
             }
@@ -1731,7 +1808,7 @@ pub fn assertStructurallyIdentical(self: *const Typechecker, this: TypeID, that:
             }
 
             for (fromUnion.fields, toUnion.fields) |fromField, toField| {
-                if (!fromField.eql(toField)) {
+                if (!fromField.eql(toField, self)) {
                     return Error.StructuralMismatch;
                 }
             }

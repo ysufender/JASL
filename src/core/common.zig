@@ -108,5 +108,7 @@ pub const CompilerError = error {
     ComparisonOnNonComparableType,
     ComparisonOnIncompatibleTypes,
     DivisionByZero,
+    SlicingOfNonSliceableValue,
+    IllegalSlicing,
     Terminate,
 };

@@ -53,7 +53,6 @@ pub fn main(init: std.process.Init) void {
 fn innerMain(allocator: std.mem.Allocator, init: std.process.Init) common.CompilerError!void {
     var globalArena = std.heap.ArenaAllocator.init(allocator);
     const safe = globalArena.allocator();
-    // const allocator = globalArena.allocator();
     defer globalArena.deinit();
 
     // Init Context
